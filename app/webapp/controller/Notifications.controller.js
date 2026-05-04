@@ -53,10 +53,10 @@ sap.ui.define([
                 this.getOwnerComponent().persistNotifications();
             }
 
-            // Tell Dashboard which week to open
+            // Tell Timesheet controller which week to open
             this.getOwnerComponent()._pendingWeekStart = notif.weekStart;
 
-            this.getOwnerComponent().getRouter().navTo("dashboard");
+            this.getOwnerComponent().getRouter().navTo("timesheet");
         },
 
         // ── Mark all read ────────────────────────────────────────────────────

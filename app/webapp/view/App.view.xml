@@ -32,7 +32,7 @@
                         </StandardListItem>
                         <StandardListItem title="Timesheet" icon="sap-icon://calendar" type="Active"
                             press=".onNavSelect">
-                            <customData><core:CustomData key="target" value="dashboard" /></customData>
+                            <customData><core:CustomData key="target" value="timesheet" /></customData>
                         </StandardListItem>
                         <StandardListItem title="My Wallet" icon="sap-icon://wallet" type="Active"
                             press=".onNavSelect">

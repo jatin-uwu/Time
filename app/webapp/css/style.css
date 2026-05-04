@@ -622,3 +622,79 @@ html, body { margin: 0; overflow: hidden; }
 .tsNotifUnreadDot {
     font-size: 0.55rem !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Analytics Dashboard page
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.tsDashPage {
+    background-color: #f3f4f6;
+}
+
+/* ── Greeting row ───────────────────────────────────────────────────── */
+.tsDashGreetingRow {
+    background: #ffffff;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 1.25rem 1.5rem;
+    min-height: 72px;
+    box-sizing: border-box;
+}
+.tsDashGreetTitle .sapMTitle {
+    font-size: 1.4rem !important;
+    font-weight: 700 !important;
+    color: #111827 !important;
+}
+.tsDashGreetSub {
+    font-size: 0.85rem !important;
+    color: #6b7280 !important;
+    margin-top: 2px !important;
+}
+.tsDashDateLabel {
+    font-size: 0.82rem !important;
+    color: #9ca3af !important;
+    white-space: nowrap;
+}
+
+/* ── Week nav bar ───────────────────────────────────────────────────── */
+.tsDashWeekBar {
+    background: #ffffff !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    padding: 0 1rem !important;
+    height: 48px;
+}
+.tsDashWeekTitle .sapMTitle {
+    font-size: 1rem !important;
+    font-weight: 600 !important;
+    color: #374151 !important;
+}
+
+/* ── Inner cards fill their slot div 100% ───────────────────────────── */
+.tsDashInnerCard {
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+}
+
+/* ── Week Completion content ────────────────────────────────────────── */
+.tsDashCompletionContent {
+    padding: 16px 20px 24px;
+    gap: 1rem;
+    width: 100%;
+    box-sizing: border-box;
+}
+.tsDashCompletionContent > .sapMPI {
+    width: 100% !important;
+}
+.tsDashCompletionContent .sapMPIBar {
+    background-color: #3b82f6 !important;
+    border-radius: 6px !important;
+}
+.tsDashCompletionContent .sapMPIBarRemaining {
+    background-color: #e5e7eb !important;
+    border-radius: 6px !important;
+}
+.tsDashCompletionContent .sapMText {
+    font-size: 0.82rem !important;
+    color: #6b7280 !important;
+}
