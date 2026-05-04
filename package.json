@@ -1,5 +1,5 @@
 {
-  "name": "Employee-Timesheet",
+  "name": "Timesheet",
   "version": "1.0.0",
   "dependencies": {
     "@cap-js/hana": "^2",
@@ -16,9 +16,20 @@
   "private": true,
   "cds": {
     "requires": {
+      "auth": "mocked",
       "[production]": {
-        "auth": "xsuaa"
+        "strategy": "JWT"
+      },
+      "[development]": {
+        "strategy": "mock",
+        "users": {
+          "jatin": {
+
+          "roles": ["Employee"]
+        }
+        }
       }
     }
   }
 }
+

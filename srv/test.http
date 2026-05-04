@@ -1,0 +1,79 @@
+### ------------------------------------------------------------
+### 1. Employee → Get Own Timesheets (SHOULD WORK)
+### ------------------------------------------------------------
+GET http://localhost:4004/me
+Authorization: Basic jatin:
+
+### ------------------------------------------------------------
+### 2. Employee → Try Manager API (SHOULD FAIL ❌)
+### ------------------------------------------------------------
+GET http://localhost:4004/mana
+x-user: emp1
+x-roles: Employee
+
+### Employee → Get Own Timesheets
+GET http://localhost:4004/employee/MyTimesheets
+Authorization: Basic jatin:
+
+### ------------------------------------------------------------
+### 3. Manager → Get Pending Approvals (SHOULD WORK)
+### ------------------------------------------------------------
+GET http://localhost:4004/manager/PendingApprovals
+x-user: mgr1
+x-roles: Manager
+
+
+### ------------------------------------------------------------
+### 4. Manager → Approve Timesheet (SHOULD WORK)
+### ------------------------------------------------------------
+POST http://localhost:4004/manager/approveTimesheet
+Content-Type: application/json
+x-user: mgr1
+x-roles: Manager
+
+{
+  "timesheetId": "TS001",
+  "remarks": "Approved"
+}
+
+
+### ------------------------------------------------------------
+### 5. Employee → Try Approve (SHOULD FAIL ❌)
+### ------------------------------------------------------------
+POST http://localhost:4004/manager/approveTimesheet
+Content-Type: application/json
+x-user: emp1
+x-roles: Employee
+
+{
+  "timesheetId": "TS001",
+  "remarks": "Trying unauthorized"
+}
+
+
+### ------------------------------------------------------------
+### 6. Employee → Submit Timesheet (SHOULD WORK)
+### ------------------------------------------------------------
+POST http://localhost:4004/employee/submitTimesheet
+Content-Type: application/json
+x-user: emp1
+x-roles: Employee
+
+{
+  "timesheetId": "TS001"
+}
+
+
+### ------------------------------------------------------------
+### 7. No Role → Should FAIL ❌
+### ------------------------------------------------------------
+GET http://localhost:4004/employee/MyTimesheets
+x-user: randomUser
+
+
+### ------------------------------------------------------------
+### 8. Debug → Check current user
+### ------------------------------------------------------------
+GET http://localhost:4004/employee/whoAmI
+x-user: emp1
+x-roles: Employee
