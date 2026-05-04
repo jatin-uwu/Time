@@ -69,12 +69,14 @@
             },
             "routes": [
                 { "name": "dashboard",     "pattern": "",              "target": "dashboard"     },
+                { "name": "timesheet",     "pattern": "timesheet",     "target": "timesheet"     },
                 { "name": "history",       "pattern": "history",       "target": "history"       },
                 { "name": "manager",       "pattern": "manager",       "target": "manager"       },
                 { "name": "notifications", "pattern": "notifications", "target": "notifications" }
             ],
             "targets": {
                 "dashboard":     { "viewName": "Dashboard",     "viewId": "dashboard"     },
+                "timesheet":     { "viewName": "Timesheet",     "viewId": "timesheet"     },
                 "history":       { "viewName": "History",       "viewId": "history"       },
                 "manager":       { "viewName": "Manager",       "viewId": "manager"       },
                 "notifications": { "viewName": "Notifications", "viewId": "notifications" }

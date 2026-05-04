@@ -1,0 +1,229 @@
+<mvc:View
+    controllerName="timesheet.app.controller.Timesheet"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:f="sap.f"
+    xmlns:table="sap.ui.table"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="timesheetPage" class="tsDashboardPage">
+
+        <customHeader>
+            <Bar class="tsPageHeader">
+                <contentLeft>
+                    <VBox>
+                        <Title text="Timesheet" level="H2" />
+                        <Breadcrumbs currentLocationText="Timesheet" class="sapUiTinyMarginTop">
+                            <links><Link text="Dashboard" press=".onNavToDashboard" /></links>
+                        </Breadcrumbs>
+                    </VBox>
+                </contentLeft>
+                <contentRight>
+                    <SegmentedButton id="viewToggle" selectedKey="week" selectionChange=".onViewToggle">
+                        <items>
+                            <SegmentedButtonItem key="week" text="Week" />
+                        </items>
+                    </SegmentedButton>
+                </contentRight>
+            </Bar>
+        </customHeader>
+
+        <content>
+
+            <!-- Week Navigator -->
+            <Toolbar class="tsWeekNav sapUiSmallMarginBottom" style="Clear">
+                <Title id="weekRangeTitle" text="{view>/weekRangeLabel}" level="H4" />
+                <ToolbarSpacer />
+                <Button icon="sap-icon://calendar" type="Transparent"
+                    tooltip="Select week" press=".onCalendarPress" />
+                <Button icon="sap-icon://navigation-left-arrow" type="Transparent"
+                    press=".onPrevWeek" enabled="{view>/canGoPrev}" />
+                <Button text="Today" type="Transparent" press=".onToday" />
+                <Button icon="sap-icon://navigation-right-arrow" type="Transparent"
+                    press=".onNextWeek" enabled="{view>/canGoNext}" />
+            </Toolbar>
+
+            <!-- Timesheet Grid -->
+            <table:Table
+                id="timesheetTable"
+                rows="{rows>/rows}"
+                visibleRowCountMode="Fixed"
+                visibleRowCount="{view>/rowCount}"
+                selectionMode="None"
+                alternateRowColors="false"
+                fixedColumnCount="1"
+                class="timesheetTable"
+                rowHeight="48">
+
+                <table:columns>
+
+                    <table:Column width="180px">
+                        <table:label><Label text="Project / Task" /></table:label>
+                        <table:template>
+                            <VBox class="tsProjectCell">
+                                <ComboBox
+                                    selectedKey="{rows>taskId}"
+                                    placeholder="Select a task..."
+                                    enabled="{path:'rows>_rowLocked', formatter:'.formatNotLocked'}"
+                                    selectionChange=".onTaskSelect"
+                                    filterSecondaryValues="true"
+                                    showSecondaryValues="true"
+                                    items="{path:'tasks>/', templateShareable:true}"
+                                    class="tsProjectInput">
+                                    <core:Item key="{tasks>taskId}" text="{tasks>taskName}"
+                                        additionalText="{tasks>taskDescription}" />
+                                </ComboBox>
+                                <Text text="{rows>taskName}" class="tsTaskName" wrapping="false" />
+                            </VBox>
+                        </table:template>
+                    </table:Column>
+
+                    <table:Column hAlign="Center" width="100px">
+                        <table:label>
+                            <VBox alignItems="Center" class="tsColHeaderBox">
+                                <Text text="{view>/days/0/name}" class="tsDayName" />
+                                <Text text="{view>/days/0/date}" class="tsDayDate" />
+                            </VBox>
+                        </table:label>
+                        <table:template>
+                            <Input value="{rows>mon}"
+                                enabled="{parts:[{path:'rows>locked/mon'},{path:'view>/days/0/isFuture'}], formatter:'.formatDayEnabled'}"
+                                valueState="{path:'rows>mon', formatter:'.formatValueState'}"
+                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
+                                <customData><core:CustomData key="day" value="mon" /></customData>
+                            </Input>
+                        </table:template>
+                    </table:Column>
+
+                    <table:Column hAlign="Center" width="100px">
+                        <table:label>
+                            <VBox alignItems="Center" class="tsColHeaderBox">
+                                <Text text="{view>/days/1/name}" class="tsDayName" />
+                                <Text text="{view>/days/1/date}" class="tsDayDate" />
+                            </VBox>
+                        </table:label>
+                        <table:template>
+                            <Input value="{rows>tue}"
+                                enabled="{parts:[{path:'rows>locked/tue'},{path:'view>/days/1/isFuture'}], formatter:'.formatDayEnabled'}"
+                                valueState="{path:'rows>tue', formatter:'.formatValueState'}"
+                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
+                                <customData><core:CustomData key="day" value="tue" /></customData>
+                            </Input>
+                        </table:template>
+                    </table:Column>
+
+                    <table:Column hAlign="Center" width="100px">
+                        <table:label>
+                            <VBox alignItems="Center" class="tsColHeaderBox">
+                                <Text text="{view>/days/2/name}" class="tsDayName" />
+                                <Text text="{view>/days/2/date}" class="tsDayDate" />
+                            </VBox>
+                        </table:label>
+                        <table:template>
+                            <Input value="{rows>wed}"
+                                enabled="{parts:[{path:'rows>locked/wed'},{path:'view>/days/2/isFuture'}], formatter:'.formatDayEnabled'}"
+                                valueState="{path:'rows>wed', formatter:'.formatValueState'}"
+                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
+                                <customData><core:CustomData key="day" value="wed" /></customData>
+                            </Input>
+                        </table:template>
+                    </table:Column>
+
+                    <table:Column hAlign="Center" width="100px">
+                        <table:label>
+                            <VBox alignItems="Center" class="tsColHeaderBox">
+                                <Text text="{view>/days/3/name}" class="tsDayName" />
+                                <Text text="{view>/days/3/date}" class="tsDayDate" />
+                            </VBox>
+                        </table:label>
+                        <table:template>
+                            <Input value="{rows>thu}"
+                                enabled="{parts:[{path:'rows>locked/thu'},{path:'view>/days/3/isFuture'}], formatter:'.formatDayEnabled'}"
+                                valueState="{path:'rows>thu', formatter:'.formatValueState'}"
+                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
+                                <customData><core:CustomData key="day" value="thu" /></customData>
+                            </Input>
+                        </table:template>
+                    </table:Column>
+
+                    <table:Column hAlign="Center" width="100px">
+                        <table:label>
+                            <VBox alignItems="Center" class="tsColHeaderBox">
+                                <Text text="{view>/days/4/name}" class="tsDayName" />
+                                <Text text="{view>/days/4/date}" class="tsDayDate" />
+                            </VBox>
+                        </table:label>
+                        <table:template>
+                            <Input value="{rows>fri}"
+                                enabled="{parts:[{path:'rows>locked/fri'},{path:'view>/days/4/isFuture'}], formatter:'.formatDayEnabled'}"
+                                valueState="{path:'rows>fri', formatter:'.formatValueState'}"
+                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
+                                <customData><core:CustomData key="day" value="fri" /></customData>
+                            </Input>
+                        </table:template>
+                    </table:Column>
+
+                    <table:Column hAlign="Center" width="100px">
+                        <table:label>
+                            <VBox alignItems="Center" class="tsColHeaderBox">
+                                <Text text="{view>/days/5/name}" class="tsDayName" />
+                                <Text text="{view>/days/5/date}" class="tsDayDate" />
+                            </VBox>
+                        </table:label>
+                        <table:template>
+                            <Input value="{rows>sat}"
+                                enabled="{parts:[{path:'rows>locked/sat'},{path:'view>/days/5/isFuture'}], formatter:'.formatDayEnabled'}"
+                                valueState="{path:'rows>sat', formatter:'.formatValueState'}"
+                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
+                                <customData><core:CustomData key="day" value="sat" /></customData>
+                            </Input>
+                        </table:template>
+                    </table:Column>
+
+                    <table:Column hAlign="Center" width="100px">
+                        <table:label>
+                            <VBox alignItems="Center" class="tsColHeaderBox">
+                                <Text text="{view>/days/6/name}" class="tsDayName" />
+                                <Text text="{view>/days/6/date}" class="tsDayDate" />
+                            </VBox>
+                        </table:label>
+                        <table:template>
+                            <Input value="{rows>sun}"
+                                enabled="{parts:[{path:'rows>locked/sun'},{path:'view>/days/6/isFuture'}], formatter:'.formatDayEnabled'}"
+                                valueState="{path:'rows>sun', formatter:'.formatValueState'}"
+                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
+                                <customData><core:CustomData key="day" value="sun" /></customData>
+                            </Input>
+                        </table:template>
+                    </table:Column>
+
+                    <table:Column hAlign="Center" width="120px">
+                        <table:label><Label text="Week Total(Hrs)" /></table:label>
+                        <table:template>
+                            <Text
+                                text="{parts:['rows>mon','rows>tue','rows>wed','rows>thu','rows>fri','rows>sat','rows>sun'], formatter:'.formatRowTotal'}"
+                                textAlign="Center" class="tsRowTotal" />
+                        </table:template>
+                    </table:Column>
+
+                </table:columns>
+            </table:Table>
+
+            <!-- Action Bar -->
+            <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsActionBar">
+                <Button text="+ Add Row" type="Emphasized" press=".onAddRow" />
+                <HBox alignItems="Center">
+                    <Button text="Save" icon="sap-icon://save" type="Default"
+                        press=".onSave" class="sapUiSmallMarginEnd"
+                        tooltip="Save your progress without submitting" />
+                    <Button text="Submit" type="Accept" press=".onSubmit"
+                        enabled="{view>/canSubmit}"
+                        tooltip="Fill Mon–Fri hours for all rows before submitting" />
+                </HBox>
+            </HBox>
+
+        </content>
+    </Page>
+
+</mvc:View>

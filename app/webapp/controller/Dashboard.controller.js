@@ -1,26 +1,12 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
-    "sap/ui/model/json/JSONModel",
-    "sap/m/MessageToast",
-    "sap/m/MessageBox",
-    "sap/m/Popover",
-    "sap/ui/unified/Calendar"
-], (Controller, JSONModel, MessageToast, MessageBox, Popover, Calendar) => {
+    "sap/ui/model/json/JSONModel"
+], (Controller, JSONModel) => {
     "use strict";
 
-    const DAYS      = ["mon","tue","wed","thu","fri","sat","sun"];
-    const DAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+    const DAYS      = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const MONTHS    = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-
-    const EMPTY_APPROVED = () => ({ mon:false, tue:false, wed:false, thu:false, fri:false, sat:false, sun:false });
-
-    const EMPTY_ROW = () => ({
-        projectName: "", taskName: "", taskId: "",
-        mon:"", tue:"", wed:"", thu:"", fri:"", sat:"", sun:"",
-        locked:   { mon:false, tue:false, wed:false, thu:false, fri:false, sat:false, sun:false },
-        approved: EMPTY_APPROVED(),
-        _rowLocked: false
-    });
 
     function getWeekStart(date) {
         const d = new Date(date);
@@ -41,55 +27,44 @@ sap.ui.define([
         return `${date.getDate()} ${MONTHS[date.getMonth()]}`;
     }
 
-    function buildDayLabels(weekStart) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        return DAY_NAMES.map((name, i) => {
-            const d = new Date(weekStart);
-            d.setDate(weekStart.getDate() + i);
-            d.setHours(0, 0, 0, 0);
-            return { name, date: toShortLabel(d), isFuture: d > today };
-        });
+    function parseHHMM(s) {
+        if (!s || s === "") return 0;
+        if (String(s).includes(":")) {
+            const [h, m] = String(s).split(":");
+            return (parseInt(h) || 0) + (parseInt(m) || 0) / 60;
+        }
+        return parseFloat(s) || 0;
     }
 
-    // Returns Monday of (current week - 1)
-    function getAllowedMinWeek() {
-        const prev = getWeekStart(new Date());
-        prev.setDate(prev.getDate() - 7);
-        return prev;
-    }
-
-    // Returns Monday of current week
-    function getAllowedMaxWeek() {
-        return getWeekStart(new Date());
+    function toHHMM(decimal) {
+        const h = Math.floor(decimal);
+        const m = Math.round((decimal - h) * 60);
+        return `${h}:${String(m).padStart(2, "0")}`;
     }
 
     return Controller.extend("timesheet.app.controller.Dashboard", {
 
         onInit() {
-            this._oViewModel = new JSONModel({
-                weekStart:       null,
-                weekStartFilter: "",
-                weekRangeLabel:  "",
-                grandTotal:      "0:00",
-                canSubmit:       false,
-                rowCount:        1,
-                canGoPrev:       false,
-                canGoNext:       false,
-                days:            [],
-                colTotals: { mon:"0:00", tue:"0:00", wed:"0:00", thu:"0:00",
-                             fri:"0:00", sat:"0:00", sun:"0:00", total:"0:00" }
+            const today     = new Date();
+            const weekStart = getWeekStart(today);
+            const weekEnd   = new Date(weekStart);
+            weekEnd.setDate(weekStart.getDate() + 6);
+
+            this._oDashModel = new JSONModel({
+                greeting:       "Hey, Employee",
+                todayLabel:     today.toLocaleDateString("en-GB", {
+                    weekday: "long", day: "numeric", month: "long", year: "numeric"
+                }),
+                weekLabel:      `${toShortLabel(weekStart)} – ${toShortLabel(weekEnd)}`,
+                weekStart:      toDateString(weekStart),
+                dashGridHTML:   "",
+                weekTotalLabel: "0:00 hrs this week",
+                completion: {
+                    pct: 0, label: "0 of 5 days filled",
+                    state: "None", hint: "Fill Mon–Fri to complete your timesheet"
+                }
             });
-            this.getView().setModel(this._oViewModel, "view");
-
-            this._oRowsModel = new JSONModel({ rows: [EMPTY_ROW()] });
-            this.getView().setModel(this._oRowsModel, "rows");
-
-            this._oTasksModel = new JSONModel([]);
-            this.getView().setModel(this._oTasksModel, "tasks");
-
-            this._setWeek(new Date());
-            this._loadTasks();
+            this.getView().setModel(this._oDashModel, "dash");
 
             this.getOwnerComponent().getRouter()
                 .getRoute("dashboard")
@@ -97,425 +72,268 @@ sap.ui.define([
         },
 
         _onRouteMatched() {
-            const oComp = this.getOwnerComponent();
-            if (oComp._pendingWeekStart) {
-                const sFilter = oComp._pendingWeekStart;
-                oComp._pendingWeekStart = null;
-                this._setWeekByFilter(sFilter);
-            } else {
-                this._loadTimesheetData();
-            }
-        },
-
-        // Navigate to the week whose locked-model key is sFilter.
-        // Handles both new (local-date) and old (UTC-shifted) stored keys.
-        _setWeekByFilter(sFilter) {
-            const minWeek = getAllowedMinWeek();
-            const maxWeek = getAllowedMaxWeek();
-            const [y, m, d] = sFilter.split("-").map(Number);
-
-            // Find the local Monday that was originally stored under sFilter.
-            // Try the filter date itself first (new data), then +1 day (old UTC-shifted data).
-            let start = null;
-            for (let offset = 0; offset <= 1; offset++) {
-                const monday = getWeekStart(new Date(y, m - 1, d + offset));
-                if (toDateString(monday) === sFilter) { start = monday; break; }
-            }
-            // Fallback: old UTC-shifted key — real Monday is filterDate + 1
-            if (!start) start = getWeekStart(new Date(y, m - 1, d + 1));
-
-            if (start.getTime() < minWeek.getTime()) start = new Date(minWeek);
-            if (start.getTime() > maxWeek.getTime()) start = new Date(maxWeek);
-
-            const end = new Date(start);
-            end.setDate(start.getDate() + 6);
-
-            this._oViewModel.setProperty("/weekStart",       start);
-            this._oViewModel.setProperty("/weekStartFilter", sFilter); // exact stored key → finds locked data
-            this._oViewModel.setProperty("/weekRangeLabel",  `${toShortLabel(start)} - ${toShortLabel(end)}`);
-            this._oViewModel.setProperty("/days",            buildDayLabels(start));
-            this._oViewModel.setProperty("/canGoPrev",       start.getTime() > minWeek.getTime());
-            this._oViewModel.setProperty("/canGoNext",       start.getTime() < maxWeek.getTime());
-
-            this._loadTimesheetData();
+            const sWeekStart = this._oDashModel.getProperty("/weekStart");
+            this._computeStats();
+            this._computeWeekHours(sWeekStart);
+            // _refreshDash is called at the end of _computeWeekHours
+            // so all data is ready before building the grid HTML
         },
 
         // ── Week Navigation ──────────────────────────────────────────────────
 
         onPrevWeek() {
-            const d = new Date(this._oViewModel.getProperty("/weekStart"));
-            d.setDate(d.getDate() - 7);
-            this._setWeek(d);
+            const s       = this._oDashModel.getProperty("/weekStart");
+            const [y,m,d] = s.split("-").map(Number);
+            this._setWeek(new Date(y, m - 1, d - 7));
         },
 
         onNextWeek() {
-            const d = new Date(this._oViewModel.getProperty("/weekStart"));
-            d.setDate(d.getDate() + 7);
-            this._setWeek(d);
+            const s       = this._oDashModel.getProperty("/weekStart");
+            const [y,m,d] = s.split("-").map(Number);
+            this._setWeek(new Date(y, m - 1, d + 7));
         },
 
         onToday() { this._setWeek(new Date()); },
 
         _setWeek(date) {
-            const minWeek = getAllowedMinWeek();
-            const maxWeek = getAllowedMaxWeek();
-            let   start   = getWeekStart(date);
-
-            // Clamp to allowed range: prev week ↔ current week only
-            if (start.getTime() < minWeek.getTime()) start = new Date(minWeek);
-            if (start.getTime() > maxWeek.getTime()) start = new Date(maxWeek);
-
-            const end = new Date(start);
-            end.setDate(start.getDate() + 6);
-
-            this._oViewModel.setProperty("/weekStart",       start);
-            this._oViewModel.setProperty("/weekStartFilter", toDateString(start));
-            this._oViewModel.setProperty("/weekRangeLabel",  `${toShortLabel(start)} - ${toShortLabel(end)}`);
-            this._oViewModel.setProperty("/days",            buildDayLabels(start));
-            this._oViewModel.setProperty("/canGoPrev",       start.getTime() > minWeek.getTime());
-            this._oViewModel.setProperty("/canGoNext",       start.getTime() < maxWeek.getTime());
-
-            this._loadTimesheetData();
+            const weekStart  = getWeekStart(date);
+            const weekEnd    = new Date(weekStart);
+            weekEnd.setDate(weekStart.getDate() + 6);
+            const sWeekStart = toDateString(weekStart);
+            this._oDashModel.setProperty("/weekStart", sWeekStart);
+            this._oDashModel.setProperty("/weekLabel", `${toShortLabel(weekStart)} – ${toShortLabel(weekEnd)}`);
+            this._computeWeekHours(sWeekStart);
         },
 
-        // ── Calendar Popover ─────────────────────────────────────────────────
+        // ── Stats ────────────────────────────────────────────────────────────
 
-        onCalendarPress(oEvent) {
-            if (!this._oCalPopover) {
-                const minWeek    = getAllowedMinWeek();
-                const maxWeekEnd = new Date(getAllowedMaxWeek());
-                maxWeekEnd.setDate(maxWeekEnd.getDate() + 6);
+        _computeStats() {
+            const oHistModel  = this.getOwnerComponent().getModel("history");
+            const submissions = oHistModel ? (oHistModel.getProperty("/submissions") || []) : [];
 
-                this._oDashCal = new Calendar({
-                    minDate: minWeek,
-                    maxDate: maxWeekEnd,
-                    select:  this.onCalendarWeekSelect.bind(this)
-                });
-                this._oCalPopover = new Popover({
-                    showHeader: false,
-                    placement:  "Bottom",
-                    content:    [this._oDashCal]
-                });
-                this.getView().addDependent(this._oCalPopover);
-            }
-            this._oCalPopover.openBy(oEvent.getSource());
+            const total    = submissions.length;
+            const approved = submissions.filter(s => s.status === "Approved").length;
+            const pending  = submissions.filter(s => s.status === "Pending").length;
+            const rejected = submissions.filter(s => s.status === "Rejected").length;
+
+            // Store stats on model for _refreshDash to pick up
+            this._oDashModel.setProperty("/approved", approved);
+            this._oDashModel.setProperty("/pending",  pending);
+            this._oDashModel.setProperty("/rejected", rejected);
+            this._oDashModel.setProperty("/total",    total);
         },
 
-        onCalendarWeekSelect(oEvent) {
-            const oCal   = oEvent.getSource();
-            const aDates = oCal.getSelectedDates();
-            if (!aDates || !aDates.length) return;
-            const oStart = aDates[0].getStartDate();
-            if (!oStart) return;
-            this._oCalPopover.close();
-            this._setWeek(new Date(oStart));
-        },
+        // ── Week Hours ───────────────────────────────────────────────────────
 
-        // ── Data Loading ─────────────────────────────────────────────────────
-
-        _loadTimesheetData() {
-            const sWeekStart = this._oViewModel.getProperty("/weekStartFilter");
-
+        _computeWeekHours(sWeekStart) {
             const oLocksModel = this.getOwnerComponent().getModel("locked");
-            const savedWeek   = oLocksModel.getProperty("/" + sWeekStart);
+            let rows = oLocksModel ? (oLocksModel.getProperty("/" + sWeekStart) || []) : [];
 
-            if (savedWeek) {
-                this._setRows(savedWeek);
-                return;
+            if (rows.length === 0) {
+                const subs = this.getOwnerComponent().getModel("history")
+                    ?.getProperty("/submissions") || [];
+                const sub  = subs.find(s => s.weekStart === sWeekStart);
+                rows = sub ? (sub.rows || []) : [];
             }
 
-            const weekStart = this._oViewModel.getProperty("/weekStart");
-            const weekDates = DAYS.map((_, i) => {
-                const d = new Date(weekStart);
-                d.setDate(weekStart.getDate() + i);
-                return toDateString(d);
+            const dayTotals = {};
+            DAYS.forEach(d => {
+                dayTotals[d] = rows.reduce((s, r) => s + parseHHMM(r[d] || ""), 0);
             });
 
-            const oModel   = this.getOwnerComponent().getModel();
-            const oBinding = oModel.bindList("/MyEntries", null, null, null, {
-                $expand: "task",
-                $filter: `timesheet/weekStartDate eq ${sWeekStart}`
+            const weekDays = DAYS.slice(0, 5).map((d, i) => ({
+                name:       DAY_NAMES[i],
+                hours:      dayTotals[d],
+                hoursLabel: dayTotals[d] > 0 ? toHHMM(dayTotals[d]) + " hrs" : "–"
+            }));
+
+            const weekTotal  = DAYS.reduce((s, d) => s + dayTotals[d], 0);
+            const filledDays = DAYS.slice(0, 5).filter(d => dayTotals[d] > 0).length;
+            const pct        = Math.round(filledDays / 5 * 100);
+
+            this._oDashModel.setProperty("/weekTotalLabel", `${toHHMM(weekTotal)} hrs this week`);
+            this._oDashModel.setProperty("/barChartHTML",   this._buildBarChart(weekDays));
+            this._oDashModel.setProperty("/completion", {
+                pct,
+                label: `${filledDays} of 5 days filled`,
+                state: pct === 100 ? "Success" : pct >= 60 ? "Warning" : pct > 0 ? "Error" : "None",
+                hint:  pct === 100
+                    ? "All Mon–Fri days filled – ready to submit!"
+                    : `${5 - filledDays} day${5 - filledDays !== 1 ? "s" : ""} remaining`
             });
 
-            oBinding.requestContexts(0, 200)
-                .then(aCtx => {
-                    const entries = aCtx.map(c => c.getObject());
-                    this._setRows(entries.length > 0
-                        ? this._pivotEntries(entries, weekDates)
-                        : [EMPTY_ROW()]);
-                })
-                .catch(() => this._setRows([EMPTY_ROW()]));
+            // All data is now ready — build the full dashboard grid
+            this._refreshDash();
         },
 
-        _pivotEntries(entries, weekDates) {
-            const rowMap = new Map();
-            for (const entry of entries) {
-                const taskId   = entry.task_taskId ?? "unknown";
-                const taskName = entry.task?.taskName ?? "Unknown Task";
-                const taskDesc = entry.task?.taskDescription ?? "";
+        // ── Rebuild full dashboard HTML ──────────────────────────────────────
 
-                if (!rowMap.has(taskId)) {
-                    rowMap.set(taskId, { taskId, projectName: taskName, taskName: taskDesc,
-                        mon:0, tue:0, wed:0, thu:0, fri:0, sat:0, sun:0 });
-                }
-                const idx = weekDates.indexOf(entry.workDate);
-                if (idx >= 0) rowMap.get(taskId)[DAYS[idx]] += parseFloat(entry.hoursWorked) || 0;
-            }
+        _refreshDash() {
+            const oModel = this._oDashModel;
 
-            return Array.from(rowMap.values()).map(row => {
-                const r = {
-                    taskId:      row.taskId || "",
-                    projectName: row.projectName,
-                    taskName:    row.taskName,
-                    locked:   { mon:false, tue:false, wed:false, thu:false, fri:false, sat:false, sun:false },
-                    approved: EMPTY_APPROVED(),
-                    _rowLocked: false
-                };
-                DAYS.forEach(d => { r[d] = row[d] > 0 ? this._toHHMM(row[d]) : ""; });
-                return r;
-            });
-        },
+            const iApproved = oModel.getProperty("/approved")        || 0;
+            const iPending  = oModel.getProperty("/pending")         || 0;
+            const iRejected = oModel.getProperty("/rejected")        || 0;
+            const iPct      = oModel.getProperty("/completion/pct")  || 0;
+            const sHint     = oModel.getProperty("/completion/hint") || "";
+            const sLabel    = oModel.getProperty("/completion/label")|| "";
+            const sWeek     = oModel.getProperty("/weekLabel")       || "";
+            const sBarHTML  = oModel.getProperty("/barChartHTML")    || "";
 
-        // ── Task Dropdown ─────────────────────────────────────────────────────
-
-        _loadTasks() {
-            const oModel = this.getOwnerComponent().getModel();
-            oModel.bindList("/MyTasks").requestContexts(0, 200)
-                .then(aCtx => {
-                    this._oTasksModel.setData(aCtx.map(c => c.getObject()));
-                })
-                .catch(() => { /* no tasks available — dropdown stays empty */ });
-        },
-
-        onTaskSelect(oEvent) {
-            const oComboBox = oEvent.getSource();
-            const sKey      = oComboBox.getSelectedKey();
-            const oContext  = oComboBox.getBindingContext("rows");
-            if (!oContext) return;
-
-            const sPath = oContext.getPath();
-            if (sKey) {
-                const task = this._oTasksModel.getData().find(t => t.taskId === sKey);
-                if (task) {
-                    this._oRowsModel.setProperty(sPath + "/taskId",      task.taskId);
-                    this._oRowsModel.setProperty(sPath + "/projectName", task.taskName);
-                    this._oRowsModel.setProperty(sPath + "/taskName",    task.taskDescription || "");
-                }
-            } else {
-                this._oRowsModel.setProperty(sPath + "/taskId",      "");
-                this._oRowsModel.setProperty(sPath + "/projectName", "");
-                this._oRowsModel.setProperty(sPath + "/taskName",    "");
-            }
-        },
-
-        _setRows(rows) {
-            this._oRowsModel.setProperty("/rows", rows);
-            this._refreshTotals(rows);
-            this._updateRowCount();
-        },
-
-        // ── Add Row ──────────────────────────────────────────────────────────
-
-        onAddRow() {
-            const rows = this._oRowsModel.getProperty("/rows");
-            rows.push(EMPTY_ROW());
-            this._oRowsModel.setProperty("/rows", rows);
-            this._updateRowCount();
-        },
-
-        // ── Save Draft ───────────────────────────────────────────────────────
-
-        onSave() {
-            const rows       = this._oRowsModel.getProperty("/rows");
-            const sWeekStart = this._oViewModel.getProperty("/weekStartFilter");
-
-            const oLocksModel = this.getOwnerComponent().getModel("locked");
-            const allLocks    = oLocksModel.getData();
-            allLocks[sWeekStart] = JSON.parse(JSON.stringify(rows));
-            oLocksModel.setData(allLocks);
-            this.getOwnerComponent().persistLocked();
-
-            MessageToast.show("Draft saved. You can continue filling the rest of the week.");
-        },
-
-        // ── Submit ───────────────────────────────────────────────────────────
-
-        onSubmit() {
-            const rows = this._oRowsModel.getProperty("/rows");
-
-            // Validate: Mon–Fri must all have hours (column totals > 0)
-            const colDec = { mon:0, tue:0, wed:0, thu:0, fri:0 };
-            rows.forEach(r => ["mon","tue","wed","thu","fri"].forEach(d => { colDec[d] += this._parseHHMM(r[d]); }));
-            const missingDays = ["mon","tue","wed","thu","fri"].filter(d => colDec[d] === 0);
-            if (missingDays.length > 0) {
-                const names = { mon:"Monday", tue:"Tuesday", wed:"Wednesday", thu:"Thursday", fri:"Friday" };
-                MessageBox.error(
-                    "Please fill hours for: " + missingDays.map(d => names[d]).join(", ") + ".\n" +
-                    "Monday to Friday must all have hours before submitting.",
-                    { title: "Incomplete Timesheet" }
-                );
-                return;
-            }
-
-            // Validate: every row that has new (unlocked) hours must have a task selected
-            const invalidRows = rows.filter(r =>
-                DAYS.some(d => r[d] && r[d] !== "" && !r.locked[d]) && !r.taskId
-            );
-            if (invalidRows.length > 0) {
-                MessageBox.error(
-                    `${invalidRows.length} row(s) have hours entered but no task selected.\n` +
-                    "Please choose a task from the dropdown for each filled row before submitting.",
-                    { title: "Task Required" }
-                );
-                return;
-            }
-
-            const hasNew = rows.some(r => DAYS.some(d => r[d] && !r.locked[d]));
-
-            if (!hasNew) {
-                MessageToast.show("No new hours to submit.");
-                return;
-            }
-
-            MessageBox.confirm(
-                `Send timesheet for ${this._oViewModel.getProperty("/weekRangeLabel")} for approval?\n` +
-                "Your timesheet will be sent to your manager for review.",
-                {
-                    title:    "Send for Approval",
-                    actions:  [MessageBox.Action.OK, MessageBox.Action.CANCEL],
-                    onClose: (sAction) => {
-                        if (sAction === MessageBox.Action.OK) this._doSubmit(rows);
-                    }
-                }
-            );
-        },
-
-        _doSubmit(rows) {
-            const sWeekStart = this._oViewModel.getProperty("/weekStartFilter");
-
-            const updatedRows = rows.map(row => {
-                const locked   = { ...row.locked };
-                const approved = { ...(row.approved || EMPTY_APPROVED()) };
-                DAYS.forEach(d => { if (row[d] && row[d] !== "") locked[d] = true; });
-                return { ...row, locked, approved, _rowLocked: DAYS.some(d => locked[d]) };
+            const sGrid = this._buildDashGridHTML({
+                approved : iApproved,
+                pending  : iPending,
+                rejected : iRejected,
+                pct      : iPct,
+                hint     : sHint,
+                label    : sLabel,
+                weekLabel: sWeek,
+                barHTML  : sBarHTML
             });
 
-            const oLocksModel = this.getOwnerComponent().getModel("locked");
-            const allLocks    = oLocksModel.getData();
-            allLocks[sWeekStart] = updatedRows;
-            oLocksModel.setData(allLocks);
-
-            this._oRowsModel.setProperty("/rows", updatedRows);
-
-            const oHistoryModel = this.getOwnerComponent().getModel("history");
-            const submissions   = oHistoryModel.getProperty("/submissions");
-            const existingIdx   = submissions.findIndex(s => s.weekStart === sWeekStart);
-            const record = {
-                employeeName: "Employee",          // replaced by logged-in user name when auth is added
-                weekRange:    this._oViewModel.getProperty("/weekRangeLabel"),
-                weekStart:    sWeekStart,
-                submittedOn:  new Date().toLocaleString(),
-                grandTotal:   this._oViewModel.getProperty("/grandTotal"),
-                days:         this._oViewModel.getProperty("/days"),
-                rows:         JSON.parse(JSON.stringify(updatedRows)),
-                status:  "Pending",
-                remarks: ""
-            };
-
-            if (existingIdx >= 0) {
-                submissions[existingIdx] = record;
-            } else {
-                submissions.unshift(record);
-            }
-            oHistoryModel.setProperty("/submissions", submissions);
-
-            this.getOwnerComponent().persistHistory();
-            this.getOwnerComponent().persistLocked();
-
-            MessageToast.show("Sent for approval! Your manager will review your timesheet.");
+            oModel.setProperty("/dashGridHTML", sGrid);
         },
 
-        // ── Cell Change ───────────────────────────────────────────────────────
+        // ── Full grid HTML ───────────────────────────────────────────────────
 
-        onHoursChange(oEvent) {
-            const oInput   = oEvent.getSource();
-            const sRaw     = oEvent.getParameter("value").trim();
-            const sDayKey  = oInput.data("day");
-            const oContext = oInput.getBindingContext("rows");
-            if (!oContext) return;
+        _buildDashGridHTML(o) {
+            const iTotal = o.approved + o.pending + o.rejected;
+            const r = 54, cx = 70, cy = 70;
+            const circ = 2 * Math.PI * r;
 
-            const decimal    = this._parseHHMM(sRaw);
-            const sFormatted = decimal > 0 ? this._toHHMM(decimal) : "";
+            // Build pie segments
+            const dA = ((o.approved / (iTotal || 1)) * circ).toFixed(2);
+            const dP = ((o.pending  / (iTotal || 1)) * circ).toFixed(2);
+            const dR = ((o.rejected / (iTotal || 1)) * circ).toFixed(2);
+            const oA = 0;
+            const oP = -((o.approved / (iTotal || 1)) * circ);
+            const oR = -(((o.approved + o.pending) / (iTotal || 1)) * circ);
 
-            this._oRowsModel.setProperty(oContext.getPath() + "/" + sDayKey, sFormatted);
-            oInput.setValue(sFormatted);
-            this._refreshTotals(this._oRowsModel.getProperty("/rows"));
+            const segs = iTotal === 0
+                ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#e5e7eb" stroke-width="14"/>`
+                : [
+                    o.approved > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#16a34a" stroke-width="14" stroke-dasharray="${dA} ${circ}" stroke-dashoffset="${oA}" transform="rotate(-90 ${cx} ${cy})"/>` : "",
+                    o.pending  > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f59e0b" stroke-width="14" stroke-dasharray="${dP} ${circ}" stroke-dashoffset="${oP}" transform="rotate(-90 ${cx} ${cy})"/>` : "",
+                    o.rejected > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#dc2626" stroke-width="14" stroke-dasharray="${dR} ${circ}" stroke-dashoffset="${oR}" transform="rotate(-90 ${cx} ${cy})"/>` : ""
+                  ].join("");
+
+            const sPie = `
+                <div style="display:flex;align-items:center;padding:16px 20px 24px;gap:20px;">
+                    <svg width="140" height="140" viewBox="0 0 140 140">
+                        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f3f4f6" stroke-width="14"/>
+                        ${segs}
+                        <text x="${cx}" y="${cy - 5}" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${iTotal}</text>
+                        <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="11" fill="#9ca3af">submitted</text>
+                    </svg>
+                    <div style="display:flex;flex-direction:column;gap:12px;">
+                        <div style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#16a34a;"></span><span style="font-size:13px;color:#374151;">Approved</span><b style="font-size:13px;color:#111827;margin-left:4px;">${o.approved}</b></div>
+                        <div style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;"></span><span style="font-size:13px;color:#374151;">Pending</span><b style="font-size:13px;color:#111827;margin-left:4px;">${o.pending}</b></div>
+                        <div style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#dc2626;"></span><span style="font-size:13px;color:#374151;">Rejected</span><b style="font-size:13px;color:#111827;margin-left:4px;">${o.rejected}</b></div>
+                    </div>
+                </div>`;
+
+            const sComp = `
+                <div style="padding:16px 20px 24px;display:flex;flex-direction:column;gap:12px;">
+                    <div style="width:100%;height:16px;background:#e5e7eb;border-radius:8px;overflow:hidden;">
+                        <div style="width:${o.pct}%;height:100%;background:#3b82f6;border-radius:8px;transition:width 0.4s;"></div>
+                    </div>
+                    <span style="font-size:0.82rem;color:#6b7280;">${o.hint}</span>
+                </div>`;
+
+            return `
+                <div style="padding:1.5rem;box-sizing:border-box;width:100%;display:flex;flex-direction:column;gap:1.5rem;">
+                    <div style="display:flex;flex-direction:row;gap:1.5rem;width:100%;">
+
+                        <div style="flex:1;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;min-height:280px;">
+                            <div style="padding:16px 20px 8px;border-bottom:1px solid #f3f4f6;">
+                                <div style="font-size:1rem;font-weight:600;color:#111827;">Total Timesheets</div>
+                                <div style="font-size:0.82rem;color:#6b7280;margin-top:2px;">All time submissions</div>
+                            </div>
+                            ${sPie}
+                        </div>
+
+                        <div style="flex:1;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;min-height:280px;">
+                            <div style="padding:16px 20px 8px;border-bottom:1px solid #f3f4f6;">
+                                <div style="font-size:1rem;font-weight:600;color:#111827;">Week Completion</div>
+                                <div style="font-size:0.82rem;color:#6b7280;margin-top:2px;">${o.label}</div>
+                                <div style="font-size:2.5rem;font-weight:700;color:#111827;line-height:1.2;margin-top:8px;">${o.pct} <span style="font-size:1rem;font-weight:400;color:#6b7280;">%</span></div>
+                            </div>
+                            ${sComp}
+                        </div>
+
+                    </div>
+
+<div style="width:100%;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;">
+    
+    <div style="padding:16px 20px 8px;border-bottom:1px solid #f3f4f6;">
+        <div style="font-size:1rem;font-weight:600;color:#111827;">
+            Daily Hours Breakdown
+        </div>
+        <div style="font-size:0.82rem;color:#6b7280;margin-top:2px;">
+            ${o.weekLabel}
+        </div>
+    </div>
+
+    <!-- no overflow hidden -->
+    <div style="padding:8px 0 0; overflow:hidden;">
+        ${o.barHTML}
+    </div>
+                </div>`;
         },
 
-        // ── Totals ───────────────────────────────────────────────────────────
+        // ── Bar chart ────────────────────────────────────────────────────────
 
-        _refreshTotals(rows) {
-            const colDec = { mon:0, tue:0, wed:0, thu:0, fri:0, sat:0, sun:0 };
-            rows.forEach(row => DAYS.forEach(d => { colDec[d] += this._parseHHMM(row[d]); }));
+_buildBarChart(weekDays) {
+    const MAX_H   = 12;
+    const X_STEP  = 100;
+    const BAR_W   = 60;
+    const CHART_W = X_STEP * 5;         // 500
+    const MAX_BAR = 80;                  // max bar height in SVG units
+    const TOP_PAD = 30;                  // space above tallest bar for labels
+    const BASE_Y  = MAX_BAR + TOP_PAD;  // 110 — bars always fit below this
+    const VIEW_H  = BASE_Y + 30;        // total SVG height incl. day labels
 
-            const grand  = DAYS.reduce((s, d) => s + colDec[d], 0);
-            const totals = {};
-            DAYS.forEach(d => { totals[d] = this._toHHMM(colDec[d]); });
-            totals.total = this._toHHMM(grand);
+    let bars = "";
+    weekDays.slice(0, 5).forEach((day, i) => {
+        const x     = i * X_STEP + (X_STEP - BAR_W) / 2;
+        const barH  = day.hours > 0
+            ? Math.max(6, (day.hours / MAX_H) * MAX_BAR)
+            : 6;
+        const y     = BASE_Y - barH;
+        const color = day.hours >= MAX_H ? "#16a34a" : day.hours > 0 ? "#3b82f6" : "#e5e7eb";
+        const cxBar = x + BAR_W / 2;
 
-            this._oViewModel.setProperty("/colTotals",  totals);
-            this._oViewModel.setProperty("/grandTotal", this._toHHMM(grand));
+        bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}" rx="6" fill="${color}"/>`;
+        bars += `<text x="${cxBar}" y="${BASE_Y + 16}" text-anchor="middle" font-size="11" fill="#6b7280" font-family="sans-serif">${day.name}</text>`;
 
-            // Submit allowed only when Mon–Fri all have hours (weekends optional)
-            const canSubmit = ["mon","tue","wed","thu","fri"].every(d => colDec[d] > 0);
-            this._oViewModel.setProperty("/canSubmit", canSubmit);
-        },
-
-        _updateRowCount() {
-            const n = this._oRowsModel.getProperty("/rows").length;
-            this._oViewModel.setProperty("/rowCount", Math.max(n, 1));
-        },
-
-        // ── Formatters ───────────────────────────────────────────────────────
-
-        formatNotLocked(bLocked) {
-            return bLocked !== true;
-        },
-
-        formatDayEnabled(bLocked, bFuture) {
-            return bLocked !== true && bFuture !== true;
-        },
-
-        formatRowTotal(...args) {
-            const total = args.reduce((s, v) => s + this._parseHHMM(v), 0);
-            return this._toHHMM(total);
-        },
-
-        formatValueState(sValue) {
-            return sValue && sValue !== "" ? "Success" : "None";
-        },
-
-        onViewToggle(oEvent) {
-            if (oEvent.getParameter("item").getKey() === "day") {
-                MessageToast.show("Day view – coming soon.");
-            }
-        },
-
-        // ── Helpers ──────────────────────────────────────────────────────────
-
-        _parseHHMM(s) {
-            if (!s || s === "") return 0;
-            if (String(s).includes(":")) {
-                const [h, m] = String(s).split(":");
-                return (parseInt(h) || 0) + (parseInt(m) || 0) / 60;
-            }
-            return parseFloat(s) || 0;
-        },
-
-        _toHHMM(decimal) {
-            const h = Math.floor(decimal);
-            const m = Math.round((decimal - h) * 60);
-            return `${h}:${String(m).padStart(2, "0")}`;
+        if (day.hours > 0) {
+            const label = day.hoursLabel.replace(" hrs", "h");
+            // label sits inside bar if bar is tall enough, else above
+            const labelY = barH > 20 ? y + 16 : y - 5;
+            const labelColor = barH > 20 ? "#ffffff" : "#374151";
+            bars += `<text x="${cxBar}" y="${labelY}" text-anchor="middle" font-size="10" fill="${labelColor}" font-weight="600" font-family="sans-serif">${label}</text>`;
         }
     });
+
+    let grid = "";
+    [3, 6, 9, 12].forEach(hrs => {
+        const gy = BASE_Y - (hrs / MAX_H) * MAX_BAR;
+        grid += `<line x1="0" y1="${gy}" x2="${CHART_W}" y2="${gy}" stroke="#f3f4f6" stroke-width="1"/>`;
+        grid += `<text x="${CHART_W + 4}" y="${gy + 3}" font-size="9" fill="#d1d5db" font-family="sans-serif">${hrs}h</text>`;
+    });
+
+    return `<div style="padding:0 14px 14px; width:100%; box-sizing:border-box; margin-top:10px;">
+                <svg viewBox="0 0 ${CHART_W + 30} ${VIEW_H}"
+                     width="100%"
+                     style="overflow:visible; display:block;">
+                    ${grid}${bars}
+                </svg>
+            </div>`;
+},
+
+        // ── Removed: _buildPieChart (duplicate — logic moved into _buildDashGridHTML) ──
+        // ── Removed: onAfterRendering / _mountCardsToGrid (conflicts with HTML binding) ──
+
+    });
 });
+

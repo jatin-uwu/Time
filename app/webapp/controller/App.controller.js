@@ -21,6 +21,7 @@ sap.ui.define([
             // Active highlight on sidebar items
             const oRouteToList = {
                 dashboard:     "mainNavList",
+                timesheet:     "mainNavList",
                 history:       "mainNavList",
                 manager:       "managerNavList",
                 notifications: "accountNavList"
