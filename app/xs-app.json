@@ -1,18 +1,24 @@
 {
-    "welcomeFile": "/index.html",
-    "authenticationMethod": "none",
-    "routes": [
-        {
-            "source": "^/timesheet/(.*)$",
-            "target": "/timesheet/$1",
-            "destination": "srv-api",
-            "csrfProtection": false
-        },
-        {
-            "source": "^(.*)$",
-            "target": "$1",
-            "service": "html5-apps-repo-rt",
-            "authenticationType": "xsuaa"
-        }
-    ]
+  "welcomeFile": "/index.html",
+  "authenticationMethod": "route",
+  "routes": [
+    {
+      "source": "^/employee/(.*)$",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa",
+      "csrfProtection": false
+    },
+    {
+      "source": "^/manager/(.*)$",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa",
+      "csrfProtection": false
+    },
+    {
+      "source": "^(.*)$",
+      "target": "$1",
+      "localDir": "webapp",
+      "authenticationType": "xsuaa"
+    }
+  ]
 }

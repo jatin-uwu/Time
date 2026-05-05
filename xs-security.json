@@ -23,15 +23,17 @@
       "name": "Manager",
       "description": "Manager Role",
       "scope-references": [
-        "$XSAPPNAME.Manager"
+        "$XSAPPNAME.Manager",
+        "$XSAPPNAME.Employee"
       ]
     }
   ],
-  "oauth2-configuration":{
-    "token-validity" : 900,
+  "oauth2-configuration": {
+    "token-validity": 900,
     "redirect-uris": [
-    "https://*.cfapps.us10-001.hana.ondemand.com/**"
+      "https://*.cfapps.us10-001.hana.ondemand.com/**"
     ]
   },
-  "xsenableasyncservice": "true"
+  "xsenableasyncservice": "true",
+  "attributes": []
 }

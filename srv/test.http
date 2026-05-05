@@ -1,7 +1,7 @@
 ### ------------------------------------------------------------
 ### 1. Employee → Get Own Timesheets (SHOULD WORK)
 ### ------------------------------------------------------------
-GET http://localhost:4004/me
+GET http://localhost:4004/employee/MyTimesheets
 Authorization: Basic jatin:
 
 ### ------------------------------------------------------------
@@ -18,9 +18,8 @@ Authorization: Basic jatin:
 ### ------------------------------------------------------------
 ### 3. Manager → Get Pending Approvals (SHOULD WORK)
 ### ------------------------------------------------------------
-GET http://localhost:4004/manager/PendingApprovals
-x-user: mgr1
-x-roles: Manager
+GET http://localhost:4004/manager
+Authorization: Basic jatin: 
 
 
 ### ------------------------------------------------------------
@@ -40,7 +39,7 @@ x-roles: Manager
 ### ------------------------------------------------------------
 ### 5. Employee → Try Approve (SHOULD FAIL ❌)
 ### ------------------------------------------------------------
-POST http://localhost:4004/manager/approveTimesheet
+POST http://localhost:4004/manager/approveTimeshe
 Content-Type: application/json
 x-user: emp1
 x-roles: Employee

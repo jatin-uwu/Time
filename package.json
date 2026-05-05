@@ -16,20 +16,37 @@
   "private": true,
   "cds": {
     "requires": {
-      "auth": "mocked",
-      "[production]": {
-        "strategy": "JWT"
-      },
-      "[development]": {
-        "strategy": "mock",
-        "users": {
-          "jatin": {
-
-          "roles": ["Employee"]
+      "auth": {
+        "[production]": {
+          "strategy": "JWT"
+        },
+        "[development]": {
+          "strategy": "mocked",
+          "users": {
+            "jatin": {
+              "roles": [
+                "Manager",
+                "Employee"
+              ]
+            },
+            "emp1": {
+              "roles": [
+                "Employee"
+              ]
+            },
+            "mgr1": {
+              "roles": [
+                "Manager"
+              ]
+            }
+          }
         }
+      },
+      "[production]": {
+        "auth": {
+          "kind": "xsuaa"
         }
       }
     }
   }
 }
-

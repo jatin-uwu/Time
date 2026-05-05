@@ -1,24 +1,14 @@
 using {ccentrik.employee.timesheet.schema as db} from '../db/data-model';
 
-// ── Employee Service ──────────────────────────────────────────────────────────
-<<<<<<< HEAD
+
 service EmployeeService @(
     path    : '/employee',
-    requires: 'authenticated-user'
+    requires: 'Employee'
 ) {
-=======
-service EmployeeService @(path:'/employee' ) {
-    
->>>>>>> 3f7767a62d1ba099152a0171d9de299af5649a22
 
-
-    entity MyTimesheets @(restrict: [{
-        grant: [
-            'READ',
-            'WRITE'
-        ],
-        to   : 'Employee'
-    }, ])            as projection on db.timesheet.TimesheetHeader;
+    entity MyTimesheets @(restrict: [
+        {grant: ['READ','WRITE'],to   : 'Employee'}
+        , ])            as projection on db.timesheet.TimesheetHeader;
 
     entity MyEntries as projection on db.timesheet.TimesheetEntry;
 
@@ -32,14 +22,12 @@ service EmployeeService @(path:'/employee' ) {
 }
 
 // ── Manager Service ───────────────────────────────────────────────────────────
-<<<<<<< HEAD
+
 service ManagerService @(
     path    : '/manager',
     requires: 'authenticated-user'
 ) {
-=======
-service ManagerService @(path:'/manager' ) {
->>>>>>> 3f7767a62d1ba099152a0171d9de299af5649a22
+
 
     // Only timesheets waiting for a decision are exposed here
     entity PendingApprovals @(restrict: [{

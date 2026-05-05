@@ -1,7 +1,7 @@
 _schema-version: 3.3.0
 ID: Employee-Timesheet
 version: 1.0.0
-description: "A simple CAP project."
+description: "Employee Timesheet"
 parameters:
   enable-parallel-deployments: true
 build-parameters:
@@ -76,5 +76,14 @@ resources:
             - "x509"
           redirect-uris:
             - https://*~{app-api/app-uri}/**
+        role-collections:
+          - name: 'Employee (Timesheet ${org}-${space})'
+            description: 'generated'
+            role-template-references:
+              - '$XSAPPNAME.Employee'
+          - name: 'Manager (Timesheet ${org}-${space})'
+            description: 'generated'
+            role-template-references:
+              - '$XSAPPNAME.Manager'
     requires:
       - name: app-api
