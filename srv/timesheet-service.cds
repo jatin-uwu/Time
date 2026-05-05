@@ -1,51 +1,40 @@
 using {ccentrik.employee.timesheet.schema as db} from '../db/data-model';
 
+// ── Employee Service ──────────────────────────────────────────────────────────
+service EmployeeService @(path:'/employee') {
 
-service EmployeeService @(
-    path    : '/employee',
-    requires: 'Employee'
-) {
+    @(requires: 'Employee')
+    entity MyTimesheets as projection on db.timesheet.TimesheetHeader;
 
-    entity MyTimesheets @(restrict: [
-        {grant: ['READ','WRITE'],to   : 'Employee'}
-        , ])            as projection on db.timesheet.TimesheetHeader;
+    @(requires: 'Employee')
+    entity MyEntries    as projection on db.timesheet.TimesheetEntry;
 
-    entity MyEntries as projection on db.timesheet.TimesheetEntry;
+    @(requires: 'Employee')
+    entity MyTasks      as projection on db.timesheet.TaskMaster;
 
-    entity MyTasks @(restrict: [{
-        grant: ['READ'],
-        to   : 'Employee'
-    }, ])            as projection on db.timesheet.TaskMaster;
+    @(requires: 'Employee')
+    action submitTimesheet(timesheetId : String(15)) returns String;
 
-    // Employee submits a week's timesheet → goes to manager for approval
-    action submitTimesheet(timesheetId: String(15))                        returns String;
+    @(requires: 'Employee')
+    action getUserRole() returns { role: String };
 }
 
 // ── Manager Service ───────────────────────────────────────────────────────────
+service ManagerService @(path:'/manager') {
 
-service ManagerService @(
-    path    : '/manager',
-    requires: 'authenticated-user'
-) {
+    @(requires: 'Manager')
+    entity PendingApprovals as projection on db.timesheet.TimesheetHeader
+        where status = 'Submitted';
 
+    @(requires: 'Manager')
+    entity ApprovalEntries  as projection on db.timesheet.TimesheetEntry;
 
-    // Only timesheets waiting for a decision are exposed here
-    entity PendingApprovals @(restrict: [{
-        grant: [
-            'READ',
-            'WRITE'
-        ],
-        to   : 'Manager'
-    }, ])                  as projection on db.timesheet.TimesheetHeader
-                              where
-                                  status = 'Submitted';
+    @(requires: 'Manager')
+    entity Employees        as projection on db.timesheet.EmployeeMaster;
 
-    entity ApprovalEntries as projection on db.timesheet.TimesheetEntry;
-    entity Employees       as projection on db.timesheet.EmployeeMaster;
+    @(requires: 'Manager')
+    action approveTimesheet(timesheetId : String(15), remarks : String(255)) returns String;
 
-    // Manager approves a submitted timesheet → entries stay locked, status = Approved
-    action approveTimesheet(timesheetId: String(15), remarks: String(255)) returns String;
-
-    // Manager rejects a submitted timesheet → entries unlocked, employee can re-edit
-    action rejectTimesheet(timesheetId: String(15), remarks: String(255))  returns String;
+    @(requires: 'Manager')
+    action rejectTimesheet (timesheetId : String(15), remarks : String(255)) returns String;
 }

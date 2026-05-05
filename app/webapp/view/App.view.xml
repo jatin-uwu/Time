@@ -6,78 +6,102 @@
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
-    <f:ShellBar
-        id="shellBar"
-        title="TIMESHEET"
-        showMenuButton="true"
-        menuButtonPress=".onMenuToggle"
-        showNotifications="true"
-        showProductSwitcher="false">
-        <f:profile>
-            <Avatar initials="JD" displaySize="XS" press=".onProfilePress" />
-        </f:profile>
-    </f:ShellBar>
+    
+    <Toolbar style="background:#1e293b; height:48px;">
+        <Button icon="sap-icon://menu2"
+                type="Transparent"
+                press=".onMenuToggle"
+                style="color:#ffffff;" />
+        <Title text="TIMESHEET" style="color:#ffffff; font-weight:700; letter-spacing:2px;" />
+        <ToolbarSpacer />
+        <Avatar initials="JD" displaySize="XS" press=".onProfilePress" />
+    </Toolbar>
 
     <SplitApp id="app">
 
         <masterPages>
-            <Page id="navPage" showHeader="false" class="timesheetSidebar">
+            <Page id="navPage" showHeader="false"
+                  class="timesheetSidebar"
+                  backgroundDesign="Transparent">
 
                 <!-- Employee section -->
-                <List id="mainNavList" headerText="Employee" mode="None">
+                <List id="mainNavList"
+                      headerText="Employee"
+                      mode="None"
+                      backgroundDesign="Transparent"
+                      style="background:transparent;">
                     <items>
-                        <StandardListItem title="Dashboard" icon="sap-icon://home" type="Active"
-                            press=".onNavSelect">
+                        <StandardListItem title="Dashboard"
+                            icon="sap-icon://home"
+                            type="Active"
+                            press=".onNavSelect"
+                            style="background:transparent; color:#cbd5e1;">
                             <customData><core:CustomData key="target" value="dashboard" /></customData>
                         </StandardListItem>
-                        <StandardListItem title="Timesheet" icon="sap-icon://calendar" type="Active"
-                            press=".onNavSelect">
+                        <StandardListItem title="Timesheet"
+                            icon="sap-icon://calendar"
+                            type="Active"
+                            press=".onNavSelect"
+                            style="background:transparent; color:#cbd5e1;">
                             <customData><core:CustomData key="target" value="timesheet" /></customData>
                         </StandardListItem>
-                        <StandardListItem title="My Wallet" icon="sap-icon://wallet" type="Active"
-                            press=".onNavSelect">
+                        <StandardListItem title="Task Descriptions"
+                            icon="sap-icon://wallet"
+                            type="Active"
+                            press=".onNavSelect"
+                            style="background:transparent; color:#cbd5e1;">
                             <customData><core:CustomData key="target" value="dashboard" /></customData>
                         </StandardListItem>
-                        <StandardListItem title="Timesheet History" icon="sap-icon://history" type="Active"
-                            press=".onNavSelect">
+                        <StandardListItem title="Timesheet History"
+                            icon="sap-icon://history"
+                            type="Active"
+                            press=".onNavSelect"
+                            style="background:transparent; color:#cbd5e1;">
                             <customData><core:CustomData key="target" value="history" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="Notifications"
+                            icon="sap-icon://bell"
+                            type="Active"
+                            info="{= ${appView>/unreadCount} > 0 ? String(${appView>/unreadCount}) : '' }"
+                            infoState="Error"
+                            press=".onNavSelect"
+                            style="background:transparent; color:#cbd5e1;">
+                            <customData><core:CustomData key="target" value="notifications" /></customData>
                         </StandardListItem>
                     </items>
                 </List>
 
-                <!-- Manager section (role-restricted in production) -->
-                <List id="managerNavList" headerText="Manager" mode="None">
+                <!-- Manager section -->
+                <List id="managerNavList"
+                      headerText="Manager"
+                      mode="None"
+                      backgroundDesign="Transparent"
+                      style="background:transparent;">
                     <items>
-                        <StandardListItem title="Approvals" icon="sap-icon://approvals" type="Active"
-                            press=".onNavSelect">
+                        <StandardListItem title="Approvals"
+                            icon="sap-icon://approvals"
+                            type="Active"
+                            press=".onNavSelect"
+                            style="background:transparent; color:#cbd5e1;">
                             <customData><core:CustomData key="target" value="manager" /></customData>
                         </StandardListItem>
                     </items>
                 </List>
 
-                <List id="accountNavList" headerText="Account" mode="None">
-                    <items>
-                        <StandardListItem title="Notifications" icon="sap-icon://bell" type="Active"
-                            info="{= ${appView>/unreadCount} > 0 ? String(${appView>/unreadCount}) : '' }"
-                            infoState="Error"
-                            press=".onNavSelect">
-                            <customData><core:CustomData key="target" value="notifications" /></customData>
-                        </StandardListItem>
-                        <StandardListItem title="Settings" icon="sap-icon://action-settings" />
-                        <StandardListItem title="FAQ"      icon="sap-icon://sys-help" />
-                    </items>
-                </List>
-
                 <footer>
-                    <OverflowToolbar class="tsSidebarFooter">
-                        <Button text="Log Out" icon="sap-icon://log" type="Negative" press=".onLogout" />
+                    <OverflowToolbar style="background:#1e293b; border-top:1px solid #334155;">
+                        <Button text="Log Out"
+                                icon="sap-icon://log"
+                                type="Ghost"
+                                press=".onLogout" 
+                                style="color:#94a3b8; border:none; background:transparent;" />
                     </OverflowToolbar>
                 </footer>
+                
 
             </Page>
         </masterPages>
 
-        <!-- Router renders dashboard/history views into this NavContainer -->
         <detailPages>
             <NavContainer id="detailNav" />
         </detailPages>

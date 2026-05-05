@@ -4,13 +4,14 @@
   "scopes": [
     {
       "name": "$XSAPPNAME.Employee",
-      "description": "Employee access"
+      "description": "Employee role"
     },
     {
       "name": "$XSAPPNAME.Manager",
-      "description": "Manager access"
+      "description": "Manager role"
     }
   ],
+  "attributes": [],
   "role-templates": [
     {
       "name": "Employee",
@@ -21,15 +22,31 @@
     },
     {
       "name": "Manager",
-      "description": "Manager Role",
+      "description": "Manager Role template",
       "scope-references": [
-        "$XSAPPNAME.Manager",
-        "$XSAPPNAME.Employee"
+        "$XSAPPNAME.Employee",
+        "$XSAPPNAME.Manager"
       ]
     }
   ],
-  "oauth2-configuration": {
-    "token-validity": 900,
+   "role-collections": [
+        {
+            "name": "Timesheet_Employee",
+            "description": "Timesheet Employee",
+            "role-template-references": [
+                "$XSAPPNAME.Employee"
+            ]
+        },
+        {
+            "name": "Timesheet_Manager",
+            "description": "Timesheet Manager",
+            "role-template-references": [
+                "$XSAPPNAME.Manager"
+            ]
+        }
+    ],
+  "oauth2-configuration":{
+    "token-validity" : 900,
     "redirect-uris": [
       "https://*.cfapps.us10-001.hana.ondemand.com/**"
     ]

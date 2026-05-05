@@ -14,8 +14,8 @@
                 <!-- ── Greeting ── -->
                 <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsDashGreetingRow">
                     <VBox>
-                        <Title text="{dash>/greeting}" level="H2" class="tsDashGreetTitle" />
-                        <Text text="Here's your timesheet activity" class="tsDashGreetSub" />
+                        <Title text="{dash>/greeting}" level="H4" class="sapUiTinyMarginBegin sapUiTinyMarginTop sapUiTinyMarginBottom" />
+                        <Text text="Here's your timesheet activity" class="sapUiSmallMarginBegin sapUiTinyMarginTop sapUiSmallMarginBottom" />
                     </VBox>
                     <Text text="{dash>/todayLabel}" class="tsDashDateLabel" />
                 </HBox>
