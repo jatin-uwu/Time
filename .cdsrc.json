@@ -1,13 +1,13 @@
 {
-    "requires": {
-        "auth": {
-            "kind": "dummy"
-        },
-        "db": {
-            "kind": "sqlite",
-            "credentials": {
-                "database": "db/timesheet.db"
-            }
-        }
+  "requires": {
+    "db": {
+      "kind": "hana"
     }
+  },
+  "build": {
+    "tasks": [
+      { "for": "hana", "src": "db" },
+      { "for": "nodejs", "src": "srv" }
+    ]
+  }
 }
