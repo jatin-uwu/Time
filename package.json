@@ -1,5 +1,5 @@
 {
-  "name": "Employee-Timesheet",
+  "name": "Timesheet",
   "version": "1.0.0",
   "dependencies": {
     "@cap-js/hana": "^2",
@@ -16,8 +16,36 @@
   "private": true,
   "cds": {
     "requires": {
+      "auth": {
+        "[production]": {
+          "strategy": "JWT"
+        },
+        "[development]": {
+          "strategy": "mocked",
+          "users": {
+            "jatin": {
+              "roles": [
+                "Manager",
+                "Employee"
+              ]
+            },
+            "emp1": {
+              "roles": [
+                "Employee"
+              ]
+            },
+            "mgr1": {
+              "roles": [
+                "Manager"
+              ]
+            }
+          }
+        }
+      },
       "[production]": {
-        "auth": "xsuaa"
+        "auth": {
+          "kind": "xsuaa"
+        }
       }
     }
   }

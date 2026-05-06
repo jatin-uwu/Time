@@ -48,8 +48,9 @@
   "oauth2-configuration":{
     "token-validity" : 900,
     "redirect-uris": [
-    "https://*.cfapps.us10-001.hana.ondemand.com/**"
+      "https://*.cfapps.us10-001.hana.ondemand.com/**"
     ]
   },
-  "xsenableasyncservice": "true"
+  "xsenableasyncservice": "true",
+  "attributes": []
 }
