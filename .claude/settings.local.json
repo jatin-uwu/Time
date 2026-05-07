@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cf deploy *)",
+      "Bash(tee /tmp/cf-deploy2.log)"
+    ]
+  }
+}

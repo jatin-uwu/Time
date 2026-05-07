@@ -8,12 +8,23 @@ sap.ui.define([
     return Controller.extend("timesheet.app.controller.App", {
 
         onInit() {
-            // Create model FIRST then set it on view
-            this._oAppModel = new JSONModel({ 
+            this._oAppModel = new JSONModel({
                 unreadCount: 0,
-                userRole: "employee"  // change to "employee" to test employee view
+                userRole: "employee"
             });
             this.getView().setModel(this._oAppModel, "appView");
+
+            fetch("/employee/getUserRole", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: "{}"
+            })
+                .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                .then(data => {
+                    const sRole = data && (data.role || (data.value && data.value.role));
+                    if (sRole) this._oAppModel.setProperty("/userRole", sRole);
+                })
+                .catch(() => { });
 
             this.getOwnerComponent().getRouter().attachRouteMatched(this._onRouteMatched, this);
 
