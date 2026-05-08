@@ -1,19 +1,37 @@
 /* ── Profile Dialog (avatar press) ───────────────────────────────── */
-.tsProfileDialogWrap        { padding: 4px 4px 0; }
-.tsProfileHeader            { padding: 8px 4px 16px; border-bottom: 1px solid #e5e7eb; }
+/* ── My-Profile dialog (avatar press) ─────────────────────────────────
+   Renders as a tall side card anchored under the avatar (top-right),
+   stretching down to the bottom of the viewport. */
+
+/* The popover is rendered by sap.m.ResponsivePopover, which already
+   anchors itself to the avatar via openBy(). No positional override
+   needed here — just visual polish. */
+.tsProfileDialog.sapMPopover {
+    border-radius: 14px !important;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18) !important;
+}
+
+.tsProfileDialogWrap        { padding: 12px 18px 14px !important; }
+.tsProfileHeader            { padding: 6px 4px 14px; margin-bottom: 6px; border-bottom: 1px solid #e5e7eb; }
 .tsProfileName              { font-weight: 700 !important; color: #111827 !important; }
 .tsProfileDesignation       { color: #4b5563 !important; font-size: 0.9rem !important; }
 .tsProfileEmpId             { color: #9ca3af !important; font-size: 0.78rem !important; }
-.tsProfileBody              { padding: 4px 4px 8px; }
-.tsProfileRow               { padding: 6px 0; }
+.tsProfileBody              { padding: 6px 4px 4px; }
+.tsProfileRow               { padding: 6px 4px; }
 .tsProfileFieldLabel        { font-size: 0.7rem !important; color: #6b7280 !important; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700 !important; }
 .tsProfileFieldValue        { color: #1f2937 !important; font-size: 0.92rem !important; }
 
-/* ── Layout: ShellBar + SplitApp ──────────────────────────────────
-html, body { margin: 0; overflow: hidden; }
+/* Kill the popover's default zero-padding content area so our wrap padding shows */
+.tsProfileDialog.sapMPopover .sapMPopoverCont,
+.tsProfileDialog.sapMPopover .sapMPopoverScroll {
+    padding: 0 !important;
+}
+
+/* ── Layout: ShellBar + SplitApp ────────────────────────────────── */
+html, body { margin: 0; overflow: hidden; height: 100%; }
 
 .sapMSplitContainer {
-    height: calc(100vh - 44px) !important;
+    height: calc(100vh - 48px) !important;
 }
 
 /* ── Sidebar collapse via CSS class toggle ──────────────────────── */
@@ -749,6 +767,21 @@ html, body { margin: 0; overflow: hidden; }
 .tsDashPage {
     background-color: #f3f4f6;
 }
+
+/* Inside the dashboard Page, only ONE element scrolls. UI5 normally
+   makes both <section> and the inner .sapMScrollCont scrollable,
+   which produces two adjacent scrollbars. Lock <section> to
+   overflow:hidden so only .sapMScrollCont scrolls. */
+.tsDashPage > section {
+    overflow: hidden !important;
+}
+.tsDashPage > section > .sapMScrollCont {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    height: 100% !important;
+}
+
+
 
 /* ── Greeting row ───────────────────────────────────────────────────── */
 .tsDashGreetingRow {
