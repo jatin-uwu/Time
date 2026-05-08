@@ -543,96 +543,204 @@ html, body { margin: 0; overflow: hidden; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Notifications page
+   Notifications page (spacious + systematic layout)
    ═══════════════════════════════════════════════════════════════════════ */
 
-.tsNotifSubtitle {
-    font-size: 0.78rem;
-    color: #6b7280;
-    margin-top: 2px;
+.tsNotifPage              { background: #f3f4f6; }
+.tsNotifWrap              { padding: 24px 28px 32px; max-width: 1100px; margin: 0 auto; font-size: 1.02rem; }
+
+/* ── Hero header ────────────────────────────────────────────────────── */
+.tsNotifHero {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    color: #ffffff;
+    border-radius: 16px;
+    padding: 26px 30px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
 }
 
-/* Empty state */
+.tsNotifHero .sapMTitle, .tsNotifHero .sapMText { color: #ffffff !important; }
+
+.tsNotifHeroIcon  { color: #60a5fa !important; font-size: 1.7rem; }
+.tsNotifHeroTitle { font-weight: 700 !important; color: #ffffff !important; font-size: 1.55rem !important; }
+.tsNotifHeroSub   {
+    margin-top: 6px !important;
+    color: #cbd5e1 !important;
+    font-size: 1rem !important;
+}
+
+.tsNotifMarkAllBtn {
+    margin-left: 12px;
+}
+
+/* ── Empty state ────────────────────────────────────────────────────── */
 .tsNotifEmpty {
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: center !important;
-    justify-content: center !important;
-    padding: 5rem 2rem;
+    background: #ffffff;
+    border-radius: 14px;
+    padding: 64px 32px;
+    margin-top: 24px;
+    box-shadow: 0 2px 12px rgba(15, 23, 42, 0.05);
 }
 
 .tsNotifEmptyHint {
-    color: #9ca3af;
-    font-size: 0.875rem;
-    max-width: 320px;
-    margin-top: 4px;
+    color: #9ca3af !important;
+    font-size: 0.92rem !important;
+    max-width: 360px;
+    margin-top: 6px !important;
 }
 
-/* List */
-.tsNotifList {
-    background: transparent !important;
-}
+/* ── List + cards ───────────────────────────────────────────────────── */
+.tsNotifList                  { background: transparent !important; margin-top: 24px; }
+.tsNotifList .sapMListUl      { background: transparent !important; }
 
 .tsNotifItem {
+    background: transparent !important;
+    border: none !important;
     padding: 0 !important;
-    border-bottom: 1px solid #f3f4f6 !important;
-    background: #fff !important;
+    margin-bottom: 14px;
 }
 
-.tsNotifItem:hover {
-    background: #f9fafb !important;
-}
+.tsNotifItem .sapMLIBContent     { padding: 0 !important; text-align: left !important; }
+.tsNotifItem .sapMCustomListItem,
+.tsNotifItem .sapMCustomLI,
+.tsNotifItem .sapMCustomLI > div { text-align: left !important; }
 
-/* Card layout */
-.tsNotifCard {
-    padding: 1rem 1.25rem;
+.tsNotifCard,
+.tsNotifCard.sapMFlexBox {
+    position: relative;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+    flex-wrap: nowrap !important;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    padding: 20px 24px 20px 32px;
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
     width: 100%;
-    gap: 0;
+    box-sizing: border-box;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    gap: 20px;
 }
 
-/* Left icon column */
+.tsNotifCard:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+    cursor: pointer;
+}
+
+/* Left accent stripe — colour driven by the notification type */
+.tsNotifAccent {
+    position: absolute;
+    left: 0;
+    top: 12px;
+    bottom: 12px;
+    width: 5px;
+    border-radius: 4px;
+    background: #cbd5e1;
+}
+.tsNotifAccentApproved { background: #10b981 !important; }
+.tsNotifAccentRejected { background: #ef4444 !important; }
+
+/* Unread state — soft tinted background + bolder accent */
+.tsNotifUnread .tsNotifCard {
+    background: #f0f7ff;
+    border-color: #bfdbfe;
+}
+
+/* ── Icon + body (left side, fully left-aligned) ─────────────────────── */
+/* UI5 HBox/VBox compile to <div class="sapMFlexBox …"> — we have to
+   override the inline justify/align that UI5 applies. The selectors below
+   target both the inner sapMFlexBox node and our wrapper class. */
+.tsNotifMain.sapMFlexBox,
+.tsNotifMain {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    justify-content: flex-start !important;
+    align-items: flex-start !important;
+    text-align: left !important;
+}
+
 .tsNotifIconWrap {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
+    width: 52px;
+    min-width: 52px;
+    height: 52px;
     border-radius: 50%;
     background: #f3f4f6;
-    margin-right: 0.75rem;
+    margin-right: 18px;
     flex-shrink: 0;
 }
+.tsNotifIconApproved          { background: #ecfdf5 !important; }
+.tsNotifIconApproved .sapUiIcon { color: #047857 !important; }
+.tsNotifIconRejected          { background: #fef2f2 !important; }
+.tsNotifIconRejected .sapUiIcon { color: #b91c1c !important; }
 
-/* Body */
+/* ── Body content (left-aligned) ────────────────────────────────────── */
+.tsNotifBody.sapMFlexBox,
 .tsNotifBody {
-    flex: 1;
-    min-width: 0;
-    gap: 4px;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    width: 100% !important;
+}
+.tsNotifBody > * { align-self: flex-start !important; }
+
+.tsNotifTopRow.sapMFlexBox,
+.tsNotifTopRow {
+    justify-content: flex-start !important;
+    gap: 6px;
+    width: 100% !important;
+}
+.tsNotifTopRow .sapMText,
+.tsNotifTopRow .sapMObjectStatus,
+.tsNotifTopRow .sapMObjectStatusText { text-align: left !important; }
+
+.tsNotifBadge,
+.tsNotifBadge .sapMObjectStatusText  { font-weight: 600 !important; font-size: 1rem !important; }
+.tsNotifBullet                       { color: #9ca3af !important; font-size: 1rem !important; }
+.tsNotifWeek                         { color: #4b5563 !important; font-size: 1rem !important; font-weight: 500 !important; }
+
+/* The inner span of a UI5 sap.m.Text is .sapMText — apply text-align there. */
+.tsNotifMessage,
+.tsNotifMessage .sapMText {
+    color: #1f2937 !important;
+    font-size: 1.08rem !important;
+    line-height: 1.6 !important;
+    text-align: left !important;
+    width: 100% !important;
+    display: block !important;
 }
 
-.tsNotifBadge {
-    font-size: 0.75rem !important;
+/* ── Right meta column (date pinned right) ──────────────────────────── */
+.tsNotifMeta.sapMFlexBox,
+.tsNotifMeta {
+    flex: 0 0 auto !important;
+    min-width: 170px !important;
+    margin-left: auto !important;
+    align-items: flex-end !important;
+    justify-content: flex-start !important;
+    text-align: right !important;
 }
+.tsNotifWhen.sapMFlexBox,
+.tsNotifWhen {
+    justify-content: flex-end !important;
+    color: #6b7280 !important;
+}
+.tsNotifTime,
+.tsNotifTime .sapMText {
+    color: #6b7280 !important;
+    font-size: 0.95rem !important;
+    white-space: nowrap;
+    font-weight: 500 !important;
+    text-align: right !important;
+}
+.tsNotifUnreadDot { font-size: 0.65rem !important; }
 
-.tsNotifMessage {
-    font-size: 0.875rem;
-    color: #111827;
-    line-height: 1.4;
-}
-
-.tsNotifTime {
-    font-size: 0.72rem;
-    color: #9ca3af;
-}
-
-/* Unread dot column */
-.tsNotifDotWrap {
-    width: 20px;
-    flex-shrink: 0;
-    margin-left: 0.5rem;
-}
-
-.tsNotifUnreadDot {
-    font-size: 0.55rem !important;
-}
+/* Hide the default UI5 caret on the navigation list item; we already
+   emphasise the card with the hover lift */
+.tsNotifItem .sapMLIBImgNav { display: none !important; }
 
 /* ═══════════════════════════════════════════════════════════════════════
    Analytics Dashboard page

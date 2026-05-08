@@ -104,6 +104,15 @@ sap.ui.define([
             return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) +
                    "  " +
                    d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+        },
+
+        // CSS class helpers used by the new layout
+        formatTypeAccentClass(sType) {
+            return sType === "approved" ? "tsNotifAccentApproved" : "tsNotifAccentRejected";
+        },
+
+        formatTypeIconClass(sType) {
+            return sType === "approved" ? "tsNotifIconApproved" : "tsNotifIconRejected";
         }
     });
 });

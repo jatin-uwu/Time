@@ -55,21 +55,22 @@ service EmployeeService @(path:'/employee') {
 
     // Submitting a timesheet is an Employee action (a Manager submitting
     // their own timesheet still has the Employee scope via role mapping).
-    action submitTimesheet(timesheetId : String(15)) returns String
-        @(requires: ['Employee','Manager']);
+    @(requires: ['Employee','Manager'])
+    action submitTimesheet(timesheetId : String(15)) returns String;
 
     // Anyone authenticated should be able to discover their role.
-    action getUserRole() returns { role: String }
-        @(requires: 'authenticated-user');
+    @(requires: 'authenticated-user')
+    action getUserRole() returns { role: String };
 
     // Single-shot download of the manager-attached file. Streams the
     // current bytes back as base64 and immediately clears them from
     // HANA so storage is freed and the file can only be downloaded once.
+    @(requires: ['Employee','Manager'])
     action consumeTaskAttachment(taskId : String(20)) returns {
         fileName   : String(255);
         mimeType   : String(100);
         dataBase64 : LargeString;
-    } @(requires: ['Employee','Manager']);
+    };
 }
 
 // ── Manager Service ──────────────────────────────────────────────────────────
