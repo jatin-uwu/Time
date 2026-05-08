@@ -1,3 +1,14 @@
+/* ── Profile Dialog (avatar press) ───────────────────────────────── */
+.tsProfileDialogWrap        { padding: 4px 4px 0; }
+.tsProfileHeader            { padding: 8px 4px 16px; border-bottom: 1px solid #e5e7eb; }
+.tsProfileName              { font-weight: 700 !important; color: #111827 !important; }
+.tsProfileDesignation       { color: #4b5563 !important; font-size: 0.9rem !important; }
+.tsProfileEmpId             { color: #9ca3af !important; font-size: 0.78rem !important; }
+.tsProfileBody              { padding: 4px 4px 8px; }
+.tsProfileRow               { padding: 6px 0; }
+.tsProfileFieldLabel        { font-size: 0.7rem !important; color: #6b7280 !important; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700 !important; }
+.tsProfileFieldValue        { color: #1f2937 !important; font-size: 0.92rem !important; }
+
 /* ── Layout: ShellBar + SplitApp ──────────────────────────────────
 html, body { margin: 0; overflow: hidden; }
 
@@ -697,4 +708,358 @@ html, body { margin: 0; overflow: hidden; }
 .tsDashCompletionContent .sapMText {
     font-size: 0.82rem !important;
     color: #6b7280 !important;
+}
+/* ── Task Assignment / Description ──────────────────────────────── */
+.tsTaskAssignWrap, .tsTaskDescWrap { padding: 12px 16px; box-sizing: border-box; }
+
+.tsTaskFormPanel, .tsTaskListPanel {
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    margin: 8px 0;
+}
+
+.tsTaskFormPanel .sapMPanelHdr, .tsTaskListPanel .sapMPanelHdr {
+    font-weight: 600;
+    color: #111827;
+}
+
+.tsTaskRowName { font-weight: 600; color: #111827; }
+.tsTaskRowId   { font-size: 0.75rem; color: #9ca3af; }
+
+/* ── Task description cards ─────────────────────────────────────── */
+.tsTaskCardList .sapMListUl { background: transparent !important; }
+
+.tsTaskCardItem {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin-bottom: 12px;
+}
+
+.tsTaskCard {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 16px 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tsTaskCard:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+
+.tsTaskCardHeader { margin-bottom: 12px; }
+
+.tsTaskDescBlock {
+    background: #f9fafb;
+    border-left: 4px solid #3b82f6;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 8px 0 12px;
+}
+
+.tsTaskDescLabel {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #6b7280;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.tsTaskDescText {
+    color: #1f2937;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-top: 4px;
+}
+
+.tsTaskCardFooter {
+    border-top: 1px solid #f3f4f6;
+    padding-top: 10px;
+    color: #6b7280;
+    font-size: 0.85rem;
+}
+
+.tsTaskEmpty {
+    padding: 48px 16px;
+    color: #6b7280;
+}
+
+.tsTaskActionRow {
+    border-top: 1px dashed #e5e7eb;
+    margin-top: 10px;
+    padding-top: 10px;
+}
+
+.tsTaskActionLabel {
+    font-size: 0.78rem;
+    color: #6b7280;
+    align-self: center;
+}
+
+.tsTaskStatusTable .sapMListTblHeaderCell {
+    font-weight: 600;
+    color: #374151;
+    background: #f9fafb;
+}
+
+.tsTaskOpenBtn .sapMBtnIcon { color: #3b82f6 !important; }
+
+/* ── Task Detail page ───────────────────────────────────────────── */
+.tsTaskDetailWrap { max-width: 1100px; margin: 0 auto; }
+
+.tsTaskDetailHeaderCard,
+.tsTaskDetailFormCard,
+.tsTaskUpdatesCard {
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+}
+
+.tsAttachmentName {
+    font-size: 0.82rem;
+    color: #1d4ed8;
+    margin-top: 6px;
+}
+
+.tsTaskAttachmentRow {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-top: 10px;
+}
+
+.tsTaskAttachmentLabel {
+    font-size: 0.82rem;
+    color: #6b7280;
+    font-weight: 600;
+}
+
+.tsUpdateList .sapMListUl { background: transparent !important; }
+.tsUpdateItem {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin-bottom: 10px;
+}
+
+.tsUpdateCard {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 12px 16px;
+    border-left: 4px solid #3b82f6;
+}
+
+.tsUpdateBy   { font-weight: 600; color: #111827; font-size: 0.9rem; }
+.tsUpdateDate { font-size: 0.8rem; color: #6b7280; }
+.tsUpdateNotes {
+    color: #1f2937;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* ── Task Status page (manager) ─────────────────────────────────── */
+.tsTaskStatusWrap { padding: 16px 20px 24px; box-sizing: border-box; }
+
+.tsTaskStatusHero {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    color: #ffffff;
+    border-radius: 16px;
+    padding: 22px 26px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+}
+
+.tsTaskStatusHero .sapMTitle, .tsTaskStatusHero .sapMText {
+    color: #ffffff !important;
+}
+
+.tsTaskStatusHeroIcon {
+    color: #60a5fa !important;
+    font-size: 1.5rem;
+}
+
+.tsTaskStatusHeroTitle {
+    font-weight: 700 !important;
+    color: #ffffff !important;
+}
+
+.tsTaskStatusHeroSub {
+    margin-top: 4px !important;
+    color: #cbd5e1 !important;
+    font-size: 0.88rem !important;
+}
+
+.tsTaskStatusHeroTotal {
+    color: #cbd5e1 !important;
+    font-size: 0.85rem !important;
+}
+
+.tsTaskStatusKpiRow {
+    margin-top: 18px;
+    gap: 14px;
+}
+
+.tsKpiTile {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 12px;
+    padding: 14px 18px;
+    min-width: 160px;
+    backdrop-filter: blur(4px);
+    margin-right: 14px;
+    margin-bottom: 6px;
+    transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.tsKpiTile:hover {
+    transform: translateY(-2px);
+    background: rgba(255,255,255,0.12);
+}
+
+.tsKpiIcon {
+    color: #ffffff !important;
+    font-size: 1.05rem;
+}
+
+.tsKpiLabel {
+    color: #cbd5e1 !important;
+    font-size: 0.72rem !important;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600 !important;
+    margin-left: 8px !important;
+}
+
+.tsKpiValue {
+    margin-top: 6px !important;
+    font-size: 1.8rem !important;
+    font-weight: 700 !important;
+    color: #ffffff !important;
+    line-height: 1.1 !important;
+}
+
+.tsKpiOpen .tsKpiIcon       { color: #60a5fa !important; }
+.tsKpiInProgress .tsKpiIcon { color: #f59e0b !important; }
+.tsKpiCompleted .tsKpiIcon  { color: #34d399 !important; }
+
+/* Filters bar */
+.tsTaskStatusFilters {
+    margin-top: 18px;
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 12px 16px;
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+    border: 1px solid #e5e7eb;
+}
+
+/* Card list */
+.tsStatusCardList .sapMListUl { background: transparent !important; }
+.tsStatusCardItem {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin-top: 12px;
+}
+
+.tsStatusCard {
+    position: relative;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    padding: 16px 20px 16px 28px;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    width: 100%;
+    box-sizing: border-box;
+    gap: 16px;
+}
+
+.tsStatusCard:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+}
+
+.tsStatusAccent {
+    position: absolute;
+    left: 0; top: 8px; bottom: 8px;
+    width: 5px;
+    border-radius: 4px;
+    background: #cbd5e1;
+}
+
+.tsAccentOpen       { background: #3b82f6 !important; }
+.tsAccentInProgress { background: #f59e0b !important; }
+.tsAccentCompleted  { background: #10b981 !important; }
+
+.tsStatusCardLeft   { flex: 1 1 240px; min-width: 220px; }
+.tsStatusCardTitle  { font-weight: 600 !important; color: #111827 !important; }
+
+.tsStatusCardMeta {
+    flex: 2 1 420px;
+    gap: 28px;
+}
+
+.tsMetaCol { min-width: 130px; margin-right: 18px; }
+
+.tsMetaLabel {
+    font-size: 0.68rem !important;
+    color: #9ca3af !important;
+    letter-spacing: 0.08em;
+    font-weight: 700 !important;
+    margin-bottom: 4px !important;
+}
+
+.tsMetaValue {
+    color: #1f2937 !important;
+    font-size: 0.9rem !important;
+    font-weight: 500 !important;
+}
+
+.tsStatusCardRight { flex: 0 0 auto; }
+
+.tsStatusPill {
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    border: 1px solid transparent;
+}
+
+.tsStatusPillIcon { font-size: 0.9rem !important; }
+.tsStatusPillText { font-weight: 600 !important; font-size: 0.85rem !important; }
+
+.tsPillOpen {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+    color: #1d4ed8;
+}
+.tsPillOpen .tsStatusPillIcon, .tsPillOpen .tsStatusPillText { color: #1d4ed8 !important; }
+
+.tsPillInProgress {
+    background: #fffbeb;
+    border-color: #fde68a;
+    color: #b45309;
+}
+.tsPillInProgress .tsStatusPillIcon, .tsPillInProgress .tsStatusPillText { color: #b45309 !important; }
+
+.tsPillCompleted {
+    background: #ecfdf5;
+    border-color: #a7f3d0;
+    color: #047857;
+}
+.tsPillCompleted .tsStatusPillIcon, .tsPillCompleted .tsStatusPillText { color: #047857 !important; }
+
+.tsPillDefault {
+    background: #f3f4f6;
+    border-color: #e5e7eb;
+    color: #6b7280;
 }

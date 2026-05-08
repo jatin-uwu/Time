@@ -1,0 +1,161 @@
+<mvc:View
+    controllerName="timesheet.app.controller.TaskDetail"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:u="sap.ui.unified"
+    xmlns:l="sap.ui.layout"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="taskDetailPage"
+          title="Task Detail"
+          showNavButton="true"
+          navButtonPress=".onNavBack"
+          class="tsDashboardPage"
+          enableScrolling="true">
+
+        <content>
+
+            <VBox class="tsTaskDetailWrap sapUiSmallMargin">
+
+                <!-- ── Task header card ── -->
+                <Panel class="tsTaskDetailHeaderCard" expandable="false">
+                    <HBox justifyContent="SpaceBetween" alignItems="Start" wrap="Wrap">
+                        <VBox class="tsTaskDetailLeft">
+                            <HBox alignItems="Center">
+                                <ObjectStatus
+                                    text="{tdView>/task/priority}"
+                                    state="{path:'tdView>/task/priority', formatter:'.formatPriorityState'}"
+                                    icon="sap-icon://flag" />
+                                <Title text="{tdView>/task/taskName}" level="H3"
+                                       class="sapUiSmallMarginBegin" />
+                            </HBox>
+                            <Text text="{tdView>/task/taskId}" class="tsTaskRowId" />
+                            <HBox class="sapUiSmallMarginTop" wrap="Wrap" alignItems="Center">
+                                <HBox alignItems="Center" class="sapUiTinyMarginEnd">
+                                    <core:Icon src="sap-icon://employee" size="0.9rem" color="#6b7280" />
+                                    <Text text="{tdView>/task/assigneeName}" class="sapUiTinyMarginBegin" />
+                                </HBox>
+                                <HBox alignItems="Center" class="sapUiTinyMarginEnd">
+                                    <core:Icon src="sap-icon://date-time" size="0.9rem" color="#6b7280" />
+                                    <Text text="Due: {tdView>/task/dueLabel}" class="sapUiTinyMarginBegin" />
+                                </HBox>
+                            </HBox>
+                        </VBox>
+                        <ObjectStatus
+                            text="{tdView>/task/status}"
+                            state="{path:'tdView>/task/status', formatter:'.formatStatusState'}" />
+                    </HBox>
+
+                    <!-- Full description block -->
+                    <VBox class="tsTaskDescBlock sapUiSmallMarginTop">
+                        <Label text="Full description" class="tsTaskDescLabel" />
+                        <Text text="{tdView>/task/taskDescription}" class="tsTaskDescText" />
+                    </VBox>
+
+                    <!-- Manager attachment (if any) -->
+                    <HBox class="tsTaskAttachmentRow sapUiSmallMarginTop"
+                          alignItems="Center"
+                          visible="{= !!${tdView>/task/attachmentName} }">
+                        <core:Icon src="sap-icon://attachment" size="0.95rem" color="#3b82f6" />
+                        <Text text="Reference document:"
+                              class="tsTaskAttachmentLabel sapUiTinyMarginBegin" />
+                        <Link text="{tdView>/task/attachmentName}"
+                              press=".onDownloadTaskAttachment"
+                              class="sapUiTinyMarginBegin" />
+                    </HBox>
+                </Panel>
+
+                <!-- ── New update form (employee only) ── -->
+                <Panel headerText="Post a Daily Update"
+                       class="tsTaskDetailFormCard sapUiSmallMarginTop"
+                       expandable="false"
+                       visible="{tdView>/canPost}">
+
+                    <l:Grid defaultSpan="L6 M6 S12" hSpacing="2" vSpacing="1" class="sapUiSmallMargin">
+                        <VBox>
+                            <Label text="Update Date" required="true" />
+                            <DatePicker value="{tdView>/form/updateDate}"
+                                        valueFormat="yyyy-MM-dd"
+                                        displayFormat="dd MMM yyyy" />
+                        </VBox>
+                        <VBox>
+                            <Label text="Attachment (image, doc, etc.)" />
+                            <u:FileUploader id="uplFile"
+                                            name="attachment"
+                                            placeholder="Click 'Browse' or use F4 to attach a file"
+                                            buttonText="Browse..."
+                                            fileType="png,jpg,jpeg,gif,pdf,doc,docx,xls,xlsx,txt"
+                                            change=".onFileSelected"
+                                            width="100%" />
+                            <Text text="{tdView>/form/attachmentName}"
+                                  visible="{= !!${tdView>/form/attachmentName} }"
+                                  class="tsAttachmentName" />
+                        </VBox>
+                    </l:Grid>
+
+                    <VBox class="sapUiSmallMargin">
+                        <Label text="What did you do today?" required="true" />
+                        <TextArea value="{tdView>/form/notes}"
+                                  rows="5"
+                                  width="100%"
+                                  growing="true"
+                                  growingMaxLines="10"
+                                  placeholder="Describe today's progress on this task." />
+                    </VBox>
+
+                    <HBox justifyContent="End" class="sapUiSmallMargin">
+                        <Button text="Clear" type="Transparent" press=".onClearForm" />
+                        <Button text="Post Update"
+                                type="Emphasized"
+                                icon="sap-icon://add"
+                                press=".onPostUpdate"
+                                class="sapUiSmallMarginBegin" />
+                    </HBox>
+                </Panel>
+
+                <!-- ── Daily Updates timeline (visible to everyone) ── -->
+                <Panel headerText="Daily Updates"
+                       class="tsTaskUpdatesCard sapUiSmallMarginTop"
+                       expandable="false">
+
+                    <VBox visible="{= ${tdView>/updates}.length === 0 }"
+                          class="tsTaskEmpty"
+                          alignItems="Center">
+                        <core:Icon src="sap-icon://notes" size="2.5rem" color="#9ca3af" />
+                        <Text text="No updates yet for this task." class="sapUiSmallMarginTop" textAlign="Center" />
+                    </VBox>
+
+                    <List items="{tdView>/updates}"
+                          mode="None"
+                          showSeparators="None"
+                          class="tsUpdateList"
+                          visible="{= ${tdView>/updates}.length > 0 }">
+
+                        <CustomListItem class="tsUpdateItem">
+                            <VBox class="tsUpdateCard">
+                                <HBox justifyContent="SpaceBetween" alignItems="Center">
+                                    <HBox alignItems="Center">
+                                        <core:Icon src="sap-icon://employee" size="0.9rem" color="#6b7280" />
+                                        <Text text="{tdView>updatedByName}" class="tsUpdateBy sapUiTinyMarginBegin" />
+                                    </HBox>
+                                    <Text text="{tdView>dateLabel}" class="tsUpdateDate" />
+                                </HBox>
+                                <Text text="{tdView>notes}" class="tsUpdateNotes sapUiSmallMarginTop" />
+                                <HBox class="sapUiSmallMarginTop" alignItems="Center"
+                                      visible="{= !!${tdView>attachmentName} }">
+                                    <core:Icon src="sap-icon://attachment" size="0.9rem" color="#3b82f6" />
+                                    <Link text="{tdView>attachmentName}" press=".onDownloadAttachment" class="sapUiTinyMarginBegin" />
+                                </HBox>
+                            </VBox>
+                        </CustomListItem>
+                    </List>
+                </Panel>
+
+            </VBox>
+
+        </content>
+
+    </Page>
+
+</mvc:View>

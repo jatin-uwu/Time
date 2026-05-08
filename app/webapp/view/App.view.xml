@@ -15,7 +15,10 @@
                 style="color:#ffffff;" />
         <Title text="TIMESHEET" style="color:#ffffff; font-weight:700; letter-spacing:2px;" />
         <ToolbarSpacer />
-        <Avatar initials="JD" displaySize="XS" press=".onProfilePress" />
+        <Avatar initials="{= ${appView>/userInitials} || 'JD' }"
+                displaySize="XS"
+                press=".onProfilePress"
+                tooltip="My profile" />
     </Toolbar>
 
     <SplitApp id="app">
@@ -25,9 +28,8 @@
                   class="timesheetSidebar"
                   backgroundDesign="Transparent">
 
-                <!-- Employee section -->
+                <!-- Unified navigation -->
                 <List id="mainNavList"
-                      headerText="Employee"
                       mode="None"
                       backgroundDesign="Transparent"
                       style="background:transparent;">
@@ -69,26 +71,39 @@
                             style="background:transparent; color:#cbd5e1;">
                             <customData><core:CustomData key="target" value="notifications" /></customData>
                         </StandardListItem>
-                    </items>
-                </List>
-
-                <!-- Manager section -->
-                <List id="managerNavList"
-                      headerText="Manager"
-                      mode="None"
-                      backgroundDesign="Transparent"
-                      style="background:transparent;"
-                      visible="{= ${appView>/userRole} === 'manager'}">
-                    <items>
                         <StandardListItem title="Approvals"
                             icon="sap-icon://approvals"
                             type="Active"
                             press=".onNavSelect"
+                            visible="{= ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
                             <customData><core:CustomData key="target" value="manager" /></customData>
                         </StandardListItem>
+                        <StandardListItem title="Assign Task"
+                            icon="sap-icon://create-form"
+                            type="Active"
+                            press=".onNavSelect"
+                            visible="{= ${appView>/userRole} === 'manager'}"
+                            style="background:transparent; color:#cbd5e1;">
+                            <customData><core:CustomData key="target" value="task-assignment" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="Task Status"
+                            icon="sap-icon://activity-items"
+                            type="Active"
+                            press=".onNavSelect"
+                            visible="{= ${appView>/userRole} === 'manager'}"
+                            style="background:transparent; color:#cbd5e1;">
+                            <customData><core:CustomData key="target" value="task-status" /></customData>
+                        </StandardListItem>
                     </items>
                 </List>
+
+                <!-- Empty placeholder kept so existing code referencing managerNavList still resolves safely -->
+                <List id="managerNavList"
+                      mode="None"
+                      backgroundDesign="Transparent"
+                      visible="false"
+                      style="background:transparent;" />
 
                 <footer>
                     <OverflowToolbar style="background:#1e293b; border-top:1px solid #334155;">

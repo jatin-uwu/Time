@@ -2,46 +2,162 @@
     controllerName="timesheet.app.controller.TaskDescription"
     xmlns:mvc="sap.ui.core.mvc"
     xmlns="sap.m"
-    xmlns:f="sap.f"
-    xmlns:card="sap.f.cards"
+    xmlns:core="sap.ui.core"
     displayBlock="true">
 
-    <Page title="Task Descriptions" showNavButton="true" navButtonPress=".onNavBack">
+    <Page id="taskDescPage"
+          title="My Tasks"
+          showNavButton="true"
+          navButtonPress=".onNavBack"
+          class="tsDashboardPage"
+          enableScrolling="true">
 
         <content>
-            <SearchField
-                id="taskSearch"
-                placeholder="Search tasks..."
-                search=".onSearch"
-                style="margin:12px 16px; width:calc(100% - 32px);" />
 
-            <List
-                id="taskList"
-                items="{/MyTasks}"
-                mode="None"
-                noDataText="No tasks assigned">
-                <items>
-                    <ObjectListItem
-                        title="{taskName}"
-                        number="{priority}"
-                        numberState="{= ${priority} === 'High' ? 'Error' : ${priority} === 'Medium' ? 'Warning' : 'Success' }"
-                        type="Active"
-                        press=".onTaskPress">
-                        <attributes>
-                            <ObjectAttribute title="Task ID" text="{taskId}" />
-                            <ObjectAttribute title="Status"  text="{status}"  />
-                            <ObjectAttribute title="Due Date" text="{dueDate}" />
-                        </attributes>
-                        <firstStatus>
-                            <ObjectStatus
-                                text="{status}"
-                                state="{= ${status} === 'Completed' ? 'Success' : ${status} === 'In Progress' ? 'Warning' : 'None' }" />
-                        </firstStatus>
-                    </ObjectListItem>
-                </items>
-            </List>
+            <VBox class="tsTaskDescWrap sapUiSmallMargin">
+
+                <!-- Header -->
+                <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center">
+                        <core:Icon src="sap-icon://wallet" class="tsMgrToolbarIcon" />
+                        <Title text="Task Descriptions" level="H4" class="sapUiSmallMarginBegin" />
+                    </HBox>
+                    <ObjectStatus
+                        text="{tdView>/totalLabel}"
+                        state="Information"
+                        icon="sap-icon://task" />
+                </HBox>
+
+                <!-- Filters -->
+                <Toolbar class="sapUiSmallMarginTop">
+                    <SearchField placeholder="Search tasks..."
+                                 liveChange=".onSearch"
+                                 width="280px" />
+                    <ToolbarSpacer />
+                    <Select id="selEmployeeView"
+                            visible="{= ${appView>/userRole} === 'manager' }"
+                            selectedKey="{tdView>/viewAsEmployee}"
+                            items="{tdView>/employeeFilterList}"
+                            change=".onEmployeeFilterChange"
+                            width="240px"
+                            tooltip="Preview as employee">
+                        <core:Item key="{tdView>employeeId}" text="{tdView>employeeName}" />
+                    </Select>
+                    <SegmentedButton selectedKey="{tdView>/priorityFilter}"
+                                     selectionChange=".onPriorityFilterChange">
+                        <items>
+                            <SegmentedButtonItem key=""       text="All" />
+                            <SegmentedButtonItem key="High"   text="High" />
+                            <SegmentedButtonItem key="Medium" text="Medium" />
+                            <SegmentedButtonItem key="Low"    text="Low" />
+                        </items>
+                    </SegmentedButton>
+                </Toolbar>
+
+                <!-- Empty state -->
+                <VBox visible="{= ${tdView>/displayTasks}.length === 0 }"
+                      class="tsTaskEmpty sapUiMediumMarginTop"
+                      alignItems="Center">
+                    <core:Icon src="sap-icon://inbox" size="3rem" color="#9ca3af" />
+                    <Text text="No tasks assigned yet."
+                          class="sapUiSmallMarginTop"
+                          textAlign="Center" />
+                    <Text text="Tasks assigned by your manager will appear here, sorted by priority."
+                          class="sapUiTinyMarginTop"
+                          textAlign="Center" />
+                </VBox>
+
+                <!-- Task cards (sorted by priority) -->
+                <List items="{tdView>/displayTasks}"
+                      mode="None"
+                      showSeparators="None"
+                      class="tsTaskCardList"
+                      visible="{= ${tdView>/displayTasks}.length > 0 }">
+
+                    <CustomListItem class="tsTaskCardItem">
+                        <VBox class="tsTaskCard">
+
+                            <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsTaskCardHeader">
+                                <VBox>
+                                    <HBox alignItems="Center">
+                                        <ObjectStatus
+                                            text="{tdView>priority}"
+                                            state="{path:'tdView>priority', formatter:'.formatPriorityState'}"
+                                            icon="sap-icon://flag" />
+                                        <Title text="{tdView>taskName}"
+                                               level="H5"
+                                               class="sapUiSmallMarginBegin" />
+                                    </HBox>
+                                    <Text text="{tdView>taskId}" class="tsTaskRowId" />
+                                </VBox>
+                                <HBox alignItems="Center">
+                                    <ObjectStatus
+                                        text="{tdView>status}"
+                                        state="{path:'tdView>status', formatter:'.formatStatusState'}" />
+                                    <Button icon="sap-icon://slim-arrow-right"
+                                            type="Transparent"
+                                            tooltip="Open task details"
+                                            press=".onOpenDetails"
+                                            class="sapUiTinyMarginBegin tsTaskOpenBtn" />
+                                </HBox>
+                            </HBox>
+
+                            <!-- Description block -->
+                            <VBox class="tsTaskDescBlock">
+                                <Label text="What has to be done" class="tsTaskDescLabel" />
+                                <Text text="{tdView>taskDescription}" class="tsTaskDescText" />
+                            </VBox>
+
+                            <!-- Manager attachment (if any) -->
+                            <HBox class="tsTaskAttachmentRow"
+                                  alignItems="Center"
+                                  visible="{= !!${tdView>attachmentName} }">
+                                <core:Icon src="sap-icon://attachment" size="0.95rem" color="#3b82f6" />
+                                <Text text="Reference document:"
+                                      class="tsTaskAttachmentLabel sapUiTinyMarginBegin" />
+                                <Link text="{tdView>attachmentName}"
+                                      press=".onDownloadTaskAttachment"
+                                      class="sapUiTinyMarginBegin" />
+                            </HBox>
+
+                            <HBox class="tsTaskCardFooter" justifyContent="SpaceBetween" alignItems="Center" wrap="Wrap">
+                                <HBox alignItems="Center" class="sapUiTinyMarginEnd">
+                                    <core:Icon src="sap-icon://employee" size="1rem" color="#6b7280" />
+                                    <Text text="{tdView>assigneeName}" class="sapUiTinyMarginBegin" />
+                                </HBox>
+                                <HBox alignItems="Center" class="sapUiTinyMarginEnd">
+                                    <core:Icon src="sap-icon://date-time" size="1rem" color="#6b7280" />
+                                    <Text text="{tdView>dueLabel}" class="sapUiTinyMarginBegin" />
+                                </HBox>
+                            </HBox>
+
+                            <!-- Employee status actions -->
+                            <HBox class="tsTaskActionRow" justifyContent="End" alignItems="Center" wrap="Wrap">
+                                <Label text="Update status:" class="tsTaskActionLabel sapUiTinyMarginEnd" />
+                                <Button text="Open"
+                                        icon="sap-icon://circle-task-2"
+                                        type="{= ${tdView>status} === 'Open' ? 'Emphasized' : 'Transparent' }"
+                                        press=".onSetStatusOpen"
+                                        class="sapUiTinyMarginEnd" />
+                                <Button text="In Progress"
+                                        icon="sap-icon://play"
+                                        type="{= ${tdView>status} === 'In Progress' ? 'Emphasized' : 'Transparent' }"
+                                        press=".onSetStatusInProgress"
+                                        class="sapUiTinyMarginEnd" />
+                                <Button text="Completed"
+                                        icon="sap-icon://accept"
+                                        type="{= ${tdView>status} === 'Completed' ? 'Accept' : 'Transparent' }"
+                                        press=".onSetStatusCompleted" />
+                            </HBox>
+
+                        </VBox>
+                    </CustomListItem>
+
+                </List>
+
+            </VBox>
+
         </content>
-
     </Page>
 
 </mvc:View>

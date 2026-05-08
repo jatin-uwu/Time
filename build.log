@@ -1,0 +1,148 @@
+﻿[2026-05-08 00:08:47]  INFO Cloud MTA Build Tool version 1.2.47
+[2026-05-08 00:08:47]  INFO generating the "Makefile_20260508000847.mta" file...
+[2026-05-08 00:08:47]  INFO done
+[2026-05-08 00:08:47]  INFO executing the "make -f Makefile_20260508000847.mta p=cf mtar= strict=true mode= t=\"mta_archives\"" command...
+[2026-05-08 00:08:47]  INFO validating the MTA project
+[2026-05-08 00:08:47]  INFO running the "before-all" build...
+[2026-05-08 00:08:47]  INFO executing the "npm ci" command...
+mbt.cmd : npm warn deprecated prebuild-install@7.1.3: No longer maintained. 
+Please contact the author of the relevant native addon; alternatives are 
+available.
+At line:1 char:193
++ ...  $env:PATH; & "C:\Users\mis\AppData\Roaming\npm\mbt.cmd" build -t mta ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn deprec... are available. 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please 
+contact the author of the relevant native addon; alternatives are available.
+.............
+added 258 packages, and audited 259 packages in 13s
+
+36 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+[2026-05-08 00:09:01]  INFO executing the "npx cds build --production" command...
+.building project with {
+  versions: { cds: '9.9.0', compiler: '6.9.0', dk: '9.9.0' },
+  target: 'gen',
+  tasks: [
+    { for: 'hana', src: 'db', options: { model: [ 'db', 'srv', 'app', 'app/*', '@sap/cds/srv/outbox' ] } },
+    { for: 'nodejs', src: 'srv', options: { model: [ 'db', 'srv', 'app', 'app/*', '@sap/cds/srv/outbox' ] } }
+  ]
+}
+...done > wrote output to:
+   gen\db\package.json
+   gen\db\src\gen\.hdiconfig
+   gen\db\src\gen\.hdinamespace
+   gen\db\src\gen\EmployeeService.Employees.hdbview
+   gen\db\src\gen\EmployeeService.MyEntries.hdbview
+   gen\db\src\gen\EmployeeService.MyTasks.hdbview
+   gen\db\src\gen\EmployeeService.MyTimesheets.hdbview
+   gen\db\src\gen\EmployeeService.TaskUpdates.hdbview
+   gen\db\src\gen\ManagerService.ApprovalEntries.hdbview
+   gen\db\src\gen\ManagerService.Employees.hdbview
+   gen\db\src\gen\ManagerService.PendingApprovals.hdbview
+   gen\db\src\gen\ManagerService.TaskUpdates.hdbview
+   gen\db\src\gen\ManagerService.Tasks.hdbview
+   gen\db\src\gen\ccentrik.employee.timesheet.schema.timesheet.EmployeeMaster.hdbtable
+   gen\db\src\gen\ccentrik.employee.timesheet.schema.timesheet.TaskMaster.hdbtable
+   gen\db\src\gen\ccentrik.employee.timesheet.schema.timesheet.TaskUpdate.hdbtable
+   gen\db\src\gen\ccentrik.employee.timesheet.schema.timesheet.TimesheetEntry.hdbtable
+   gen\db\src\gen\ccentrik.employee.timesheet.schema.timesheet.TimesheetHeader.hdbtable
+   gen\db\src\gen\cds.outbox.Messages.hdbtable
+   gen\db\src\gen\data\ccentrik.employee.timesheet.schema.timesheet-EmployeeMaster.csv
+   gen\db\src\gen\data\ccentrik.employee.timesheet.schema.timesheet-EmployeeMaster.hdbtabledata
+   gen\db\src\gen\data\ccentrik.employee.timesheet.schema.timesheet-TaskMaster.csv
+   gen\db\src\gen\data\ccentrik.employee.timesheet.schema.timesheet-TaskMaster.hdbtabledata
+   gen\db\src\gen\data\ccentrik.employee.timesheet.schema.timesheet-TimesheetEntry.csv
+   gen\db\src\gen\data\ccentrik.employee.timesheet.schema.timesheet-TimesheetEntry.hdbtabledata
+   gen\db\src\gen\data\ccentrik.employee.timesheet.schema.timesheet-TimesheetHeader.csv
+   gen\db\src\gen\data\ccentrik.employee.timesheet.schema.timesheet-TimesheetHeader.hdbtabledata
+   gen\db\timesheet.db
+   gen\db\timesheet.db-shm
+   gen\db\timesheet.db-wal
+   ... 47 more. Run with DEBUG=build to show all files.
+
+build completed in 2998 ms
+[2026-05-08 00:09:05]  INFO validating the MTA project
+[2026-05-08 00:09:05]  INFO building the "Employee-Timesheet-srv" module...
+[2026-05-08 00:09:05]  INFO executing the "npm clean-install --production" command...
+npm warn config production Use `--omit=dev` instead.
+....
+added 79 packages, and audited 80 packages in 4s
+
+25 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+[2026-05-08 00:09:09]  INFO the build results of the "Employee-Timesheet-srv" module will be packaged and saved in the "mta_archives\.Timesheet_mta_build_tmp\Employee-Timesheet-srv" folder
+[2026-05-08 00:09:28]  INFO finished building the "Employee-Timesheet-srv" module
+[2026-05-08 00:09:28]  INFO building the "Employee-Timesheet-db-deployer" module...
+[2026-05-08 00:09:28]  INFO executing the "npm install --production" command...
+npm warn config production Use `--omit=dev` instead.
+..
+added 29 packages, and audited 30 packages in 2s
+
+4 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+[2026-05-08 00:09:30]  INFO the build results of the "Employee-Timesheet-db-deployer" module will be packaged and saved in the "mta_archives\.Timesheet_mta_build_tmp\Employee-Timesheet-db-deployer" folder
+[2026-05-08 00:09:41]  INFO finished building the "Employee-Timesheet-db-deployer" module
+[2026-05-08 00:09:41]  INFO building the "Employee-Timesheet" module...
+[2026-05-08 00:09:41]  INFO executing the "npm install --production" command...
+npm warn config production Use `--omit=dev` instead.
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: '@sap/approuter@16.9.0',
+npm warn EBADENGINE   required: { node: '^18.0.0 || ^20.0.0' },
+npm warn EBADENGINE   current: { node: 'v24.13.1', npm: '11.8.0' }
+npm warn EBADENGINE }
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: '@sap/audit-logging@6.1.0',
+npm warn EBADENGINE   required: { node: '^18.0.0 || ^20.0.0' },
+npm warn EBADENGINE   current: { node: 'v24.13.1', npm: '11.8.0' }
+npm warn EBADENGINE }
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: '@sap/e2e-trace@4.1.0',
+npm warn EBADENGINE   required: { node: '^12.0.0 || ^14.0.0 || ^16.0.0 || 
+^18.0.0 || ^20.0.0' },
+npm warn EBADENGINE   current: { node: 'v24.13.1', npm: '11.8.0' }
+npm warn EBADENGINE }
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: '@sap/logging@7.1.0',
+npm warn EBADENGINE   required: { node: '^12.0.0 || ^14.0.0 || ^16.0.0 || 
+^18.0.0 || ^20.0.0' },
+npm warn EBADENGINE   current: { node: 'v24.13.1', npm: '11.8.0' }
+npm warn EBADENGINE }
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: '@sap/xsenv@4.2.0',
+npm warn EBADENGINE   required: { node: '^12.0.0 || ^14.0.0 || ^16.0.0 || 
+^18.0.0 || ^20.0.0' },
+npm warn EBADENGINE   current: { node: 'v24.13.1', npm: '11.8.0' }
+npm warn EBADENGINE }
+.
+up to date, audited 236 packages in 1s
+
+20 packages are looking for funding
+  run `npm fund` for details
+
+15 vulnerabilities (8 low, 3 moderate, 4 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+[2026-05-08 00:09:43]  INFO the build results of the "Employee-Timesheet" module will be packaged and saved in the "mta_archives\.Timesheet_mta_build_tmp\Employee-Timesheet" folder
+[2026-05-08 00:09:45]  INFO finished building the "Employee-Timesheet" module
+[2026-05-08 00:09:45]  INFO running the "after-all" build...
+[2026-05-08 00:09:45]  INFO generating the metadata...
+[2026-05-08 00:09:45]  INFO generating the "C:\Users\mis\Timesheet\mta_archives\.Timesheet_mta_build_tmp\META-INF\mtad.yaml" file...
+[2026-05-08 00:09:45]  INFO generating the MTA archive...
+[2026-05-08 00:09:46]  INFO the MTA archive generated at: mta_archives\Employee-Timesheet_1.0.0.mtar
+[2026-05-08 00:09:46]  INFO cleaning temporary files...

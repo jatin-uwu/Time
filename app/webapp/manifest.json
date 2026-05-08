@@ -10,6 +10,11 @@
                 "uri":  "/employee/",
                 "type": "OData",
                 "settings": { "odataVersion": "4.0" }
+            },
+            "ManagerService": {
+                "uri":  "/manager/",
+                "type": "OData",
+                "settings": { "odataVersion": "4.0" }
             }
         }
     },
@@ -45,6 +50,15 @@
                     "autoExpandSelect":    true
                 }
             },
+            "manager": {
+                "dataSource":  "ManagerService",
+                "preload":     true,
+                "settings": {
+                    "synchronizationMode": "None",
+                    "operationMode":       "Server",
+                    "autoExpandSelect":    true
+                }
+            },
             "view": {
                 "type":    "sap.ui.model.json.JSONModel",
                 "settings": { "data": {} }
@@ -71,16 +85,22 @@
                 { "name": "dashboard",     "pattern": "",              "target": "dashboard"     },
                 { "name": "timesheet",     "pattern": "timesheet",     "target": "timesheet"     },
                 { "name": "task-description", "pattern": "task-description", "target": "task-description" },
+                { "name": "task-detail",   "pattern": "task-detail/{taskId}", "target": "task-detail" },
                 { "name": "history",       "pattern": "history",       "target": "history"       },
                 { "name": "manager",       "pattern": "manager",       "target": "manager"       },
+                { "name": "task-assignment", "pattern": "task-assignment", "target": "task-assignment" },
+                { "name": "task-status",   "pattern": "task-status",   "target": "task-status"   },
                 { "name": "notifications", "pattern": "notifications", "target": "notifications" }
             ],
             "targets": {
                 "dashboard":     { "viewName": "Dashboard",     "viewId": "dashboard"     },
                 "timesheet":     { "viewName": "Timesheet",     "viewId": "timesheet"     },
                 "task-description": { "viewName": "TaskDescription", "viewId": "task-description" },
+                "task-detail":   { "viewName": "TaskDetail",   "viewId": "task-detail"   },
                 "history":       { "viewName": "History",       "viewId": "history"       },
                 "manager":       { "viewName": "Manager",       "viewId": "manager"       },
+                "task-assignment": { "viewName": "TaskAssignment", "viewId": "task-assignment" },
+                "task-status":   { "viewName": "TaskStatus",   "viewId": "task-status"   },
                 "notifications": { "viewName": "Notifications", "viewId": "notifications" }
             }
         }

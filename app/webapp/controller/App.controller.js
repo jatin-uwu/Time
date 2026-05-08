@@ -1,19 +1,55 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
-    "sap/m/MessageToast"
-], (Controller, JSONModel, MessageToast) => {
+    "sap/m/MessageToast",
+    "sap/m/Dialog",
+    "sap/m/Button",
+    "sap/m/VBox",
+    "sap/m/HBox",
+    "sap/m/Label",
+    "sap/m/Text",
+    "sap/m/Title",
+    "sap/m/Avatar",
+    "sap/ui/core/Icon"
+], (Controller, JSONModel, MessageToast, Dialog, Button, VBox, HBox, Label, Text, Title, Avatar, Icon) => {
     "use strict";
+
+    function buildInitials(sName) {
+        if (!sName) return "JD";
+        const parts = sName.trim().split(/\s+/);
+        const first = parts[0] && parts[0][0] ? parts[0][0].toUpperCase() : "";
+        const last  = parts.length > 1 && parts[parts.length - 1][0]
+            ? parts[parts.length - 1][0].toUpperCase() : "";
+        return (first + last) || (first || "JD");
+    }
 
     return Controller.extend("timesheet.app.controller.App", {
 
         onInit() {
+            // ── Local-dev role override ──────────────────────────────────────
+            // Allow ?role=manager / ?role=employee in the URL, or a saved
+            // value in localStorage (set via the avatar menu) to bypass auth
+            // when running with mocked users.
+            const sUrlRole  = new URLSearchParams(window.location.search).get("role");
+            const sSaveRole = (() => { try { return localStorage.getItem("tsRole") || ""; } catch (e) { return ""; } })();
+            const sInitRole = (sUrlRole || sSaveRole || "employee").toLowerCase();
+            if (sUrlRole) { try { localStorage.setItem("tsRole", sUrlRole); } catch (e) {} }
+
             this._oAppModel = new JSONModel({
-                unreadCount: 0,
-                userRole: "employee"
+                unreadCount:    0,
+                userRole:       sInitRole === "manager" ? "manager" : "employee",
+                userName:       "",
+                userInitials:   "JD",
+                userProfile:    null
             });
             this.getView().setModel(this._oAppModel, "appView");
 
+            // Resolve the current user once and cache name/initials/profile
+            // so the avatar and profile dialog show the real person.
+            this._loadCurrentUser();
+
+            // Try the backend, but don't override an explicit local-dev choice.
+            const bExplicit = !!(sUrlRole || sSaveRole);
             fetch("/employee/getUserRole", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -21,6 +57,7 @@ sap.ui.define([
             })
                 .then(r => r.ok ? r.json() : Promise.reject(r.status))
                 .then(data => {
+                    if (bExplicit) return;
                     const sRole = data && (data.role || (data.value && data.value.role));
                     if (sRole) this._oAppModel.setProperty("/userRole", sRole);
                 })
@@ -194,11 +231,14 @@ sap.ui.define([
             const sRouteName = oEvent.getParameter("name");
 
             const oRouteToList = {
-                dashboard:     "mainNavList",
-                timesheet:     "mainNavList",
-                history:       "mainNavList",
-                manager:       "managerNavList",
-                notifications: "accountNavList"
+                dashboard:        "mainNavList",
+                timesheet:        "mainNavList",
+                "task-description": "mainNavList",
+                history:          "mainNavList",
+                manager:          "mainNavList",
+                "task-assignment": "mainNavList",
+                "task-status":    "mainNavList",
+                notifications:    "mainNavList"
             };
 
             ["mainNavList", "managerNavList", "accountNavList"].forEach(sId => {
@@ -243,9 +283,13 @@ sap.ui.define([
         _refreshUnreadCount() {
             const oNotifModel = this.getOwnerComponent().getModel("notifications");
             if (!oNotifModel) return;
-            const items  = oNotifModel.getProperty("/items") || [];
-            const unread = items.filter(n => !n.read).length;
-            this._oAppModel.setProperty("/unreadCount", unread);
+            const items = oNotifModel.getProperty("/items") || [];
+            const sCurrentId = this.getOwnerComponent().getCurrentEmployeeId();
+            const mine = items.filter(n => {
+                if (n.recipientEmployeeId) return n.recipientEmployeeId === sCurrentId;
+                return sCurrentId !== "EMP1005";
+            });
+            this._oAppModel.setProperty("/unreadCount", mine.filter(n => !n.read).length);
         },
 
         onMenuToggle() {
@@ -272,8 +316,140 @@ sap.ui.define([
             MessageToast.show("Logging out...");
         },
 
+        // ── Profile (avatar press) ───────────────────────────────────────
+        // Loads the logged-in user from EmployeeMaster and caches their
+        // name/initials/profile in the appView model.
+        _loadCurrentUser() {
+            const oComp = this.getOwnerComponent();
+            if (!oComp || !oComp.getEmployeeById || !oComp.getCurrentEmployeeId) return;
+            const sId = oComp.getCurrentEmployeeId();
+            oComp.getEmployeeById(sId).then(emp => {
+                if (!emp) return;
+                this._oAppModel.setProperty("/userName",     emp.employeeName || "");
+                this._oAppModel.setProperty("/userInitials", buildInitials(emp.employeeName));
+                this._oAppModel.setProperty("/userProfile",  {
+                    employeeId:   emp.employeeId,
+                    employeeName: emp.employeeName,
+                    designation:  emp.designation || "—",
+                    email:        emp.email       || "—",
+                    address:      emp.address     || "—",
+                    mobileNumber: emp.mobileNumber|| "—",
+                    isActive:     emp.isActive
+                });
+            });
+        },
+
         onProfilePress() {
-            MessageToast.show("Profile");
+            const oProfile = this._oAppModel.getProperty("/userProfile");
+            if (oProfile) { this._openProfileDialog(oProfile); return; }
+
+            // Profile wasn't cached yet — fetch it on demand and then open.
+            const oComp = this.getOwnerComponent();
+            if (!oComp || !oComp.getEmployeeById || !oComp.getCurrentEmployeeId) {
+                MessageToast.show("Profile unavailable.");
+                return;
+            }
+            const sId = oComp.getCurrentEmployeeId();
+            oComp.getEmployeeById(sId).then(emp => {
+                if (!emp) { MessageToast.show("Profile unavailable."); return; }
+                this._oAppModel.setProperty("/userName",     emp.employeeName || "");
+                this._oAppModel.setProperty("/userInitials", buildInitials(emp.employeeName));
+                const oFresh = {
+                    employeeId:   emp.employeeId,
+                    employeeName: emp.employeeName,
+                    designation:  emp.designation || "—",
+                    email:        emp.email       || "—",
+                    address:      emp.address     || "—",
+                    mobileNumber: emp.mobileNumber|| "—",
+                    isActive:     emp.isActive
+                };
+                this._oAppModel.setProperty("/userProfile", oFresh);
+                this._openProfileDialog(oFresh);
+            });
+        },
+
+        _openProfileDialog(oProfile) {
+            if (this._oProfileDialog) {
+                this._oProfileDialog.close();
+                this._oProfileDialog.destroy();
+                this._oProfileDialog = null;
+            }
+
+            const sInitials = this._oAppModel.getProperty("/userInitials");
+
+            const fieldRow = (sLabel, sValue, sIcon) => new HBox({
+                alignItems: "Center",
+                items: [
+                    new Icon({ src: "sap-icon://" + sIcon, size: "1rem", color: "#3b82f6" })
+                        .addStyleClass("sapUiTinyMarginEnd"),
+                    new VBox({
+                        items: [
+                            new Label({ text: sLabel })
+                                .addStyleClass("tsProfileFieldLabel"),
+                            new Text({ text: sValue || "—" })
+                                .addStyleClass("tsProfileFieldValue")
+                        ]
+                    })
+                ]
+            }).addStyleClass("tsProfileRow sapUiSmallMarginBottom");
+
+            const oContent = new VBox({
+                items: [
+                    // Header strip
+                    new HBox({
+                        alignItems: "Center",
+                        items: [
+                            new Avatar({
+                                initials:    sInitials,
+                                displaySize: "L",
+                                backgroundColor: "Accent6"
+                            }),
+                            new VBox({
+                                items: [
+                                    new Title({ text: oProfile.employeeName, level: "H4" })
+                                        .addStyleClass("tsProfileName"),
+                                    new Text({ text: oProfile.designation })
+                                        .addStyleClass("tsProfileDesignation"),
+                                    new Text({ text: "ID: " + (oProfile.employeeId || "") })
+                                        .addStyleClass("tsProfileEmpId")
+                                ]
+                            }).addStyleClass("sapUiSmallMarginBegin")
+                        ]
+                    }).addStyleClass("tsProfileHeader"),
+
+                    // Detail grid
+                    new VBox({
+                        items: [
+                            fieldRow("Email",    oProfile.email,       "email"),
+                            fieldRow("Mobile",   oProfile.mobileNumber,"call"),
+                            fieldRow("Address",  oProfile.address,     "addresses"),
+                            fieldRow("Status",   oProfile.isActive === false ? "Inactive" : "Active", "status-positive")
+                        ]
+                    }).addStyleClass("tsProfileBody sapUiSmallMarginTop")
+                ]
+            }).addStyleClass("tsProfileDialogWrap sapUiContentPadding");
+
+            this._oProfileDialog = new Dialog({
+                title: "My Profile",
+                contentWidth: "420px",
+                draggable: true,
+                resizable: false,
+                content: [oContent],
+                endButton: new Button({
+                    text: "Close",
+                    type: "Emphasized",
+                    press: () => this._oProfileDialog.close()
+                }),
+                afterClose: () => {
+                    if (this._oProfileDialog) {
+                        this._oProfileDialog.destroy();
+                        this._oProfileDialog = null;
+                    }
+                }
+            }).addStyleClass("tsProfileDialog");
+
+            this.getView().addDependent(this._oProfileDialog);
+            this._oProfileDialog.open();
         }
     });
 });

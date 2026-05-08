@@ -51,7 +51,7 @@ sap.ui.define([
             weekEnd.setDate(weekStart.getDate() + 6);
 
             this._oDashModel = new JSONModel({
-                greeting:       "Hey, Employee",
+                greeting:       "Hey",
                 todayLabel:     today.toLocaleDateString("en-GB", {
                     weekday: "long", day: "numeric", month: "long", year: "numeric"
                 }),
@@ -66,9 +66,25 @@ sap.ui.define([
             });
             this.getView().setModel(this._oDashModel, "dash");
 
+            // Resolve the current user from EmployeeMaster so the greeting
+            // shows their actual name (e.g. "Hey, Jatin Bajaj") instead of
+            // a generic placeholder.
+            this._loadGreeting();
+
             this.getOwnerComponent().getRouter()
                 .getRoute("dashboard")
                 .attachPatternMatched(this._onRouteMatched, this);
+        },
+
+        _loadGreeting() {
+            const oComp = this.getOwnerComponent();
+            if (!oComp || !oComp.getEmployeeById || !oComp.getCurrentEmployeeId) return;
+            const sId = oComp.getCurrentEmployeeId();
+            oComp.getEmployeeById(sId).then(emp => {
+                if (emp && emp.employeeName) {
+                    this._oDashModel.setProperty("/greeting", "Hey, " + emp.employeeName);
+                }
+            });
         },
 
         _onRouteMatched() {

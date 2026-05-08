@@ -4,7 +4,8 @@
   "dependencies": {
     "@cap-js/hana": "^2",
     "@sap/cds": "^9",
-    "@sap/xssec": "^4"
+    "@sap/xssec": "^4",
+    "nodemailer": "^8.0.7"
   },
   "devDependencies": {
     "@cap-js/sqlite": "^2",

@@ -27,6 +27,24 @@ entity TaskMaster : managed {
     status             : String(20);
     startDate          : Date;
     dueDate            : Date;
+
+    attachmentName     : String(255);
+    attachmentMimeType : String(100);
+    attachment         : LargeBinary;
+
+    updates            : Composition of many TaskUpdate
+                         on updates.task = $self;
+}
+
+entity TaskUpdate : managed {
+    key updateId       : String(20);
+    task               : Association to TaskMaster;
+    updateDate         : Date;
+    notes              : String(2000);
+    attachmentName     : String(255);
+    attachmentMimeType : String(100);
+    attachment         : LargeBinary;
+    updatedBy          : Association to EmployeeMaster;
 }
 
 entity TimesheetHeader : managed {

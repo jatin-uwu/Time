@@ -69,9 +69,16 @@ sap.ui.define([
         },
 
         // ── Calendar toggle ──────────────────────────────────────────────
+        // Always return to the centered welcome calendar (same as the
+        // first-time view) so the user can pick a different week.
         onCalendarToggle() {
-            const bVisible = this._oHistViewModel.getProperty("/showCalendar");
-            this._oHistViewModel.setProperty("/showCalendar", !bVisible);
+            this._oHistViewModel.setProperty("/showCalendar", false);
+            this._oHistViewModel.setProperty("/weekSelected", false);
+
+            // Clear any selected date on the centered calendar so the next pick
+            // (even of the same date) fires the select event.
+            const oCal = this.byId("histCenterCalendar");
+            if (oCal) { oCal.removeAllSelectedDates(); }
         },
 
         onCalendarSelect(oEvent) {

@@ -1,7 +1,2 @@
 taskId,taskName,taskDescription,assignedTo_employeeId,priority,status,startDate,dueDate
-TASK001,UI Development,Build weekly timesheet UI,EMP1001,High,In Progress,2026-04-25,2026-05-05
-TASK002,CAP Backend,Create CAP service and entities,EMP1001,High,Open,2026-04-25,2026-05-06
-TASK003,HR Review,Employee onboarding checklist,EMP1002,Medium,Open,2026-04-26,2026-05-07
-TASK004,Sales Followup,Client meeting updates,EMP1003,High,In Progress,2026-04-26,2026-05-04
-TASK005,Testing & QA,Write unit and integration tests,EMP1004,Medium,Pending,2026-05-01,2026-05-20
-TASK006,Documentation,Write technical documentation,EMP1005,Low,In Progress,2026-04-20,2026-05-25
+

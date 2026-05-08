@@ -290,19 +290,29 @@ sap.ui.define([
             const oNotifModel = this.getOwnerComponent().getModel("notifications");
             const items       = oNotifModel.getProperty("/items") || [];
 
+            // The notification must go to the person who submitted the
+            // timesheet — never the approver.
+            const sub = this._selectedSub || {};
+            const sRecipient = sub.submittedBy || null;
+
             const message = sType === "approved"
                 ? `Your timesheet for ${sWeekRange} has been approved by your manager.`
                 : `Your timesheet for ${sWeekRange} was rejected by your manager. Reason: ${sComment}`;
 
             const notif = {
-                weekStart: sWeekStart,
-                weekRange: sWeekRange,
-                type:      sType,
+                weekStart:           sWeekStart,
+                weekRange:           sWeekRange,
+                type:                sType,
                 message,
-                read:      false,
-                timestamp: new Date().toISOString()
+                read:                false,
+                timestamp:           new Date().toISOString(),
+                recipientEmployeeId: sRecipient
             };
-            const existing = items.findIndex(n => n.weekStart === sWeekStart);
+
+            // Replace any existing notification for the same week + recipient
+            const existing = items.findIndex(n =>
+                n.weekStart === sWeekStart &&
+                (n.recipientEmployeeId || null) === (sRecipient || null));
             if (existing >= 0) { items[existing] = notif; } else { items.unshift(notif); }
 
             oNotifModel.setProperty("/items", items);

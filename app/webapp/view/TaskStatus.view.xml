@@ -1,0 +1,119 @@
+<mvc:View
+    controllerName="timesheet.app.controller.TaskStatus"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="taskStatusPage"
+          title="Task Status"
+          class="tsDashboardPage"
+          enableScrolling="true">
+
+        <content>
+
+            <VBox class="tsTaskAssignWrap">
+
+                <!-- Header / counters -->
+                <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween" wrap="Wrap">
+                    <HBox alignItems="Center">
+                        <core:Icon src="sap-icon://activity-items" class="tsMgrToolbarIcon" />
+                        <Title text="Task Status — All Employees" level="H4" class="sapUiSmallMarginBegin" />
+                    </HBox>
+                    <HBox alignItems="Center" wrap="Wrap">
+                        <ObjectStatus
+                            text="{tsView>/openCount} open"
+                            state="Information"
+                            icon="sap-icon://circle-task-2"
+                            class="sapUiTinyMarginEnd" />
+                        <ObjectStatus
+                            text="{tsView>/inProgressCount} in progress"
+                            state="Warning"
+                            icon="sap-icon://play"
+                            class="sapUiTinyMarginEnd" />
+                        <ObjectStatus
+                            text="{tsView>/completedCount} completed"
+                            state="Success"
+                            icon="sap-icon://accept" />
+                    </HBox>
+                </HBox>
+
+                <!-- Filters -->
+                <Toolbar class="sapUiSmallMarginTop">
+                    <SearchField placeholder="Search tasks..."
+                                 liveChange=".onSearchTasks"
+                                 width="280px" />
+                    <ToolbarSpacer />
+                    <Select id="selFilterEmployee"
+                            selectedKey="{tsView>/filterEmployee}"
+                            change=".onFilterChange"
+                            items="{tsView>/employeeFilterList}"
+                            width="220px">
+                        <core:Item key="{tsView>employeeId}" text="{tsView>employeeName}" />
+                    </Select>
+                    <SegmentedButton selectedKey="{tsView>/filterStatus}"
+                                     selectionChange=".onStatusFilterChange">
+                        <items>
+                            <SegmentedButtonItem key=""            text="All" />
+                            <SegmentedButtonItem key="Open"        text="Open" />
+                            <SegmentedButtonItem key="In Progress" text="In Progress" />
+                            <SegmentedButtonItem key="Completed"   text="Completed" />
+                        </items>
+                    </SegmentedButton>
+                </Toolbar>
+
+                <!-- Task table -->
+                <Panel class="tsTaskListPanel" expandable="false">
+                    <Table id="taskStatusTable"
+                           items="{tsView>/filteredTasks}"
+                           noDataText="No tasks match the current filter."
+                           mode="None"
+                           itemPress=".onRowPress"
+                           class="tsTaskStatusTable">
+
+                        <columns>
+                            <Column><Text text="Task" /></Column>
+                            <Column><Text text="Assigned To" /></Column>
+                            <Column><Text text="Assigned On" /></Column>
+                            <Column hAlign="Center"><Text text="Priority" /></Column>
+                            <Column hAlign="Center"><Text text="Status" /></Column>
+                            <Column hAlign="Center"><Text text="Last Update" /></Column>
+                            <Column hAlign="End" width="60px"><Text text="" /></Column>
+                        </columns>
+
+                        <items>
+                            <ColumnListItem type="Active" press=".onRowPress">
+                                <cells>
+                                    <VBox>
+                                        <Text text="{tsView>taskName}" class="tsTaskRowName" />
+                                        <Text text="{tsView>taskId}" class="tsTaskRowId" />
+                                    </VBox>
+                                    <HBox alignItems="Center">
+                                        <core:Icon src="sap-icon://employee" size="1rem" color="#6b7280" />
+                                        <Text text="{tsView>assigneeName}" class="sapUiTinyMarginBegin" />
+                                    </HBox>
+                                    <Text text="{tsView>assignedOnLabel}" />
+                                    <ObjectStatus
+                                        text="{tsView>priority}"
+                                        state="{path:'tsView>priority', formatter:'.formatPriorityState'}" />
+                                    <ObjectStatus
+                                        text="{tsView>status}"
+                                        state="{path:'tsView>status', formatter:'.formatStatusState'}"
+                                        icon="{path:'tsView>status', formatter:'.formatStatusIcon'}" />
+                                    <Text text="{tsView>statusUpdatedLabel}" />
+                                    <Button icon="sap-icon://slim-arrow-right"
+                                            type="Transparent"
+                                            tooltip="View daily updates"
+                                            press=".onRowPress" />
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+                </Panel>
+
+            </VBox>
+
+        </content>
+    </Page>
+
+</mvc:View>

@@ -34,11 +34,6 @@
                     <Text text="{histView>/selectedWeekLabel}" class="tsHistWeekLabel" />
                 </HBox>
 
-                <!-- Inline calendar — hidden by default, toggled by icon above -->
-                <VBox visible="{histView>/showCalendar}" class="tsHistCalendarWrapper">
-                    <unified:Calendar id="histCalendar" select=".onCalendarSelect" />
-                </VBox>
-
                 <!-- Read-only table. Last 2 rows = Day Total + Status (fixedBottomRowCount set in controller) -->
                 <table:Table
                     id="histTable"

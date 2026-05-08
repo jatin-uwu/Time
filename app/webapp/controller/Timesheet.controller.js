@@ -395,17 +395,33 @@ sap.ui.define([
             const oHistoryModel = this.getOwnerComponent().getModel("history");
             const submissions   = oHistoryModel.getProperty("/submissions");
             const existingIdx   = submissions.findIndex(s => s.weekStart === sWeekStart);
+
+            const sSubmitterId = this.getOwnerComponent().getCurrentEmployeeId();
             const record = {
-                employeeName: "Employee",
-                weekRange:    this._oViewModel.getProperty("/weekRangeLabel"),
-                weekStart:    sWeekStart,
-                submittedOn:  new Date().toLocaleString(),
-                grandTotal:   this._oViewModel.getProperty("/grandTotal"),
-                days:         this._oViewModel.getProperty("/days"),
-                rows:         JSON.parse(JSON.stringify(updatedRows)),
+                employeeName:   "Employee",
+                submittedBy:    sSubmitterId,
+                weekRange:      this._oViewModel.getProperty("/weekRangeLabel"),
+                weekStart:      sWeekStart,
+                submittedOn:    new Date().toLocaleString(),
+                grandTotal:     this._oViewModel.getProperty("/grandTotal"),
+                days:           this._oViewModel.getProperty("/days"),
+                rows:           JSON.parse(JSON.stringify(updatedRows)),
                 status:  "Pending",
                 remarks: ""
             };
+
+            // Resolve the submitter's display name + reporting manager so
+            // approve/reject notifications can be routed properly later.
+            this.getOwnerComponent().getEmployeeById(sSubmitterId).then(emp => {
+                if (!emp) return;
+                const subs = oHistoryModel.getProperty("/submissions") || [];
+                const idx = subs.findIndex(s => s.weekStart === sWeekStart);
+                if (idx < 0) return;
+                subs[idx].employeeName = emp.employeeName || subs[idx].employeeName;
+                subs[idx].reportsTo    = (emp.manager && emp.manager.employeeId) || emp.manager_employeeId || null;
+                oHistoryModel.setProperty("/submissions", subs);
+                this.getOwnerComponent().persistHistory();
+            });
 
             if (existingIdx >= 0) {
                 submissions[existingIdx] = record;

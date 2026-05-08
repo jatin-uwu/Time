@@ -1,0 +1,133 @@
+<mvc:View
+    controllerName="timesheet.app.controller.TaskAssignment"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:l="sap.ui.layout"
+    xmlns:f="sap.ui.layout.form"
+    xmlns:u="sap.ui.unified"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="taskAssignPage"
+          title="Assign Task"
+          class="tsDashboardPage"
+          enableScrolling="true">
+
+        <content>
+
+            <VBox class="tsTaskAssignWrap">
+
+                <!-- Toolbar -->
+                <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center">
+                        <core:Icon src="sap-icon://create-form" class="tsMgrToolbarIcon" />
+                        <Title text="Assign New Task" level="H4" class="sapUiSmallMarginBegin" />
+                    </HBox>
+                    <ObjectStatus
+                        text="{taView>/assignedCount} assigned"
+                        state="Information"
+                        icon="sap-icon://task" />
+                </HBox>
+
+                <!-- ── Task creation form ── -->
+                <Panel headerText="Task Details" class="tsTaskFormPanel" expandable="false">
+
+                    <l:Grid defaultSpan="L6 M6 S12" hSpacing="2" vSpacing="1" class="sapUiSmallMargin">
+
+                        <VBox>
+                            <Label text="Task Name" required="true" />
+                            <Input id="inpTaskName"
+                                   value="{taView>/form/taskName}"
+                                   placeholder="e.g. Build dashboard widget" />
+                        </VBox>
+
+                        <VBox>
+                            <Label text="Assign To" required="true" />
+                            <Select id="selAssignee"
+                                    selectedKey="{taView>/form/assignedTo}"
+                                    items="{taView>/employees}"
+                                    forceSelection="false"
+                                    width="100%">
+                                <core:Item key="{taView>employeeId}" text="{taView>employeeName} ({taView>designation})" />
+                            </Select>
+                        </VBox>
+
+                        <VBox>
+                            <Label text="Priority" required="true" />
+                            <Select id="selPriority"
+                                    selectedKey="{taView>/form/priority}"
+                                    width="100%">
+                                <core:Item key="High"   text="High" />
+                                <core:Item key="Medium" text="Medium" />
+                                <core:Item key="Low"    text="Low" />
+                            </Select>
+                        </VBox>
+
+                        <VBox>
+                            <Label text="Start Date" />
+                            <DatePicker id="dpStart"
+                                        value="{taView>/form/startDate}"
+                                        valueFormat="yyyy-MM-dd"
+                                        displayFormat="dd MMM yyyy" />
+                        </VBox>
+
+                        <VBox>
+                            <Label text="Due Date" />
+                            <DatePicker id="dpDue"
+                                        value="{taView>/form/dueDate}"
+                                        valueFormat="yyyy-MM-dd"
+                                        displayFormat="dd MMM yyyy" />
+                        </VBox>
+
+                    </l:Grid>
+
+                    <VBox class="sapUiSmallMargin">
+                        <Label text="Description (what has to be done)" required="true" />
+                        <TextArea id="taDescription"
+                                  value="{taView>/form/taskDescription}"
+                                  rows="6"
+                                  width="100%"
+                                  growing="true"
+                                  growingMaxLines="12"
+                                  placeholder="Describe the work in detail. This block will appear in the employee's Task Description page." />
+                    </VBox>
+
+                    <VBox class="sapUiSmallMargin">
+                        <Label text="Attachment (optional)" />
+                        <u:FileUploader id="uplTaskFile"
+                                        name="taskAttachment"
+                                        placeholder="Click 'Browse' to attach a reference document or image"
+                                        buttonText="Browse..."
+                                        fileType="png,jpg,jpeg,gif,pdf,doc,docx,xls,xlsx,txt"
+                                        change=".onTaskFileSelected"
+                                        width="100%" />
+                        <HBox alignItems="Center" class="sapUiTinyMarginTop"
+                              visible="{= !!${taView>/form/attachmentName} }">
+                            <core:Icon src="sap-icon://attachment" size="0.9rem" color="#3b82f6" />
+                            <Text text="{taView>/form/attachmentName}"
+                                  class="tsAttachmentName sapUiTinyMarginBegin" />
+                            <Button icon="sap-icon://decline"
+                                    type="Transparent"
+                                    tooltip="Remove attachment"
+                                    press=".onRemoveTaskFile"
+                                    class="sapUiTinyMarginBegin" />
+                        </HBox>
+                    </VBox>
+
+                    <HBox justifyContent="End" class="sapUiSmallMargin">
+                        <Button text="Reset" type="Transparent" press=".onResetForm" />
+                        <Button text="Assign"
+                                type="Emphasized"
+                                icon="sap-icon://accept"
+                                press=".onAssignTask"
+                                class="sapUiSmallMarginBegin" />
+                    </HBox>
+
+                </Panel>
+
+            </VBox>
+
+        </content>
+    </Page>
+
+</mvc:View>
