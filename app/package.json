@@ -1,8 +1,11 @@
 {
   "name": "employee-timesheet-approuter",
   "version": "1.0.0",
+  "engines": {
+    "node": "^20.0.0"
+  },
   "dependencies": {
-    "@sap/approuter": "^16"
+    "@sap/approuter": "^21"
   },
   "scripts": {
     "start": "node node_modules/@sap/approuter/approuter.js"
