@@ -74,6 +74,12 @@ sap.ui.define([
             this.getOwnerComponent().getRouter()
                 .getRoute("dashboard")
                 .attachPatternMatched(this._onRouteMatched, this);
+
+            // After the page has rendered, force scroll to top so the
+            // greeting row is the first thing the user sees.
+            this.getView().addEventDelegate({
+                onAfterRendering: () => this._scrollToTop()
+            });
         },
 
         _loadGreeting() {
@@ -91,8 +97,8 @@ sap.ui.define([
             const sWeekStart = this._oDashModel.getProperty("/weekStart");
             this._computeStats();
             this._computeWeekHours(sWeekStart);
-            // _refreshDash is called at the end of _computeWeekHours
-            // so all data is ready before building the grid HTML
+            // _refreshDash + _scrollToTop are called at the end of
+            // _computeWeekHours so all data is ready before painting.
         },
 
         // ── Week Navigation ──────────────────────────────────────────────────
@@ -189,6 +195,33 @@ sap.ui.define([
 
             // All data is now ready — build the full dashboard grid
             this._refreshDash();
+
+            // The grid replaces a large HTML node which can shift the
+            // scroll position; force back to the top so the greeting
+            // is the first thing visible.
+            this._scrollToTop();
+        },
+
+        _scrollToTop() {
+            const oPage = this.byId("dashPage");
+            if (oPage && oPage.scrollTo) { oPage.scrollTo(0, 0); }
+            const oView = this.getView();
+            const dom = oView && oView.getDomRef && oView.getDomRef();
+            if (dom) {
+                dom.querySelectorAll(
+                    ".sapMPageEnableScrolling, .sapMScrollCont, .sapMNavContainer"
+                ).forEach(el => { el.scrollTop = 0; });
+            }
+            // One more pass after the next paint — the grid HTML may
+            // still be settling the layout when this runs.
+            setTimeout(() => {
+                if (oPage && oPage.scrollTo) { oPage.scrollTo(0, 0); }
+                if (dom) {
+                    dom.querySelectorAll(
+                        ".sapMPageEnableScrolling, .sapMScrollCont, .sapMNavContainer"
+                    ).forEach(el => { el.scrollTop = 0; });
+                }
+            }, 50);
         },
 
         // ── Rebuild full dashboard HTML ──────────────────────────────────────

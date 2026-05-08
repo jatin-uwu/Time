@@ -2,7 +2,8 @@ sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
-    "sap/m/Dialog",
+    "sap/m/ResponsivePopover",
+    "sap/m/Bar",
     "sap/m/Button",
     "sap/m/VBox",
     "sap/m/HBox",
@@ -11,7 +12,7 @@ sap.ui.define([
     "sap/m/Title",
     "sap/m/Avatar",
     "sap/ui/core/Icon"
-], (Controller, JSONModel, MessageToast, Dialog, Button, VBox, HBox, Label, Text, Title, Avatar, Icon) => {
+], (Controller, JSONModel, MessageToast, ResponsivePopover, Bar, Button, VBox, HBox, Label, Text, Title, Avatar, Icon) => {
     "use strict";
 
     function buildInitials(sName) {
@@ -339,9 +340,11 @@ sap.ui.define([
             });
         },
 
-        onProfilePress() {
+        onProfilePress(oEvent) {
+            const oSource = oEvent && oEvent.getSource && oEvent.getSource();
             const oProfile = this._oAppModel.getProperty("/userProfile");
-            if (oProfile) { this._openProfileDialog(oProfile); return; }
+
+            if (oProfile) { this._openProfilePopover(oProfile, oSource); return; }
 
             // Profile wasn't cached yet — fetch it on demand and then open.
             const oComp = this.getOwnerComponent();
@@ -364,15 +367,16 @@ sap.ui.define([
                     isActive:     emp.isActive
                 };
                 this._oAppModel.setProperty("/userProfile", oFresh);
-                this._openProfileDialog(oFresh);
+                this._openProfilePopover(oFresh, oSource);
             });
         },
 
-        _openProfileDialog(oProfile) {
-            if (this._oProfileDialog) {
-                this._oProfileDialog.close();
-                this._oProfileDialog.destroy();
-                this._oProfileDialog = null;
+        _openProfilePopover(oProfile, oSource) {
+            // Always rebuild so the data is current.
+            if (this._oProfilePopover) {
+                this._oProfilePopover.close();
+                this._oProfilePopover.destroy();
+                this._oProfilePopover = null;
             }
 
             const sInitials = this._oAppModel.getProperty("/userInitials");
@@ -393,63 +397,59 @@ sap.ui.define([
                 ]
             }).addStyleClass("tsProfileRow sapUiSmallMarginBottom");
 
-            const oContent = new VBox({
+            const oHeader = new HBox({
+                alignItems: "Center",
                 items: [
-                    // Header strip
-                    new HBox({
-                        alignItems: "Center",
-                        items: [
-                            new Avatar({
-                                initials:    sInitials,
-                                displaySize: "L",
-                                backgroundColor: "Accent6"
-                            }),
-                            new VBox({
-                                items: [
-                                    new Title({ text: oProfile.employeeName, level: "H4" })
-                                        .addStyleClass("tsProfileName"),
-                                    new Text({ text: oProfile.designation })
-                                        .addStyleClass("tsProfileDesignation"),
-                                    new Text({ text: "ID: " + (oProfile.employeeId || "") })
-                                        .addStyleClass("tsProfileEmpId")
-                                ]
-                            }).addStyleClass("sapUiSmallMarginBegin")
-                        ]
-                    }).addStyleClass("tsProfileHeader"),
-
-                    // Detail grid
+                    new Avatar({
+                        initials:    sInitials,
+                        displaySize: "L",
+                        backgroundColor: "Accent6"
+                    }),
                     new VBox({
                         items: [
-                            fieldRow("Email",    oProfile.email,       "email"),
-                            fieldRow("Mobile",   oProfile.mobileNumber,"call"),
-                            fieldRow("Address",  oProfile.address,     "addresses"),
-                            fieldRow("Status",   oProfile.isActive === false ? "Inactive" : "Active", "status-positive")
+                            new Title({ text: oProfile.employeeName, level: "H4" })
+                                .addStyleClass("tsProfileName"),
+                            new Text({ text: oProfile.designation })
+                                .addStyleClass("tsProfileDesignation"),
+                            new Text({ text: "ID: " + (oProfile.employeeId || "") })
+                                .addStyleClass("tsProfileEmpId")
                         ]
-                    }).addStyleClass("tsProfileBody sapUiSmallMarginTop")
+                    }).addStyleClass("sapUiSmallMarginBegin")
                 ]
-            }).addStyleClass("tsProfileDialogWrap sapUiContentPadding");
+            }).addStyleClass("tsProfileHeader");
 
-            this._oProfileDialog = new Dialog({
-                title: "My Profile",
-                contentWidth: "420px",
-                draggable: true,
-                resizable: false,
-                content: [oContent],
-                endButton: new Button({
-                    text: "Close",
-                    type: "Emphasized",
-                    press: () => this._oProfileDialog.close()
-                }),
+            const oBody = new VBox({
+                items: [
+                    fieldRow("Email",    oProfile.email,       "email"),
+                    fieldRow("Mobile",   oProfile.mobileNumber,"call"),
+                    fieldRow("Address",  oProfile.address,     "addresses"),
+                    fieldRow("Status",   oProfile.isActive === false ? "Inactive" : "Active", "status-positive")
+                ]
+            }).addStyleClass("tsProfileBody sapUiSmallMarginTop");
+
+            this._oProfilePopover = new ResponsivePopover({
+                title:       "My Profile",
+                placement:   "Bottom",         // sits directly below the avatar
+                contentWidth:  "360px",
+                modal:       false,            // dashboard stays interactive behind it
+                showHeader:  true,
+                showCloseButton: true,
+                content: [
+                    new VBox({ items: [oHeader, oBody] })
+                        .addStyleClass("tsProfileDialogWrap sapUiContentPadding")
+                ],
                 afterClose: () => {
-                    if (this._oProfileDialog) {
-                        this._oProfileDialog.destroy();
-                        this._oProfileDialog = null;
+                    if (this._oProfilePopover) {
+                        this._oProfilePopover.destroy();
+                        this._oProfilePopover = null;
                     }
                 }
             }).addStyleClass("tsProfileDialog");
 
-            this.getView().addDependent(this._oProfileDialog);
-            this._oProfileDialog.open();
+            this.getView().addDependent(this._oProfilePopover);
+            // openBy anchors the popover to the avatar — UI5 paints it
+            // there directly, no centre-flicker.
+            this._oProfilePopover.openBy(oSource);
         }
     });
 });

@@ -3,5 +3,9 @@ EMP1001,Jatin Bajaj,Developer,jatin.bajaj@ccentrik.com,Delhi India,9876543210,EM
 EMP1002,Punit Sharma,HR,punit.sharma@ccentrik.com,Gwalior India,9876543211,EMP1005,true
 EMP1003,Neha Kapoor,Sales Executive,neha.kapoor@ccentrik.com,Gurgaon India,9876543212,EMP1006,true
 EMP1004,Ankit Verma,Accountant,ankit.verma@ccentrik.com,Noida India,9876543213,EMP1005,true
+<<<<<<< HEAD
 EMP1005,Vineet,Manager,vineet@ccentrik.com,Delhi India,9876543214,EMP1006,true
+=======
+EMP1005,Vineet ,Manager,Vineet@ccentrik.com,Delhi India,9876543214,EMP1006,true
+>>>>>>> 7ecf592dda430abef083eca0b778e151c082153d
 EMP1006,Founder Member,Founder,founder@ccentrik.com,Delhi India,9876543215,,true
