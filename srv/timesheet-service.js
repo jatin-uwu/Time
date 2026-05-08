@@ -41,9 +41,65 @@ class EmployeeService extends cds.ApplicationService {
         // Expose current user role to frontend
         this.on('getUserRole', (req) => {
             const user = req.user;
-            if (user.is('Manager')) return { role: 'manager' };
+            if (user.is('HR'))       return { role: 'hr' };
+            if (user.is('Manager'))  return { role: 'manager' };
             if (user.is('Employee')) return { role: 'employee' };
             return { role: 'unknown' };
+        });
+
+        // Resolve the JWT user (from XSUAA / IAS) against EmployeeMaster
+        // by email and return the matched employee record. Falls back
+        // gracefully when no matching record exists so the UI can still
+        // render a usable header instead of crashing.
+        this.on('getCurrentUser', async (req) => {
+            const user  = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                       || user.id
+                       || '';
+            // HR scope wins over Manager wins over Employee — matches the
+            // sidebar gating priority on the frontend.
+            const role  = user.is && user.is('HR')       ? 'hr'
+                        : user.is && user.is('Manager')  ? 'manager'
+                        : user.is && user.is('Employee') ? 'employee'
+                        : 'unknown';
+
+            let emp = null;
+            if (email) {
+                emp = await SELECT.one
+                    .from(EMPLOYEE)
+                    .where({ email: email });
+            }
+
+            if (!emp) {
+                // No EmployeeMaster row for this login — return a
+                // minimal record built from the JWT itself so the
+                // frontend can still greet them by name.
+                return {
+                    email:        email,
+                    role:         role,
+                    employeeId:   '',
+                    employeeName: (user.attr && user.attr.given_name)
+                                  || (email && email.split('@')[0])
+                                  || 'User',
+                    designation:  '',
+                    address:      '',
+                    mobileNumber: '',
+                    managerId:    '',
+                    isActive:     true
+                };
+            }
+
+            return {
+                email:        emp.email || email,
+                role:         role,
+                employeeId:   emp.employeeId,
+                employeeName: emp.employeeName || '',
+                designation:  emp.designation  || '',
+                address:      emp.address      || '',
+                mobileNumber: emp.mobileNumber || '',
+                managerId:    emp.manager_employeeId || '',
+                isActive:     emp.isActive !== false
+            };
         });
 
         this.on('submitTimesheet', async (req) => {
@@ -278,4 +334,135 @@ class ManagerService extends cds.ApplicationService {
     }
 }
 
-module.exports = { EmployeeService, ManagerService };
+// ── HR Service ───────────────────────────────────────────────────────────────
+// Backs the HR "Add Employee" form and the "All Employees" directory.
+const DOCUMENT = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeDocument';
+
+class HRService extends cds.ApplicationService {
+    async init() {
+
+        // Returns the next sequential employeeId (e.g. EMP1008). Logic:
+        // pick the highest existing numeric suffix and add one. Falls
+        // back to EMP1001 when the table is empty.
+        const generateEmployeeId = async () => {
+            const rows = await SELECT.from(EMPLOYEE).columns('employeeId');
+            const max = rows.reduce((m, r) => {
+                const n = parseInt(String(r.employeeId || '').replace(/\D/g, ''), 10);
+                return Number.isFinite(n) && n > m ? n : m;
+            }, 1000);
+            return 'EMP' + (max + 1);
+        };
+
+        this.on('nextEmployeeId', async () => {
+            return await generateEmployeeId();
+        });
+
+        this.on('addEmployee', async (req) => {
+            const d = req.data || {};
+            if (!d.employeeName) return req.error(400, 'employeeName is required.');
+            if (!d.email)        return req.error(400, 'email is required.');
+
+            // Reject if the email is already taken — keeps the
+            // EmployeeMaster.email lookup used by getCurrentUser unique.
+            const dup = await SELECT.one.from(EMPLOYEE)
+                .where({ email: d.email });
+            if (dup) {
+                return req.error(409, `An employee with email '${d.email}' already exists.`);
+            }
+
+            const newId = await generateEmployeeId();
+            const row = {
+                employeeId:        newId,
+                employeeName:      d.employeeName,
+                designation:       d.designation       || null,
+                email:             d.email,
+                address:           d.address           || null,
+                mobileNumber:      d.mobileNumber      || null,
+                manager_employeeId: d.managerEmployeeId || null,
+                isActive:          true,
+                dateOfBirth:       d.dateOfBirth       || null,
+                gender:            d.gender            || null,
+                department:        d.department        || null,
+                joiningDate:       d.joiningDate       || null,
+                employmentType:    d.employmentType    || null,
+                aadhaarNumber:     d.aadhaarNumber     || null,
+                panNumber:         d.panNumber         || null,
+                status:            'Active',
+                emergencyContact:  d.emergencyContact  || null,
+                bloodGroup:        d.bloodGroup        || null,
+                bankAccountNumber: d.bankAccountNumber || null,
+                bankName:          d.bankName          || null,
+                bankIfsc:          d.bankIfsc          || null
+            };
+            await INSERT.into(EMPLOYEE).entries(row);
+            cds.log('hr').info(`HR created employee ${newId} (${d.employeeName})`);
+            return { employeeId: newId };
+        });
+
+        this.on('uploadEmployeeDocument', async (req) => {
+            const { employeeId, documentType, fileName, mimeType, description, dataBase64 } = req.data;
+            if (!employeeId || !fileName || !dataBase64) {
+                return req.error(400, 'employeeId, fileName and dataBase64 are required.');
+            }
+
+            // Verify the employee exists so we don't create orphan documents.
+            const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId });
+            if (!emp) return req.error(404, `Employee '${employeeId}' not found.`);
+
+            let buf;
+            try { buf = Buffer.from(dataBase64, 'base64'); }
+            catch (e) { return req.error(400, 'dataBase64 is not valid base64.'); }
+
+            // documentId = EMP1007-DOC-1700000000000 (employee + epoch ms)
+            const documentId = `${employeeId}-DOC-${Date.now()}`;
+            await INSERT.into(DOCUMENT).entries({
+                documentId,
+                employee_employeeId: employeeId,
+                documentType: documentType || 'Other',
+                fileName,
+                mimeType: mimeType || 'application/octet-stream',
+                description: description || null,
+                content: buf
+            });
+            cds.log('hr').info(`Uploaded ${fileName} (${buf.length} bytes) for ${employeeId}`);
+            return documentId;
+        });
+
+        this.on('getEmployeeDocument', async (req) => {
+            const { documentId } = req.data;
+            if (!documentId) return req.error(400, 'documentId is required.');
+
+            const doc = await SELECT.one.from(DOCUMENT)
+                .columns('documentId', 'fileName', 'mimeType', 'content')
+                .where({ documentId });
+            if (!doc) return req.error(404, `Document '${documentId}' not found.`);
+            if (!doc.content) return req.error(404, 'Document has no content.');
+
+            let dataBase64 = '';
+            try {
+                if (Buffer.isBuffer(doc.content)) {
+                    dataBase64 = doc.content.toString('base64');
+                } else if (typeof doc.content === 'string') {
+                    dataBase64 = doc.content;
+                } else if (doc.content instanceof Uint8Array) {
+                    dataBase64 = Buffer.from(doc.content).toString('base64');
+                } else {
+                    dataBase64 = Buffer.from(doc.content).toString('base64');
+                }
+            } catch (e) {
+                cds.log('hr').error('Could not encode document:', e.message || e);
+                return req.error(500, 'Could not read document.');
+            }
+
+            return {
+                fileName: doc.fileName,
+                mimeType: doc.mimeType || 'application/octet-stream',
+                dataBase64
+            };
+        });
+
+        return super.init();
+    }
+}
+
+module.exports = { EmployeeService, ManagerService, HRService };

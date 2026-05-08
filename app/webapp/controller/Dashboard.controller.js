@@ -84,13 +84,30 @@ sap.ui.define([
 
         _loadGreeting() {
             const oComp = this.getOwnerComponent();
-            if (!oComp || !oComp.getEmployeeById || !oComp.getCurrentEmployeeId) return;
-            const sId = oComp.getCurrentEmployeeId();
-            oComp.getEmployeeById(sId).then(emp => {
-                if (emp && emp.employeeName) {
-                    this._oDashModel.setProperty("/greeting", "Hey, " + emp.employeeName);
-                }
-            });
+            if (!oComp) return;
+
+            const setName = (name) => {
+                if (name) this._oDashModel.setProperty("/greeting", "Hey, " + name);
+            };
+
+            // Prefer the backend-resolved JWT user (works in BTP).
+            if (oComp.getCurrentUser) {
+                oComp.getCurrentUser().then(u => {
+                    if (u && u.employeeName) { setName(u.employeeName); return; }
+                    // Fallback to the role-based directory lookup.
+                    if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
+                        oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
+                            if (emp && emp.employeeName) setName(emp.employeeName);
+                        });
+                    }
+                });
+                return;
+            }
+            if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
+                oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
+                    if (emp && emp.employeeName) setName(emp.employeeName);
+                });
+            }
         },
 
         _onRouteMatched() {

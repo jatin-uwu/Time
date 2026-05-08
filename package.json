@@ -42,6 +42,12 @@
               "roles": [
                 "Manager"
               ]
+            },
+            "hr1": {
+              "roles": [
+                "HR",
+                "Employee"
+              ]
             }
           }
         }

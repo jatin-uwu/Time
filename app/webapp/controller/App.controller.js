@@ -2,6 +2,7 @@ sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
+    "sap/m/MessageBox",
     "sap/m/ResponsivePopover",
     "sap/m/Bar",
     "sap/m/Button",
@@ -12,7 +13,7 @@ sap.ui.define([
     "sap/m/Title",
     "sap/m/Avatar",
     "sap/ui/core/Icon"
-], (Controller, JSONModel, MessageToast, ResponsivePopover, Bar, Button, VBox, HBox, Label, Text, Title, Avatar, Icon) => {
+], (Controller, JSONModel, MessageToast, MessageBox, ResponsivePopover, Bar, Button, VBox, HBox, Label, Text, Title, Avatar, Icon) => {
     "use strict";
 
     function buildInitials(sName) {
@@ -49,20 +50,20 @@ sap.ui.define([
             // so the avatar and profile dialog show the real person.
             this._loadCurrentUser();
 
-            // Try the backend, but don't override an explicit local-dev choice.
-            const bExplicit = !!(sUrlRole || sSaveRole);
-            fetch("/employee/getUserRole", {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                body: "{}"
-            })
-                .then(r => r.ok ? r.json() : Promise.reject(r.status))
-                .then(data => {
+            // Pull the JWT-resolved role from getCurrentUser so the sidebar
+            // gates correctly for every individual user. Local-dev URL/saved
+            // overrides win — useful when developing without auth.
+            const bExplicit = !!(sUrlRole || sSaveRole && false); // saved-role no longer overrides
+            const oComp = this.getOwnerComponent();
+            if (oComp.getCurrentUser) {
+                oComp.getCurrentUser().then(u => {
                     if (bExplicit) return;
-                    const sRole = data && (data.role || (data.value && data.value.role));
-                    if (sRole) this._oAppModel.setProperty("/userRole", sRole);
-                })
-                .catch(() => { });
+                    if (u && u.role && u.role !== "unknown") {
+                        this._oAppModel.setProperty("/userRole", u.role);
+                        this._refreshUnreadCount();
+                    }
+                });
+            }
 
             this.getOwnerComponent().getRouter().attachRouteMatched(this._onRouteMatched, this);
 
@@ -282,13 +283,17 @@ sap.ui.define([
         },
 
         _refreshUnreadCount() {
-            const oNotifModel = this.getOwnerComponent().getModel("notifications");
+            const oComp = this.getOwnerComponent();
+            const oNotifModel = oComp.getModel("notifications");
             if (!oNotifModel) return;
             const items = oNotifModel.getProperty("/items") || [];
-            const sCurrentId = this.getOwnerComponent().getCurrentEmployeeId();
+            const sCurrentId = oComp.getCurrentEmployeeId();
+            const sRole      = (oComp._oCurrentUser && oComp._oCurrentUser.role)
+                            || this._oAppModel.getProperty("/userRole")
+                            || "employee";
             const mine = items.filter(n => {
                 if (n.recipientEmployeeId) return n.recipientEmployeeId === sCurrentId;
-                return sCurrentId !== "EMP1005";
+                return sRole !== "manager";
             });
             this._oAppModel.setProperty("/unreadCount", mine.filter(n => !n.read).length);
         },
@@ -314,30 +319,96 @@ sap.ui.define([
         },
 
         onLogout() {
-            MessageToast.show("Logging out...");
+            MessageBox.confirm("Sign out of Timesheet?", {
+                title:   "Logout",
+                actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                emphasizedAction: MessageBox.Action.OK,
+                onClose: (sAction) => {
+                    if (sAction !== MessageBox.Action.OK) return;
+                    this._performLogout();
+                }
+            });
+        },
+
+        _performLogout() {
+            // 1) Wipe every client-side trace of the session.
+            //    UI5 in-memory models, app-scoped JSONModels, OData caches.
+            try {
+                const oComp = this.getOwnerComponent();
+                ["history","locked","notifications","tasks","taskUpdates"].forEach(name => {
+                    const m = oComp.getModel(name);
+                    if (m && m.setData) m.setData({});
+                });
+                // Drop the cached JWT-resolved user so a re-login is mandatory.
+                oComp._oCurrentUser  = null;
+                oComp._pCurrentUser  = null;
+                oComp._employeeCache = {};
+            } catch (e) { /* non-blocking */ }
+
+            // 2) Clear every persisted preference. We deliberately wipe
+            //    sessionStorage too so cached UI5 preload chunks rebuild
+            //    cleanly for the next user (otherwise a different person
+            //    on a shared machine inherits the previous theme/density).
+            try { localStorage.clear();   } catch (e) {}
+            try { sessionStorage.clear(); } catch (e) {}
+
+            // 3) Hand off to the approuter. /logout is what we configured
+            //    in xs-app.json.logoutEndpoint — the approuter:
+            //      a. invalidates its own session cookie
+            //      b. calls XSUAA's /oauth/logout to revoke the refresh token
+            //      c. redirects to xs-app.json.logoutPage (/index.html)
+            //    Because /index.html itself is behind xsuaa auth, the
+            //    browser will be bounced through IAS again on the way back,
+            //    so the back-button trick can't reach protected data.
+            //
+            //    location.replace (not .href) wipes the current entry from
+            //    browser history → back button can't return to the dashboard.
+            window.location.replace("/logout");
         },
 
         // ── Profile (avatar press) ───────────────────────────────────────
-        // Loads the logged-in user from EmployeeMaster and caches their
-        // name/initials/profile in the appView model.
+        // Resolves the logged-in JWT user against EmployeeMaster (server-side)
+        // and caches their name/initials/profile in the appView model.
+        // Falls back to the role-based directory lookup if the backend
+        // call fails (e.g. local-dev with no auth).
         _loadCurrentUser() {
             const oComp = this.getOwnerComponent();
-            if (!oComp || !oComp.getEmployeeById || !oComp.getCurrentEmployeeId) return;
-            const sId = oComp.getCurrentEmployeeId();
-            oComp.getEmployeeById(sId).then(emp => {
+            if (!oComp) return;
+
+            const useEmp = (emp) => {
                 if (!emp) return;
                 this._oAppModel.setProperty("/userName",     emp.employeeName || "");
                 this._oAppModel.setProperty("/userInitials", buildInitials(emp.employeeName));
                 this._oAppModel.setProperty("/userProfile",  {
                     employeeId:   emp.employeeId,
                     employeeName: emp.employeeName,
-                    designation:  emp.designation || "—",
-                    email:        emp.email       || "—",
-                    address:      emp.address     || "—",
-                    mobileNumber: emp.mobileNumber|| "—",
-                    isActive:     emp.isActive
+                    designation:  emp.designation  || "—",
+                    email:        emp.email        || "—",
+                    address:      emp.address      || "—",
+                    mobileNumber: emp.mobileNumber || "—",
+                    isActive:     emp.isActive !== false
                 });
-            });
+            };
+
+            // 1) Backend-resolved (real logged-in user).
+            if (oComp.getCurrentUser) {
+                oComp.getCurrentUser().then(u => {
+                    if (u && (u.employeeId || u.employeeName)) {
+                        useEmp(u);
+                        return;
+                    }
+                    // 2) Fallback: role-based directory lookup.
+                    if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
+                        oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(useEmp);
+                    }
+                });
+                return;
+            }
+
+            // No getCurrentUser at all — pure local-dev path.
+            if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
+                oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(useEmp);
+            }
         },
 
         onProfilePress(oEvent) {

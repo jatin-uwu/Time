@@ -5,17 +5,55 @@ using { managed } from '@sap/cds/common';
 context timesheet{
 
 entity EmployeeMaster : managed {
-    key employeeId     : String(10);
-    employeeName       : String(100);
-    designation        : String(50);
-    email              : String(100);
-    address            : String(255);
-    mobileNumber       : String(15);
-    manager            : Association to EmployeeMaster;
-    isActive           : Boolean default true;
+    key employeeId      : String(10);
+    employeeName        : String(100);
+    designation         : String(50);
+    email               : String(100);
+    address             : String(255);
+    mobileNumber        : String(15);
+    manager             : Association to EmployeeMaster;
+    isActive            : Boolean default true;
 
-    timesheets         : Composition of many timesheet.TimesheetHeader
-                         on timesheets.employee = $self;
+    // ── HR profile fields ──────────────────────────────────────────
+    dateOfBirth         : Date;
+    gender              : String(10);            // Male / Female / Other
+    department          : String(50);
+    joiningDate         : Date;
+    employmentType      : String(20);            // Permanent / Contract / Intern
+    aadhaarNumber       : String(20);
+    panNumber           : String(15);
+    status              : String(20) default 'Active'; // Active / Inactive / On-Leave / Resigned
+    emergencyContact    : String(15);
+    bloodGroup          : String(5);
+
+    // Bank details (kept inline; promote to a separate entity if you ever
+    // need to support multiple bank accounts per employee).
+    bankAccountNumber   : String(30);
+    bankName            : String(60);
+    bankIfsc            : String(15);
+
+    // Profile photo (single binary, served via OData media stream).
+    profilePhoto        : LargeBinary @Core.MediaType: profilePhotoMimeType;
+    profilePhotoMimeType: String(100) @Core.IsMediaType;
+
+    timesheets          : Composition of many timesheet.TimesheetHeader
+                          on timesheets.employee = $self;
+
+    documents           : Composition of many EmployeeDocument
+                          on documents.employee = $self;
+}
+
+// One row per uploaded HR document (Aadhaar, PAN, Resume, …).
+// The binary stream is exposed as an OData media entity so the
+// SAPUI5 FileUploader / Download icons work out-of-the-box.
+entity EmployeeDocument : managed {
+    key documentId   : String(20);
+    employee         : Association to EmployeeMaster;
+    documentType     : String(40);                 // Aadhaar / PAN / Resume / Certificate / Photo / Other
+    fileName         : String(255);
+    mimeType         : String(100) @Core.IsMediaType;
+    content          : LargeBinary  @Core.MediaType: mimeType;
+    description      : String(255);
 }
 
 entity TaskMaster : managed {

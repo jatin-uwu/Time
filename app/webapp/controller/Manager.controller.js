@@ -68,16 +68,27 @@ sap.ui.define([
         // ── Submission list ──────────────────────────────────────────────────
 
         _loadSubmissions() {
-            const oHistoryModel = this.getOwnerComponent().getModel("history");
-            const all           = oHistoryModel.getProperty("/submissions") || [];
+            const oComp = this.getOwnerComponent();
+            // Wait for the JWT user, then filter to this manager's reportees.
+            const ready = oComp.getCurrentUser ? oComp.getCurrentUser() : Promise.resolve(null);
+            ready.then(() => {
+                const oHistoryModel = oComp.getModel("history");
+                const everyone      = oHistoryModel.getProperty("/submissions") || [];
+                const sMyId         = oComp.getCurrentEmployeeId();
 
-            const pending = all.filter(s => s.status === "Pending").length;
-            this._oMgrModel.setProperty("/allSubmissions", all);
-            this._oMgrModel.setProperty("/pendingCount",   pending);
+                // Show only submissions whose reportsTo points to this manager.
+                // Submissions without reportsTo (legacy) are visible to all
+                // managers — they pre-date the routing fix.
+                const all = everyone.filter(s => !s.reportsTo || s.reportsTo === sMyId);
 
-            const oSeg = this.byId("statusFilter");
-            const sKey = oSeg ? oSeg.getSelectedKey() : "Pending";
-            this._applyFilter(sKey, all);
+                const pending = all.filter(s => s.status === "Pending").length;
+                this._oMgrModel.setProperty("/allSubmissions", all);
+                this._oMgrModel.setProperty("/pendingCount",   pending);
+
+                const oSeg = this.byId("statusFilter");
+                const sKey = oSeg ? oSeg.getSelectedKey() : "Pending";
+                this._applyFilter(sKey, all);
+            });
         },
 
         _applyFilter(sKey, all) {

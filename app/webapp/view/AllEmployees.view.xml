@@ -1,0 +1,142 @@
+<mvc:View
+    controllerName="timesheet.app.controller.AllEmployees"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:t="sap.ui.table"
+    xmlns:l="sap.ui.layout"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="allEmpPage" title="All Employees" class="tsHrPage" showNavButton="false">
+        <content>
+
+            <!-- ── Toolbar with search + count + refresh ── -->
+            <Toolbar class="sapUiSmallMargin">
+                <Title text="Directory · {emp>/items/length} employees" level="H4" />
+                <ToolbarSpacer />
+                <SearchField id="empSearch"
+                             placeholder="Search by name, email, ID, dept..."
+                             liveChange=".onSearch"
+                             width="320px" />
+                <Button icon="sap-icon://refresh" tooltip="Reload" press=".onRefresh" />
+                <Button icon="sap-icon://add-employee" text="Add" type="Emphasized" press=".onAdd" />
+            </Toolbar>
+
+            <!-- ── Master/Detail split: list on the left, profile pane on the right ── -->
+            <l:Splitter class="sapUiResponsiveMargin" height="calc(100vh - 200px)">
+
+                <!-- LEFT: Table -->
+                <t:Table id="empTable"
+                         rows="{emp>/filtered}"
+                         visibleRowCountMode="Auto"
+                         selectionMode="Single"
+                         selectionBehavior="Row"
+                         alternateRowColors="true"
+                         rowHeight="42"
+                         rowSelectionChange=".onRowSelect">
+                    <t:columns>
+                        <t:Column width="6rem" sortProperty="employeeId">
+                            <Label text="ID" />
+                            <t:template><Text text="{emp>employeeId}" /></t:template>
+                        </t:Column>
+                        <t:Column width="10rem" sortProperty="employeeName">
+                            <Label text="Name" />
+                            <t:template><Text text="{emp>employeeName}" /></t:template>
+                        </t:Column>
+                        <t:Column width="14rem" sortProperty="email">
+                            <Label text="Email" />
+                            <t:template><Text text="{emp>email}" /></t:template>
+                        </t:Column>
+                        <t:Column width="9rem" sortProperty="department">
+                            <Label text="Department" />
+                            <t:template><Text text="{emp>department}" /></t:template>
+                        </t:Column>
+                        <t:Column width="9rem" sortProperty="designation">
+                            <Label text="Designation" />
+                            <t:template><Text text="{emp>designation}" /></t:template>
+                        </t:Column>
+                        <t:Column width="6rem" sortProperty="status">
+                            <Label text="Status" />
+                            <t:template>
+                                <ObjectStatus text="{emp>status}"
+                                              state="{= ${emp>status} === 'Active' ? 'Success' : ${emp>status} === 'Resigned' ? 'Error' : 'Warning'}" />
+                            </t:template>
+                        </t:Column>
+                    </t:columns>
+                </t:Table>
+
+                <!-- RIGHT: Detail pane -->
+                <l:layoutData>
+                    <l:SplitterLayoutData size="auto" />
+                </l:layoutData>
+                <Panel headerText="Employee Profile" expandable="false" class="sapUiTinyMargin">
+                    <l:layoutData><l:SplitterLayoutData size="420px" minSize="320" /></l:layoutData>
+
+                    <VBox visible="{= !${detail>/hasSelection} }" class="sapUiMediumMargin" alignItems="Center">
+                        <core:Icon src="sap-icon://employee" size="2.5rem" color="#9ca3af" />
+                        <Text text="Select an employee to see their full profile and documents." textAlign="Center" class="sapUiSmallMarginTop" />
+                    </VBox>
+
+                    <VBox visible="{detail>/hasSelection}" class="sapUiSmallMargin">
+                        <Title text="{detail>/emp/employeeName}" level="H3" />
+                        <Text text="{detail>/emp/designation} · {detail>/emp/department}" class="sapUiTinyMarginBottom" />
+                        <Text text="ID: {detail>/emp/employeeId}" class="sapUiTinyMarginBottom" />
+
+                        <Panel headerText="Contact" expandable="true" expanded="true" class="sapUiTinyMarginTop">
+                            <VBox class="sapUiTinyMargin">
+                                <Text text="✉ {detail>/emp/email}" />
+                                <Text text="☎ {detail>/emp/mobileNumber}" />
+                                <Text text="📍 {detail>/emp/address}" />
+                                <Text text="Emergency: {detail>/emp/emergencyContact}" />
+                            </VBox>
+                        </Panel>
+
+                        <Panel headerText="Employment" expandable="true" expanded="true" class="sapUiTinyMarginTop">
+                            <VBox class="sapUiTinyMargin">
+                                <Text text="Joined: {detail>/emp/joiningDate}" />
+                                <Text text="Type: {detail>/emp/employmentType}" />
+                                <Text text="Manager: {detail>/managerName}" />
+                                <Text text="Status: {detail>/emp/status}" />
+                            </VBox>
+                        </Panel>
+
+                        <Panel headerText="Identity" expandable="true" expanded="false" class="sapUiTinyMarginTop">
+                            <VBox class="sapUiTinyMargin">
+                                <Text text="DOB: {detail>/emp/dateOfBirth}" />
+                                <Text text="Gender: {detail>/emp/gender}" />
+                                <Text text="Blood: {detail>/emp/bloodGroup}" />
+                                <Text text="Aadhaar: {detail>/emp/aadhaarNumber}" />
+                                <Text text="PAN: {detail>/emp/panNumber}" />
+                            </VBox>
+                        </Panel>
+
+                        <Panel headerText="Bank" expandable="true" expanded="false" class="sapUiTinyMarginTop">
+                            <VBox class="sapUiTinyMargin">
+                                <Text text="A/C: {detail>/emp/bankAccountNumber}" />
+                                <Text text="Bank: {detail>/emp/bankName}" />
+                                <Text text="IFSC: {detail>/emp/bankIfsc}" />
+                            </VBox>
+                        </Panel>
+
+                        <Panel headerText="Documents ({detail>/docs/length})" expandable="true" expanded="true" class="sapUiTinyMarginTop">
+                            <List items="{detail>/docs}" noDataText="No documents uploaded.">
+                                <StandardListItem icon="sap-icon://attachment"
+                                                  title="{detail>fileName}"
+                                                  description="{detail>documentType}"
+                                                  type="Active"
+                                                  press=".onDownloadDoc">
+                                    <customData>
+                                        <core:CustomData key="documentId" value="{detail>documentId}" />
+                                    </customData>
+                                </StandardListItem>
+                            </List>
+                        </Panel>
+                    </VBox>
+                </Panel>
+
+            </l:Splitter>
+
+        </content>
+    </Page>
+
+</mvc:View>

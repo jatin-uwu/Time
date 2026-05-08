@@ -15,6 +15,11 @@
                 "uri":  "/manager/",
                 "type": "OData",
                 "settings": { "odataVersion": "4.0" }
+            },
+            "HRService": {
+                "uri":  "/hr/",
+                "type": "OData",
+                "settings": { "odataVersion": "4.0" }
             }
         }
     },
@@ -59,6 +64,15 @@
                     "autoExpandSelect":    true
                 }
             },
+            "hr": {
+                "dataSource":  "HRService",
+                "preload":     true,
+                "settings": {
+                    "synchronizationMode": "None",
+                    "operationMode":       "Server",
+                    "autoExpandSelect":    true
+                }
+            },
             "view": {
                 "type":    "sap.ui.model.json.JSONModel",
                 "settings": { "data": {} }
@@ -90,7 +104,9 @@
                 { "name": "manager",       "pattern": "manager",       "target": "manager"       },
                 { "name": "task-assignment", "pattern": "task-assignment", "target": "task-assignment" },
                 { "name": "task-status",   "pattern": "task-status",   "target": "task-status"   },
-                { "name": "notifications", "pattern": "notifications", "target": "notifications" }
+                { "name": "notifications", "pattern": "notifications", "target": "notifications" },
+                { "name": "add-employee",  "pattern": "add-employee",  "target": "add-employee"  },
+                { "name": "all-employees", "pattern": "all-employees", "target": "all-employees" }
             ],
             "targets": {
                 "dashboard":     { "viewName": "Dashboard",     "viewId": "dashboard"     },
@@ -101,7 +117,9 @@
                 "manager":       { "viewName": "Manager",       "viewId": "manager"       },
                 "task-assignment": { "viewName": "TaskAssignment", "viewId": "task-assignment" },
                 "task-status":   { "viewName": "TaskStatus",   "viewId": "task-status"   },
-                "notifications": { "viewName": "Notifications", "viewId": "notifications" }
+                "notifications": { "viewName": "Notifications", "viewId": "notifications" },
+                "add-employee":  { "viewName": "AddEmployee",   "viewId": "add-employee"  },
+                "all-employees": { "viewName": "AllEmployees",  "viewId": "all-employees" }
             }
         }
     }

@@ -37,6 +37,11 @@ sap.ui.define([
             this._seedDemoData();
 
             this.getRouter().initialize();
+
+            // Kick off the JWT → EmployeeMaster lookup as early as
+            // possible so the App/Dashboard controllers find the cached
+            // record on their first read.
+            this.getCurrentUser();
         },
 
         // ── Demo seed (idempotent — only fires when storages are empty) ─────
@@ -261,13 +266,51 @@ sap.ui.define([
             this.persistTaskUpdates();
         },
 
-        // ── Current user identity (local-dev) ─────────────────────────────
-        // Maps the active role to a real employeeId from EmployeeMaster so
-        // notifications can be addressed to the correct recipient.
+        // ── Current user identity ─────────────────────────────────────────
+        // In production, fetches the JWT user from the backend and matches
+        // it against EmployeeMaster by email. In local-dev (no auth) or
+        // before the backend has answered, falls back to a role-based
+        // demo id so the UI still renders.
         getCurrentEmployeeId() {
+            // Prefer the resolved record from getCurrentUser (cached on
+            // first successful call below).
+            if (this._oCurrentUser && this._oCurrentUser.employeeId) {
+                return this._oCurrentUser.employeeId;
+            }
+            // Local-dev fallback: switch by ?role=… or localStorage.tsRole
             let sRole = "employee";
             try { sRole = (localStorage.getItem("tsRole") || "employee").toLowerCase(); } catch (e) {}
             return sRole === "manager" ? "EMP1005" : "EMP1001";
+        },
+
+        // Returns a promise that resolves to the JWT-resolved user record.
+        // First call hits the backend `/employee/getCurrentUser` action;
+        // subsequent calls return the cached promise so every controller
+        // can `await` the same network call.
+        getCurrentUser() {
+            if (this._pCurrentUser) return this._pCurrentUser;
+            const oModel = this.getModel();
+            if (!oModel) {
+                this._pCurrentUser = Promise.resolve(null);
+                return this._pCurrentUser;
+            }
+            try {
+                const oCtx = oModel.bindContext("/getCurrentUser(...)");
+                this._pCurrentUser = oCtx.execute().then(() => {
+                    const oResult = oCtx.getBoundContext().getObject();
+                    if (oResult && (oResult.employeeId || oResult.email)) {
+                        this._oCurrentUser = oResult;
+                        // Persist role so localStorage-driven code paths
+                        // (sidebar visibility) keep working.
+                        try { localStorage.setItem("tsRole", oResult.role || "employee"); } catch (e) {}
+                        return oResult;
+                    }
+                    return null;
+                }).catch(() => null);
+            } catch (e) {
+                this._pCurrentUser = Promise.resolve(null);
+            }
+            return this._pCurrentUser;
         },
 
         // Built-in employee directory — mirrors db/data/EmployeeMaster.csv.

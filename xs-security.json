@@ -1,5 +1,5 @@
 {
-  "xsappname": "timesheet-app",
+  "xsappname": "Employee-Timesheet",
   "tenant-mode": "dedicated",
   "scopes": [
     {
@@ -9,6 +9,10 @@
     {
       "name": "$XSAPPNAME.Manager",
       "description": "Manager role"
+    },
+    {
+      "name": "$XSAPPNAME.HR",
+      "description": "HR role"
     }
   ],
   "attributes": [],
@@ -22,35 +26,20 @@
     },
     {
       "name": "Manager",
-      "description": "Manager Role template",
+      "description": "Manager Role",
       "scope-references": [
         "$XSAPPNAME.Employee",
         "$XSAPPNAME.Manager"
       ]
+    },
+    {
+      "name": "HR",
+      "description": "HR Role",
+      "scope-references": [
+        "$XSAPPNAME.Employee",
+        "$XSAPPNAME.HR"
+      ]
     }
-  ],
-   "role-collections": [
-        {
-            "name": "Timesheet_Employee",
-            "description": "Timesheet Employee",
-            "role-template-references": [
-                "$XSAPPNAME.Employee"
-            ]
-        },
-        {
-            "name": "Timesheet_Manager",
-            "description": "Timesheet Manager",
-            "role-template-references": [
-                "$XSAPPNAME.Manager"
-            ]
-        }
-    ],
-  "oauth2-configuration":{
-    "token-validity" : 900,
-    "redirect-uris": [
-      "https://*.cfapps.us10-001.hana.ondemand.com/**"
-    ]
-  },
-  "xsenableasyncservice": "true",
-  "attributes": []
+  ]
 }
+

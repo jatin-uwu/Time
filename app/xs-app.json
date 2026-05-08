@@ -1,6 +1,8 @@
 {
   "welcomeFile": "/index.html",
   "authenticationMethod": "route",
+  "logoutEndpoint": "/logout",
+  "logoutPage": "/index.html",
   "routes": [
     {
       "source": "^/employee/(.*)$",
@@ -15,10 +17,17 @@
       "csrfProtection": false
     },
     {
+      "source": "^/hr/(.*)$",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa",
+      "csrfProtection": false
+    },
+    {
       "source": "^(.*)$",
       "target": "$1",
       "localDir": "webapp",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "cacheControl": "no-cache, no-store, must-revalidate"
     }
   ]
 }

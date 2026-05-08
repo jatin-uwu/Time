@@ -130,9 +130,16 @@ sap.ui.define([
             this._oHistViewModel.setProperty("/days", days);
             this._oCurrentWeekStart = weekStart;
 
-            const oHistoryModel = this.getOwnerComponent().getModel("history");
+            const oComp         = this.getOwnerComponent();
+            const oHistoryModel = oComp.getModel("history");
             const submissions   = oHistoryModel.getProperty("/submissions") || [];
-            const submission    = submissions.find(s => s.weekStart === sWeekStart);
+            const sMyId         = oComp.getCurrentEmployeeId();
+            // Only the user's own submissions, so a manager opening
+            // History sees their own weeks (not their reportees').
+            const submission    = submissions.find(s =>
+                s.weekStart === sWeekStart &&
+                (!s.submittedBy || s.submittedBy === sMyId)
+            );
 
             const oTable = this.byId("histTable");
 

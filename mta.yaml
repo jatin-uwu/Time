@@ -85,5 +85,9 @@ resources:
             description: 'generated'
             role-template-references:
               - '$XSAPPNAME.Manager'
+          - name: 'HR (Timesheet ${org}-${space})'
+            description: 'generated'
+            role-template-references:
+              - '$XSAPPNAME.HR'
     requires:
       - name: app-api

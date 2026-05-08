@@ -95,6 +95,24 @@
                             style="background:transparent; color:#cbd5e1;">
                             <customData><core:CustomData key="target" value="task-status" /></customData>
                         </StandardListItem>
+
+                        <!-- HR-only entries -->
+                        <StandardListItem title="Add Employee"
+                            icon="sap-icon://add-employee"
+                            type="Active"
+                            press=".onNavSelect"
+                            visible="{= ${appView>/userRole} === 'hr'}"
+                            style="background:transparent; color:#cbd5e1;">
+                            <customData><core:CustomData key="target" value="add-employee" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="All Employees"
+                            icon="sap-icon://employee"
+                            type="Active"
+                            press=".onNavSelect"
+                            visible="{= ${appView>/userRole} === 'hr'}"
+                            style="background:transparent; color:#cbd5e1;">
+                            <customData><core:CustomData key="target" value="all-employees" /></customData>
+                        </StandardListItem>
                     </items>
                 </List>
 

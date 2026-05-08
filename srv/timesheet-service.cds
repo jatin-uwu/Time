@@ -62,6 +62,23 @@ service EmployeeService @(path:'/employee') {
     @(requires: 'authenticated-user')
     action getUserRole() returns { role: String };
 
+    // Returns the currently authenticated user resolved against the
+    // EmployeeMaster table by email. Frontend uses this to show the
+    // *real* employee record (greeting, profile, manager linkage)
+    // instead of the hard-coded EMP1001/EMP1005 fallback.
+    @(requires: 'authenticated-user')
+    action getCurrentUser() returns {
+        email           : String(255);
+        role            : String;
+        employeeId      : String(10);
+        employeeName    : String(100);
+        designation     : String(100);
+        address         : String(255);
+        mobileNumber    : String(20);
+        managerId       : String(10);
+        isActive        : Boolean;
+    };
+
     // Single-shot download of the manager-attached file. Streams the
     // current bytes back as base64 and immediately clears them from
     // HANA so storage is freed and the file can only be downloaded once.
@@ -110,4 +127,67 @@ service ManagerService @(path:'/manager') @(requires: 'Manager') {
         mimeType   : String(100),
         dataBase64 : LargeString
     ) returns String;
+}
+// ── HR Service ───────────────────────────────────────────────────────────────
+// Service-level @requires gates EVERY entity and action behind the HR scope.
+// Backs the "Add Employee" form and the "All Employees" directory page.
+service HRService @(path:'/hr') @(requires: 'HR') {
+
+    // Full CRUD on the employee master.
+    @odata.draft.enabled
+    entity Employees as projection on db.timesheet.EmployeeMaster;
+
+    // All uploaded documents — exposed so the AllEmployees details
+    // pane can list/download them and AddEmployee can POST new ones.
+    entity Documents as projection on db.timesheet.EmployeeDocument;
+
+    // Generates the next sequential employeeId (e.g. EMP1008).
+    // Used by the AddEmployee form when the user clicks "Save".
+    action nextEmployeeId() returns String;
+
+    // Convenience wrapper that creates an EmployeeMaster row with an
+    // auto-assigned id and returns the new id. The frontend can also
+    // POST directly to /hr/Employees if it prefers.
+    action addEmployee(
+        employeeName       : String(100),
+        designation        : String(50),
+        email              : String(100),
+        address            : String(255),
+        mobileNumber       : String(15),
+        managerEmployeeId  : String(10),
+        dateOfBirth        : Date,
+        gender             : String(10),
+        department         : String(50),
+        joiningDate        : Date,
+        employmentType     : String(20),
+        aadhaarNumber      : String(20),
+        panNumber          : String(15),
+        emergencyContact   : String(15),
+        bloodGroup         : String(5),
+        bankAccountNumber  : String(30),
+        bankName           : String(60),
+        bankIfsc           : String(15)
+    ) returns {
+        employeeId : String(10);
+    };
+
+    // Single document upload. dataBase64 is the file body without the
+    // "data:...;base64," prefix. Returns the new documentId.
+    action uploadEmployeeDocument(
+        employeeId   : String(10),
+        documentType : String(40),
+        fileName     : String(255),
+        mimeType     : String(100),
+        description  : String(255),
+        dataBase64   : LargeString
+    ) returns String;
+
+    // Single-shot download of an uploaded document — same pattern as
+    // consumeTaskAttachment but it does NOT clear the bytes (HR may
+    // need to download a doc multiple times).
+    action getEmployeeDocument(documentId : String(20)) returns {
+        fileName   : String(255);
+        mimeType   : String(100);
+        dataBase64 : LargeString;
+    };
 }
