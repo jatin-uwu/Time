@@ -66,6 +66,18 @@ sap.ui.define([
             });
             this.getView().setModel(this._oHistViewModel, "histView");
             this.getView().setModel(this.getOwnerComponent().getModel("history"), "history");
+
+            // Block future weeks on the welcome calendar.
+            this.getView().addEventDelegate({
+                onAfterRendering: () => {
+                    const oCal = this.byId("histCenterCalendar");
+                    if (oCal && oCal.setMaxDate) {
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        oCal.setMaxDate(today);
+                    }
+                }
+            });
         },
 
         // ── Calendar toggle ──────────────────────────────────────────────
@@ -89,10 +101,22 @@ sap.ui.define([
             const oStart = aDates[0].getStartDate();
             if (!oStart) return;
 
+            // Reject any pick whose week starts AFTER the current week.
+            const today           = new Date(); today.setHours(0, 0, 0, 0);
+            const currentWeek     = getWeekStart(today);
+            const pickedWeek      = getWeekStart(new Date(oStart));
+            if (pickedWeek.getTime() > currentWeek.getTime()) {
+                sap.ui.require(["sap/m/MessageToast"], (MessageToast) => {
+                    MessageToast.show("Future weeks can't be opened — please pick today or earlier.");
+                });
+                oCal.removeAllSelectedDates();
+                return;
+            }
+
             // Mark week as selected so the table view becomes visible
             this._oHistViewModel.setProperty("/weekSelected", true);
             this._oHistViewModel.setProperty("/showCalendar", false);
-            this._loadWeekData(getWeekStart(new Date(oStart)));
+            this._loadWeekData(pickedWeek);
         },
 
         _loadWeekData(weekStart) {

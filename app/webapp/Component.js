@@ -12,6 +12,21 @@ sap.ui.define([
         init() {
             UIComponent.prototype.init.apply(this, arguments);
 
+            // Honour ?role=employee|manager in the URL (query string OR
+            // first segment of the hash) so power users can deep-link
+            // into a specific role without flipping localStorage manually.
+            try {
+                const params = new URLSearchParams(window.location.search);
+                let sRole = params.get("role");
+                if (!sRole && window.location.hash) {
+                    const hashQ = window.location.hash.split("?")[1];
+                    if (hashQ) sRole = new URLSearchParams(hashQ).get("role");
+                }
+                if (sRole && (sRole === "employee" || sRole === "manager")) {
+                    localStorage.setItem("tsRole", sRole);
+                }
+            } catch (e) { /* ignore — non-blocking */ }
+
             // Restore persisted data so history survives page refresh
             this.setModel(new JSONModel(this._fromStorage("tsHistory",        { submissions: [] })), "history");
             this.setModel(new JSONModel(this._fromStorage("tsLocked",         {})),                  "locked");
