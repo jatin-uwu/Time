@@ -30,12 +30,16 @@
                 "Employee"
               ]
             },
-            "emp1": {
+            "punit": {
+              "password": "punit",
+              "roles": ["Employee"]
+            },
+            "Neha": {
               "roles": [
                 "Employee"
               ]
             },
-            "mgr1": {
+            "Founder": {
               "roles": [
                 "Manager"
               ]

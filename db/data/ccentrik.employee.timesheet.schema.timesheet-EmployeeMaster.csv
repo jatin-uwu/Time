@@ -1,7 +1,7 @@
 employeeId,employeeName,designation,email,address,mobileNumber,manager_employeeId,isActive
 EMP1001,Jatin Bajaj,Developer,jatin.bajaj@ccentrik.com,Delhi India,9876543210,EMP1005,true
-EMP1002,Rahul Sharma,HR,rahul.sharma@ccentrik.com,Mumbai India,9876543211,EMP1005,true
+EMP1002,Punit Sharma,HR,punit.sharma@ccentrik.com,Gwalior India,9876543211,EMP1005,true
 EMP1003,Neha Kapoor,Sales Executive,neha.kapoor@ccentrik.com,Gurgaon India,9876543212,EMP1006,true
 EMP1004,Ankit Verma,Accountant,ankit.verma@ccentrik.com,Noida India,9876543213,EMP1005,true
-EMP1005,Pankaj Sir,Manager,pankaj@ccentrik.com,Delhi India,9876543214,EMP1006,true
+EMP1005,Vineet,Manager,vineet@ccentrik.com,Delhi India,9876543214,EMP1006,true
 EMP1006,Founder Member,Founder,founder@ccentrik.com,Delhi India,9876543215,,true

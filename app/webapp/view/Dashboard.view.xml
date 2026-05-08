@@ -14,7 +14,7 @@
                 <!-- ── Greeting ── -->
                 <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsDashGreetingRow">
                     <VBox>
-                        <Title text="{dash>/greeting}" level="H4" class="sapUiTinyMarginBegin sapUiTinyMarginTop sapUiTinyMarginBottom" />
+                        <Title text="{dash>/greeting}" level="H4" class="sapUiSmallMarginBegin sapUiTinyMarginTop sapUiTinyMarginBottom" />
                         <Text text="Here's your timesheet activity" class="sapUiSmallMarginBegin sapUiTinyMarginTop sapUiSmallMarginBottom" />
                     </VBox>
                     <Text text="{dash>/todayLabel}" class="tsDashDateLabel" />
@@ -26,7 +26,7 @@
                     <ToolbarSpacer />
                     <Button icon="sap-icon://navigation-left-arrow" type="Transparent" press=".onPrevWeek" />
                     <Button text="Today" type="Transparent" press=".onToday" />
-                    <Button icon="sap-icon://navigation-right-arrow" type="Transparent" press=".onNextWeek" />
+                    <Button icon="sap-icon://navigation-right-arrow" type="Transparent" press=".onNextWeek" enabled="{= !${dash>/isNextDisabled} }" />
                 </Toolbar>
 
                 <!-- ── Full dashboard grid rendered by controller ── -->

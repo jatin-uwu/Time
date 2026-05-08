@@ -111,6 +111,14 @@ sap.ui.define([
 
         onToday() { this._setWeek(new Date()); },
 
+        //Added to stop viewing future dates added on 07-may
+        isCurrentOrFutureWeek(sWeekStart) {
+        const today = getWeekStart(new Date());
+        const current = new Date(sWeekStart);
+        return current >= today;
+        },
+        //end of add code
+
         _setWeek(date) {
             const weekStart  = getWeekStart(date);
             const weekEnd    = new Date(weekStart);
@@ -118,6 +126,7 @@ sap.ui.define([
             const sWeekStart = toDateString(weekStart);
             this._oDashModel.setProperty("/weekStart", sWeekStart);
             this._oDashModel.setProperty("/weekLabel", `${toShortLabel(weekStart)} – ${toShortLabel(weekEnd)}`);
+            this._oDashModel.setProperty("/isNextDisabled", this.isCurrentOrFutureWeek(sWeekStart)); //added 07 may
             this._computeWeekHours(sWeekStart);
         },
 
