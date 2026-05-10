@@ -245,6 +245,15 @@ sap.ui.define([
             }
         },
 
+        //Added a edit button functionality on 07 may
+        onEditWeek() {
+            if (!this._sCurrentWeekStart) return;
+            // Set flag to bypass min week validation for rejected edit
+            this.getOwnerComponent()._pendingWeekStart = this._sCurrentWeekStart;
+            this.getOwnerComponent()._isRejectedEdit   = true;
+            this.getOwnerComponent().getRouter().navTo("timesheet");
+        },
+
         _unlockWeek(sWeekStart) {
             const oLocksModel = this.getOwnerComponent().getModel("locked");
             const allLocks    = oLocksModel.getData();

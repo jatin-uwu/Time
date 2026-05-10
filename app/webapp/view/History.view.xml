@@ -28,10 +28,18 @@
             <VBox visible="{histView>/weekSelected}" class="tsHistContainer">
 
                 <!-- Week selector bar -->
-                <HBox alignItems="Center" class="tsHistWeekBar">
+                <HBox alignItems="Center" class="tsHistWeekBar" justifyContent="SpaceBetween" style="width:100%;">
+                    <HBox alignItems="Center">
                     <Button icon="sap-icon://calendar" type="Transparent"
                         tooltip="Select a different week" press=".onCalendarToggle" />
                     <Text text="{histView>/selectedWeekLabel}" class="tsHistWeekLabel" />
+                    </HBox>
+                    <Button text="Edit"
+                            icon="sap-icon://edit"
+                            type="Emphasized"
+                            visible="{= ${histView>/status} === 'Rejected'}"
+                            press=".onEditWeek"
+                            style="margin-right:32px;" />
                 </HBox>
 
                 <!-- Read-only table. Last 2 rows = Day Total + Status (fixedBottomRowCount set in controller) -->

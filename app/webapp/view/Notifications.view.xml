@@ -48,10 +48,9 @@
                       items="{notifView>/notifications}"
                       mode="None"
                       showSeparators="None"
-                      itemPress=".onNotifPress"
                       class="tsNotifList">
 
-                    <CustomListItem type="Navigation"
+                    <CustomListItem type="Inactive"
                                     class="{= ${notifView>read} ? 'tsNotifItem tsNotifRead' : 'tsNotifItem tsNotifUnread' }">
 
                         <HBox class="tsNotifCard" alignItems="Start" justifyContent="SpaceBetween" width="100%">

@@ -1,9 +1,13 @@
 employeeId,employeeName,designation,email,address,mobileNumber,manager_employeeId,isActive,dateOfBirth,gender,department,joiningDate,employmentType,aadhaarNumber,panNumber,status,emergencyContact,bloodGroup,bankAccountNumber,bankName,bankIfsc
 EMP1001,Jatin Bajaj,Developer,jatin.bajaj@ccentrik.com,Delhi India,9876543210,EMP1005,true,1998-04-12,Male,Engineering,2023-06-01,Permanent,123456789011,ABCPB1234D,Active,9000000001,O+,123456780011,HDFC Bank,HDFC0000111
-EMP1002,Rahul Sharma,HR,rahul.sharma@ccentrik.com,Mumbai India,9876543211,EMP1005,true,1995-03-18,Male,Human Resources,2022-01-10,Permanent,123456789012,ABCPS1234E,Active,9000000002,B+,123456780012,ICICI Bank,ICIC0000222
+EMP1002,Punit Sharma,HR,punit.sharma@ccentrik.com,Gwalior India,9876543211,EMP1005,true,1995-03-18,Male,Human Resources,2022-01-10,Permanent,123456789012,ABCPS1234E,Active,9000000002,B+,123456780012,ICICI Bank,ICIC0000222
 EMP1003,Neha Kapoor,Sales Executive,neha.kapoor@ccentrik.com,Gurgaon India,9876543212,EMP1006,true,1996-08-22,Female,Sales,2021-09-15,Permanent,123456789013,ABCPK1234F,Active,9000000003,A+,123456780013,SBI,SBIN0000333
 EMP1004,Ankit Verma,Accountant,ankit.verma@ccentrik.com,Noida India,9876543213,EMP1005,true,1994-11-04,Male,Finance,2020-04-01,Permanent,123456789014,ABCPV1234G,Active,9000000004,O-,123456780014,Axis Bank,UTIB0000444
+<<<<<<< HEAD
+EMP1005,Vineet,Manager,vineet@ccentrik.com,Delhi India,9876543214,EMP1006,true
+=======
 EMP1005,Vineet,Manager,Vineet@ccentrik.com,Delhi India,9876543214,EMP1006,true,1985-02-11,Male,Engineering,2018-07-20,Permanent,123456789015,ABCPV1234H,Active,9000000005,B-,123456780015,HDFC Bank,HDFC0000555
+>>>>>>> 7ecf592dda430abef083eca0b778e151c082153d
 EMP1006,Founder Member,Founder,founder@ccentrik.com,Delhi India,9876543215,,true,1980-01-01,Male,Executive,2015-03-10,Permanent,,,Active,9000000006,A-,,,
 EMP1007,Punit Sharma,Developer,punit.sharma@ccentrik.com,Delhi India,9876543216,EMP1005,true,1999-09-09,Male,Engineering,2024-02-15,Permanent,123456789017,ABCPS1234I,Active,9000000007,O+,123456780017,HDFC Bank,HDFC0000777
 EMP1008,Priya Singh,HR Manager,priya.singh@ccentrik.com,Bangalore India,9876543217,EMP1006,true,1990-05-25,Female,Human Resources,2019-11-05,Permanent,123456789018,ABCPS1234J,Active,9000000008,AB+,123456780018,Kotak Bank,KKBK0000888
