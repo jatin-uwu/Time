@@ -123,17 +123,6 @@
                       visible="false"
                       style="background:transparent;" />
 
-                <footer>
-                    <OverflowToolbar style="background:#1e293b; border-top:1px solid #334155;">
-                        <Button text="Log Out"
-                                icon="sap-icon://log"
-                                type="Ghost"
-                                press=".onLogout" 
-                                style="color:#94a3b8; border:none; background:transparent;" />
-                    </OverflowToolbar>
-                </footer>
-                
-
             </Page>
         </masterPages>
 
