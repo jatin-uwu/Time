@@ -1,8 +1,10 @@
 {
   "welcomeFile": "/index.html",
   "authenticationMethod": "route",
-  "logoutEndpoint": "/logout",
-  "logoutPage": "/index.html",
+  "logout": {
+    "logoutEndpoint": "/logout",
+    "logoutPage": "/index.html"
+  },
   "routes": [
     {
       "source": "^/employee/(.*)$",
