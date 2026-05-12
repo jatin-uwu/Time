@@ -18,7 +18,6 @@
                              placeholder="Search by name, email, ID, dept..."
                              liveChange=".onSearch"
                              width="320px" />
-                <Button icon="sap-icon://refresh" tooltip="Reload" press=".onRefresh" />
                 <Button icon="sap-icon://add-employee" text="Add" type="Emphasized" press=".onAdd" />
             </Toolbar>
 
@@ -28,11 +27,11 @@
                 <!-- LEFT: Table -->
                 <t:Table id="empTable"
                          rows="{emp>/filtered}"
-                         visibleRowCountMode="Auto"
+                         
                          selectionMode="Single"
                          selectionBehavior="Row"
                          alternateRowColors="true"
-                         rowHeight="42"
+                        
                          rowSelectionChange=".onRowSelect">
                     <t:columns>
                         <t:Column width="6rem" sortProperty="employeeId">
@@ -70,7 +69,7 @@
                     <l:SplitterLayoutData size="auto" />
                 </l:layoutData>
                 <Panel headerText="Employee Profile" expandable="false" class="sapUiTinyMargin">
-                    <l:layoutData><l:SplitterLayoutData size="420px" minSize="320" /></l:layoutData>
+                    <layoutData><l:SplitterLayoutData size="420px" minSize="320" /></layoutData>
 
                     <VBox visible="{= !${detail>/hasSelection} }" class="sapUiMediumMargin" alignItems="Center">
                         <core:Icon src="sap-icon://employee" size="2.5rem" color="#9ca3af" />

@@ -26,6 +26,14 @@ entity EmployeeMaster : managed {
     emergencyContact    : String(15);
     bloodGroup          : String(5);
 
+    // ── New fields ─────────────────────────────────────────────────
+    workLocation        : String(50);
+    maritalStatus       : String(20);   // Single / Married / Divorced / Widowed
+    fatherName          : String(100);  // shown when Single
+    partnerName         : String(100);  // shown when Married
+    marriageDate        : Date;         // shown when Married
+    hasKids             : String(5);    // Yes / No, shown when Married
+    
     // Bank details (kept inline; promote to a separate entity if you ever
     // need to support multiple bank accounts per employee).
     bankAccountNumber   : String(30);

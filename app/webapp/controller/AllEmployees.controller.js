@@ -10,6 +10,8 @@ sap.ui.define([
     return Controller.extend("timesheet.app.controller.AllEmployees", {
 
         onInit() {
+            this._bInitialized = false;
+
             this._oEmpModel    = new JSONModel({ items: [], filtered: [] });
             this._oDetailModel = new JSONModel({ hasSelection: false, emp: {}, docs: [], managerName: "" });
 
@@ -22,6 +24,12 @@ sap.ui.define([
         },
 
         _onRouteMatched() {
+            if (this._bInitialized) {
+                // View already exists — just refresh data, don't recreate
+                this._loadEmployees();
+                return;
+            }
+            this._bInitialized = true;
             this._loadEmployees();
         },
 
@@ -40,12 +48,10 @@ sap.ui.define([
                 })
                 .catch(err => {
                     MessageToast.show("Could not load employees.");
-                    // eslint-disable-next-line no-console
                     console.error(err);
                 });
         },
 
-        // ── Live search across the most-relevant fields ──────────────────
         onSearch(oEvent) {
             const sQ = (oEvent.getParameter("newValue") || "").toLowerCase().trim();
             const all = this._oEmpModel.getProperty("/items") || [];
@@ -60,7 +66,6 @@ sap.ui.define([
             this._oEmpModel.setProperty("/filtered", filtered);
         },
 
-        // ── Selection → load detail + documents ──────────────────────────
         onRowSelect(oEvent) {
             const oRow = oEvent.getParameter("rowContext");
             if (!oRow) return;
@@ -104,7 +109,6 @@ sap.ui.define([
                 .catch(() => { });
         },
 
-        // ── Document download (one-shot) ─────────────────────────────────
         onDownloadDoc(oEvent) {
             const oItem = oEvent.getSource();
             const aData = oItem.getCustomData();

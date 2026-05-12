@@ -39,7 +39,7 @@ sap.ui.define([
 
             this._oAppModel = new JSONModel({
                 unreadCount:    0,
-                userRole:       sInitRole === "manager" ? "manager" : "employee",
+                userRole:      ["manager", "employee", "hr"].includes(sInitRole) ? sInitRole : "employee",
                 userName:       "",
                 userInitials:   "JD",
                 userProfile:    null
@@ -58,11 +58,9 @@ sap.ui.define([
             if (oComp.getCurrentUser) {
                 oComp.getCurrentUser().then(u => {
                     if (bExplicit) return;
-                    if (u && u.role && u.role !== "unknown") {
-                        this._oAppModel.setProperty("/userRole", u.role);
-                        this._refreshUnreadCount();
-                    }
-                });
+                     const sRole = u && (u.role || (u.value && u.value.role));
+                     if (sRole) this._oAppModel.setProperty("/userRole", sRole.toLowerCase());
+                })
             }
 
             this.getOwnerComponent().getRouter().attachRouteMatched(this._onRouteMatched, this);
@@ -240,7 +238,9 @@ sap.ui.define([
                 manager:          "mainNavList",
                 "task-assignment": "mainNavList",
                 "task-status":    "mainNavList",
-                notifications:    "mainNavList"
+                notifications:    "mainNavList",
+                "add-employee":     "mainNavList",
+                "all-employees":    "mainNavList" 
             };
 
             ["mainNavList", "managerNavList", "accountNavList"].forEach(sId => {
@@ -309,6 +309,7 @@ sap.ui.define([
 
         onNavSelect(oEvent) {
             const sTarget = oEvent.getSource().data("target");
+            console.log("Navigating to :", sTarget)
             if (sTarget) {
                 this.getOwnerComponent().getRouter().navTo(sTarget);
             }

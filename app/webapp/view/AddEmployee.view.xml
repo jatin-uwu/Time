@@ -9,7 +9,6 @@
     displayBlock="true">
 
     <Page id="addEmpPage" title="Add New Employee" class="tsHrPage" showNavButton="false">
-
         <content>
             <ObjectHeader title="New Employee" intro="HR · Onboarding" responsive="true" class="sapUiSmallMargin" />
 
@@ -31,23 +30,23 @@
                             <f:FormElement label="Mobile *">
                                 <f:fields><Input id="inpMobile" value="{form>/mobileNumber}" type="Tel" required="true" maxLength="15" placeholder="9876543210" /></f:fields>
                             </f:FormElement>
-                            <f:FormElement label="Date of Birth">
-                                <f:fields><DatePicker value="{form>/dateOfBirth}" valueFormat="yyyy-MM-dd" displayFormat="long" /></f:fields>
+                            <f:FormElement label="Date of Birth *">
+                                <f:fields><DatePicker id="inpDOB" value="{form>/dateOfBirth}" valueFormat="yyyy-MM-dd" displayFormat="long" /></f:fields>
                             </f:FormElement>
-                            <f:FormElement label="Gender">
+                            <f:FormElement label="Gender *">
                                 <f:fields>
-                                    <Select selectedKey="{form>/gender}">
-                                        <core:Item key="" text="—" />
+                                    <Select id="selGender" selectedKey="{form>/gender}">
+                                        <core:Item key="" text="— Select —" />
                                         <core:Item key="Male" text="Male" />
                                         <core:Item key="Female" text="Female" />
                                         <core:Item key="Other" text="Other" />
                                     </Select>
                                 </f:fields>
                             </f:FormElement>
-                            <f:FormElement label="Blood Group">
+                            <f:FormElement label="Blood Group *">
                                 <f:fields>
-                                    <Select selectedKey="{form>/bloodGroup}">
-                                        <core:Item key="" text="—" />
+                                    <Select id="selBlood" selectedKey="{form>/bloodGroup}">
+                                        <core:Item key="" text="— Select —" />
                                         <core:Item key="A+" text="A+" />
                                         <core:Item key="A-" text="A-" />
                                         <core:Item key="B+" text="B+" />
@@ -59,11 +58,46 @@
                                     </Select>
                                 </f:fields>
                             </f:FormElement>
-                            <f:FormElement label="Address">
-                                <f:fields><TextArea rows="2" value="{form>/address}" maxLength="255" /></f:fields>
+                            <f:FormElement label="Address *">
+                                <f:fields><TextArea id="inpAddress" rows="2" value="{form>/address}" maxLength="255" placeholder="Full residential address" /></f:fields>
                             </f:FormElement>
                             <f:FormElement label="Emergency Contact">
-                                <f:fields><Input value="{form>/emergencyContact}" type="Tel" maxLength="15" /></f:fields>
+                                <f:fields><Input id="inpEmergency" value="{form>/emergencyContact}" type="Tel" maxLength="15" placeholder="Optional · 10-digit number" /></f:fields>
+                            </f:FormElement>
+
+                            <!-- ── Marital Status ── -->
+                            <f:FormElement label="Marital Status *">
+                                <f:fields>
+                                    <Select id="selMarital" selectedKey="{form>/maritalStatus}" change=".onMaritalChange">
+                                        <core:Item key="" text="— Select —" />
+                                        <core:Item key="Single" text="Single" />
+                                        <core:Item key="Married" text="Married" />
+                                        <core:Item key="Divorced" text="Separate" />
+                                        <core:Item key="Widowed" text="Widow / Widower" />
+                                    </Select>
+                                </f:fields>
+                            </f:FormElement>
+
+                            <!-- Single → Father Name -->
+                            <f:FormElement label="Father Name *" visible="{= ${form>/maritalStatus} === 'Single' }">
+                                <f:fields><Input id="inpFatherName" value="{form>/fatherName}" maxLength="100" placeholder="Father's full name" /></f:fields>
+                            </f:FormElement>
+
+                            <!-- Married fields -->
+                            <f:FormElement label="Partner Name *" visible="{= ${form>/maritalStatus} === 'Married' }">
+                                <f:fields><Input id="inpPartnerName" value="{form>/partnerName}" maxLength="100" placeholder="Spouse full name" /></f:fields>
+                            </f:FormElement>
+                            <f:FormElement label="Marriage Date *" visible="{= ${form>/maritalStatus} === 'Married' }">
+                                <f:fields><DatePicker id="inpMarriageDate" value="{form>/marriageDate}" valueFormat="yyyy-MM-dd" displayFormat="long" /></f:fields>
+                            </f:FormElement>
+                            <f:FormElement label="Children *" visible="{= ${form>/maritalStatus} === 'Married' }">
+                                <f:fields>
+                                    <Select id="selKids" selectedKey="{form>/hasKids}">
+                                        <core:Item key="" text="— Select —" />
+                                        <core:Item key="Yes" text="Yes" />
+                                        <core:Item key="No" text="No" />
+                                    </Select>
+                                </f:fields>
                             </f:FormElement>
                         </f:formElements>
                     </f:FormContainer>
@@ -72,24 +106,40 @@
                     <f:FormContainer title="Employment">
                         <f:formElements>
                             <f:FormElement label="Designation *">
-                                <f:fields><Input id="inpDesig" value="{form>/designation}" required="true" maxLength="50" /></f:fields>
+                                <f:fields><Input id="inpDesig" value="{form>/designation}" required="true" maxLength="50" placeholder="e.g. Software Developer" /></f:fields>
                             </f:FormElement>
-                            <f:FormElement label="Department">
-                                <f:fields><Input value="{form>/department}" maxLength="50" placeholder="Engineering" /></f:fields>
+                            <f:FormElement label="Department *">
+                                <f:fields><Input id="inpDept" value="{form>/department}" maxLength="50" placeholder="e.g. Engineering" /></f:fields>
                             </f:FormElement>
-                            <f:FormElement label="Joining Date">
-                                <f:fields><DatePicker value="{form>/joiningDate}" valueFormat="yyyy-MM-dd" displayFormat="long" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Employment Type">
+                            <f:FormElement label="Work Location *">
                                 <f:fields>
-                                    <Select selectedKey="{form>/employmentType}">
+                                    <Select id="selLocation" selectedKey="{form>/workLocation}">
+                                        <core:Item key="" text="— Select Location —" />
+                                        <core:Item key="Delhi" text="Delhi (HQ)" />
+                                        <core:Item key="Mumbai" text="Mumbai" />
+                                        <core:Item key="Bangalore" text="Bangalore" />
+                                        <core:Item key="Hyderabad" text="Hyderabad" />
+                                        <core:Item key="Chennai" text="Chennai" />
+                                        <core:Item key="Gurgaon" text="Gurgaon" />
+                                        <core:Item key="Noida" text="Noida" />
+                                        <core:Item key="Remote" text="Remote" />
+                                    </Select>
+                                </f:fields>
+                            </f:FormElement>
+                            <f:FormElement label="Joining Date *">
+                                <f:fields><DatePicker id="inpJoining" value="{form>/joiningDate}" valueFormat="yyyy-MM-dd" displayFormat="long" /></f:fields>
+                            </f:FormElement>
+                            <f:FormElement label="Employment Type *">
+                                <f:fields>
+                                    <Select id="selEmpType" selectedKey="{form>/employmentType}">
+                                        <core:Item key="" text="— Select —" />
                                         <core:Item key="Permanent" text="Permanent" />
                                         <core:Item key="Contract"  text="Contract" />
                                         <core:Item key="Intern"    text="Intern" />
                                     </Select>
                                 </f:fields>
                             </f:FormElement>
-                            <f:FormElement label="Reporting Manager">
+                            <f:FormElement label="Reporting Manager *">
                                 <f:fields>
                                     <ComboBox id="cmbManager"
                                               selectedKey="{form>/managerEmployeeId}"
@@ -101,14 +151,14 @@
                         </f:formElements>
                     </f:FormContainer>
 
-                    <!-- ── Government IDs ── -->
+                    <!-- ── Identity ── -->
                     <f:FormContainer title="Identity">
                         <f:formElements>
-                            <f:FormElement label="Aadhaar Number">
-                                <f:fields><Input value="{form>/aadhaarNumber}" maxLength="20" placeholder="0000-0000-0000" /></f:fields>
+                            <f:FormElement label="Aadhaar Number *">
+                                <f:fields><Input id="inpAadhaar" value="{form>/aadhaarNumber}" maxLength="20" placeholder="12-digit number" /></f:fields>
                             </f:FormElement>
-                            <f:FormElement label="PAN Number">
-                                <f:fields><Input value="{form>/panNumber}" maxLength="15" placeholder="ABCPB1234D" /></f:fields>
+                            <f:FormElement label="PAN Number *">
+                                <f:fields><Input id="inpPan" value="{form>/panNumber}" maxLength="15" placeholder="ABCPB1234D" /></f:fields>
                             </f:FormElement>
                         </f:formElements>
                     </f:FormContainer>
@@ -116,68 +166,105 @@
                     <!-- ── Bank ── -->
                     <f:FormContainer title="Bank Details">
                         <f:formElements>
-                            <f:FormElement label="Account Number">
-                                <f:fields><Input value="{form>/bankAccountNumber}" maxLength="30" /></f:fields>
+                            <f:FormElement label="Account Number *">
+                                <f:fields><Input id="inpBankAcc" value="{form>/bankAccountNumber}" maxLength="30" placeholder="9-18 digit account number" /></f:fields>
                             </f:FormElement>
-                            <f:FormElement label="Bank Name">
-                                <f:fields><Input value="{form>/bankName}" maxLength="60" /></f:fields>
+                            <f:FormElement label="Bank Name *">
+                                <f:fields><Input id="inpBankName" value="{form>/bankName}" maxLength="60" placeholder="e.g. SBI Bank" /></f:fields>
                             </f:FormElement>
-                            <f:FormElement label="IFSC">
-                                <f:fields><Input value="{form>/bankIfsc}" maxLength="15" /></f:fields>
+                            <f:FormElement label="IFSC *">
+                                <f:fields><Input id="inpIfsc" value="{form>/bankIfsc}" maxLength="15" placeholder="e.g. SBIN0000111" /></f:fields>
                             </f:FormElement>
                         </f:formElements>
                     </f:FormContainer>
 
                     <!-- ── Documents ── -->
+                    <!-- ── Documents ── -->
                     <f:FormContainer title="Documents">
-                        <f:formElements>
-                            <f:FormElement label="Document Type">
-                                <f:fields>
-                                    <Select id="docTypeSel" selectedKey="Aadhaar">
-                                        <core:Item key="Aadhaar"     text="Aadhaar Card" />
-                                        <core:Item key="PAN"         text="PAN Card" />
-                                        <core:Item key="Resume"      text="Resume" />
-                                        <core:Item key="Certificate" text="Educational Certificate" />
-                                        <core:Item key="Photo"       text="Passport Photo" />
-                                        <core:Item key="Other"       text="Other" />
+    <f:formElements>
+        <f:FormElement>
+            <f:fields>
+                <VBox>
+
+                    <HBox alignItems="Center"
+                          class="sapUiTinyMarginBottom"
+                          wrap="Wrap">
+
+                        <Select id="docTypeSel"
+                                selectedKey="Aadhaar"
+                                width="160px"
+                                class="sapUiTinyMarginEnd">
+                            <core:Item key="Aadhaar" text="Aadhaar Card"/>
+                            <core:Item key="PAN" text="PAN Card"/>
+                            <core:Item key="Resume" text="Resume"/>
+                            <core:Item key="Certificate" text="Certificate"/>
+                            <core:Item key="Photo" text="Photo"/>
+                            <core:Item key="Other" text="Other"/>
+                        </Select>
+
+                        <u:FileUploader
+                            id="docUploader"
+                            multiple="true"
+                            buttonOnly="true"
+                            buttonText="Add Files"
+                            icon="sap-icon://attachment"
+                            change=".onDocsSelected"
+                            class="sapUiTinyMarginEnd"/>
+
+                        <Text text="Max 5MB"
+                              class="sapUiTinyMarginBegin"/>
+                    </HBox>
+
+                    <Table id="pendingDocsTable"
+                           class="sapUiSizeCompact"
+                           items="{form>/pendingDocs}"
+                           noDataText="No files queued"
+                           showSeparators="Inner">
+
+                        <columns>
+                            <Column width="2rem"/>
+                            <Column><Text text="File"/></Column>
+                            <Column width="9rem"><Text text="Type"/></Column>
+                            <Column width="5rem"><Text text="Size"/></Column>
+                            <Column width="4rem"/>
+                        </columns>
+
+                        <items>
+                            <ColumnListItem>
+                                <cells>
+                                    <core:Icon src="sap-icon://attachment"/>
+                                    <Text text="{form>fileName}" wrapping="false"/>
+                                    <Select selectedKey="{form>documentType}">
+                                        <core:Item key="Aadhaar" text="Aadhaar"/>
+                                        <core:Item key="PAN" text="PAN"/>
+                                        <core:Item key="Resume" text="Resume"/>
+                                        <core:Item key="Certificate" text="Certificate"/>
+                                        <core:Item key="Photo" text="Photo"/>
+                                        <core:Item key="Other" text="Other"/>
                                     </Select>
-                                </f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Choose File(s)">
-                                <f:fields>
-                                    <u:FileUploader id="docUploader"
-                                                    multiple="true"
-                                                    buttonOnly="true"
-                                                    buttonText="Add files"
-                                                    icon="sap-icon://attachment"
-                                                    placeholder="No file chosen"
-                                                    change=".onDocsSelected" />
-                                </f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Pending uploads">
-                                <f:fields>
-                                    <List id="pendingDocsList" items="{form>/pendingDocs}" noDataText="No documents queued.">
-                                        <StandardListItem title="{form>fileName}"
-                                                          description="{form>documentType} · {form>sizeLabel}"
-                                                          icon="sap-icon://attachment"
-                                                          type="Active"
-                                                          press=".onRemovePendingDoc" />
-                                    </List>
-                                </f:fields>
-                            </f:FormElement>
-                        </f:formElements>
-                    </f:FormContainer>
+                                    <Text text="{form>sizeLabel}"/>
+                                    <Button icon="sap-icon://delete"
+                                            type="Transparent"
+                                            press=".onRemovePendingDoc"/>
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+
+                </VBox>
+            </f:fields>
+        </f:FormElement>
+    </f:formElements>
+</f:FormContainer>
                 </f:formContainers>
             </f:Form>
+
+            <Bar class="sapUiSmallMargin sapUiMediumMarginTop">
+                <contentRight>
+                    <Button text="Reset" press=".onReset" class="sapUiSmallMarginEnd" />
+                    <Button text="Save Employee" type="Emphasized" press=".onSave" busy="{form>/saving}" />
+                </contentRight>
+            </Bar>
         </content>
-
-        <footer>
-            <Toolbar>
-                <ToolbarSpacer />
-                <Button text="Reset" press=".onReset" />
-                <Button text="Save Employee" type="Emphasized" press=".onSave" busy="{form>/saving}" />
-            </Toolbar>
-        </footer>
     </Page>
-
 </mvc:View>

@@ -20,6 +20,17 @@
   "private": true,
   "cds": {
     "requires": {
+      "db": {
+      "[development]": {
+        "kind": "sqlite",
+        "credentials": {
+          "database": "db.sqlite"
+        }
+      },
+      "[production]": {
+        "kind": "hana"
+      }
+    },
       "auth": {
         "[production]": {
           "strategy": "JWT"
@@ -35,7 +46,7 @@
             },
             "punit": {
               "password": "punit",
-              "roles": ["Employee"]
+              "roles": ["HR"]
             },
             "Neha": {
               "roles": [

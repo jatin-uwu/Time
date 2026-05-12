@@ -20,3 +20,15 @@ File or Folder | Purpose
 ## Learn More
 
 Learn more at <https://cap.cloud.sap>.
+add emp - validations
+In add emp- marital status- if yes then partner name, marriage date, kids (yes or no)
+            work location.
+leave portal - every emp except cofounders 
+1. 6 months maternity leave, 2 working days paternity leave
+2. 21 total , 5 casual, 5 sick, 11 paid
+if emp didn't login for 3 consecutive days then manager should be notified and emp should get a mail.
+
+performance rating monthly- will be done by manager
+
+will figure out
+punch in - punchout
