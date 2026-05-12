@@ -499,6 +499,16 @@ sap.ui.define([
                 ]
             }).addStyleClass("tsProfileBody sapUiSmallMarginTop");
 
+            const oLogoutButton = new Button({
+                text: "Log Out",
+                icon: "sap-icon://log",
+                type: "Reject",
+                press: () => {
+                    this._oProfilePopover.close();
+                    this.onLogout();
+                }
+            }).addStyleClass("tsProfileLogoutButton sapUiMediumMarginTop");
+
             this._oProfilePopover = new ResponsivePopover({
                 title:       "My Profile",
                 placement:   "Bottom",         // sits directly below the avatar
@@ -507,7 +517,7 @@ sap.ui.define([
                 showHeader:  true,
                 showCloseButton: true,
                 content: [
-                    new VBox({ items: [oHeader, oBody] })
+                    new VBox({ items: [oHeader, oBody, oLogoutButton] })
                         .addStyleClass("tsProfileDialogWrap sapUiContentPadding")
                 ],
                 afterClose: () => {
