@@ -22,7 +22,7 @@ sap.ui.define([
                     const hashQ = window.location.hash.split("?")[1];
                     if (hashQ) sRole = new URLSearchParams(hashQ).get("role");
                 }
-                if (sRole && (sRole === "employee" || sRole === "manager")) {
+                if (sRole && (sRole === "employee" || sRole === "manager" || sRole === "hr")) {
                     localStorage.setItem("tsRole", sRole);
                 }
             } catch (e) { /* ignore — non-blocking */ }

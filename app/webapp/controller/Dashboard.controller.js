@@ -15,18 +15,15 @@ sap.ui.define([
         d.setHours(0, 0, 0, 0);
         return d;
     }
-
     function toDateString(date) {
         const y = date.getFullYear();
         const m = String(date.getMonth() + 1).padStart(2, "0");
         const d = String(date.getDate()).padStart(2, "0");
         return `${y}-${m}-${d}`;
     }
-
     function toShortLabel(date) {
         return `${date.getDate()} ${MONTHS[date.getMonth()]}`;
     }
-
     function parseHHMM(s) {
         if (!s || s === "") return 0;
         if (String(s).includes(":")) {
@@ -35,7 +32,6 @@ sap.ui.define([
         }
         return parseFloat(s) || 0;
     }
-
     function toHHMM(decimal) {
         const h = Math.floor(decimal);
         const m = Math.round((decimal - h) * 60);
@@ -44,6 +40,10 @@ sap.ui.define([
 
     return Controller.extend("timesheet.app.controller.Dashboard", {
 
+        // ─────────────────────────────────────────────────────────────────────
+        // onInit — initialise model with safe defaults for every card so no
+        // binding ever produces "undefined Days" / "undefined Pending" etc.
+        // ─────────────────────────────────────────────────────────────────────
         onInit() {
             const today     = new Date();
             const weekStart = getWeekStart(today);
@@ -51,150 +51,179 @@ sap.ui.define([
             weekEnd.setDate(weekStart.getDate() + 6);
 
             this._oDashModel = new JSONModel({
-                greeting:       "Hey",
-                todayLabel:     today.toLocaleDateString("en-GB", {
+                greeting:        "Hey",
+                todayLabel:      today.toLocaleDateString("en-GB", {
                     weekday: "long", day: "numeric", month: "long", year: "numeric"
                 }),
-                weekLabel:      `${toShortLabel(weekStart)} – ${toShortLabel(weekEnd)}`,
-                weekStart:      toDateString(weekStart),
-                dashGridHTML:   "",
-                weekTotalLabel: "0:00 hrs this week",
+                weekLabel:       `${toShortLabel(weekStart)} – ${toShortLabel(weekEnd)}`,
+                weekStart:       toDateString(weekStart),
+                dashGridHTML:    "",
+                weekTotalLabel:  "0:00 hrs this week",
+                isNextDisabled:  false,
                 completion: {
                     pct: 0, label: "0 of 5 days filled",
                     state: "None", hint: "Fill Mon–Fri to complete your timesheet"
+                },
+                // existing 3 cards
+                workAnniversary: { yearsCompleted: 0, joiningDate: null, message: "Welcome!", yearsLabel: "—" },
+                leaveBalance:    { casualLeave: 0, sickLeave: 0, annualLeave: 0, total: 0, usedPct: 0 },
+                myTasks:         { totalPending: 0, highPriorityCount: 0, inProgressCount: 0, notStartedCount: 0 },
+                // new cards
+                attendance: {
+                    attendancePercentage: 0,
+                    presentCount:         0,
+                    absentCount:          0,
+                    monthLabel:           "Month"
+                },
+                performanceRating: {
+                    ratingValue:    0,
+                    ratingCategory: "N/A"
+                },
+                performanceTrend: {
+                    selectedYear: String(today.getFullYear()),
+                    months:       Array(12).fill(null)
+                },
+                taskSummary: {
+                    total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0
                 }
             });
-            this.getView().setModel(this._oDashModel, "dash");
 
-            // Resolve the current user from EmployeeMaster so the greeting
-            // shows their actual name (e.g. "Hey, Jatin Bajaj") instead of
-            // a generic placeholder.
+            this.getView().setModel(this._oDashModel, "dash");
             this._loadGreeting();
 
             this.getOwnerComponent().getRouter()
                 .getRoute("dashboard")
                 .attachPatternMatched(this._onRouteMatched, this);
 
-            // After the page has rendered, force scroll to top so the
-            // greeting row is the first thing the user sees.
             this.getView().addEventDelegate({
                 onAfterRendering: () => this._scrollToTop()
             });
         },
 
+        // ─────────────────────────────────────────────────────────────────────
+        // Greeting
+        // ─────────────────────────────────────────────────────────────────────
         _loadGreeting() {
-            const oComp = this.getOwnerComponent();
-            if (!oComp) return;
+    const oComp = this.getOwnerComponent();
+    if (!oComp) return;
 
-            const setName = (name) => {
-                if (name) this._oDashModel.setProperty("/greeting", "Hey, " + name);
-            };
+    // ── Time-based greeting ───────────────────────────────────────
+    const hour = new Date().getHours();
+    const timeGreet = hour < 12 ? "Good Morning"
+                    : hour < 17 ? "Good Afternoon"
+                    :             "Good Evening";
 
-            // Prefer the backend-resolved JWT user (works in BTP).
-            if (oComp.getCurrentUser) {
-                oComp.getCurrentUser().then(u => {
-                    if (u && u.employeeName) { setName(u.employeeName); return; }
-                    // Fallback to the role-based directory lookup.
-                    if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
-                        oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
-                            if (emp && emp.employeeName) setName(emp.employeeName);
-                        });
-                    }
-                });
-                return;
-            }
+    const emoji = hour < 12 ? "☀️" : hour < 17 ? "👋" : "🌙";
+
+    // Set a default immediately so the greeting row is never blank
+    this._oDashModel.setProperty("/greeting",      timeGreet);
+    this._oDashModel.setProperty("/greetingEmoji", emoji);
+
+    const setName = (name) => {
+        if (name) {
+            this._oDashModel.setProperty("/greeting",      `${timeGreet}, ${name}!`);
+            this._oDashModel.setProperty("/greetingEmoji", emoji);
+        }
+    };
+
+    if (oComp.getCurrentUser) {
+        oComp.getCurrentUser().then(u => {
+            if (u && u.employeeName) { setName(u.employeeName); return; }
             if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
                 oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
                     if (emp && emp.employeeName) setName(emp.employeeName);
                 });
             }
-        },
+        });
+        return;
+    }
+    if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
+        oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
+            if (emp && emp.employeeName) setName(emp.employeeName);
+        });
+    }
+},
 
+        // ─────────────────────────────────────────────────────────────────────
+        // Route match — kick off all loaders
+        // ─────────────────────────────────────────────────────────────────────
         _onRouteMatched() {
             const sWeekStart = this._oDashModel.getProperty("/weekStart");
             this._computeStats();
-            this._computeWeekHours(sWeekStart);
-            // _refreshDash + _scrollToTop are called at the end of
-            // _computeWeekHours so all data is ready before painting.
+            this._computeWeekHours(sWeekStart);   // calls _refreshDash internally
+
+            // existing loaders
+            this._loadWorkAnniversary();
+            this._loadLeaveBalance();
+            this._loadMyTasks();
+
+            // new loaders
+            this._loadAttendance();
+            this._loadPerformanceRating();
+            this._loadPerformanceTrend();
+            this._loadTaskSummary();
         },
 
-        // ── Week Navigation ──────────────────────────────────────────────────
-
+        // ─────────────────────────────────────────────────────────────────────
+        // Week navigation (unchanged)
+        // ─────────────────────────────────────────────────────────────────────
         onPrevWeek() {
-            const s       = this._oDashModel.getProperty("/weekStart");
+            const s = this._oDashModel.getProperty("/weekStart");
             const [y,m,d] = s.split("-").map(Number);
             this._setWeek(new Date(y, m - 1, d - 7));
         },
-
         onNextWeek() {
-            const s       = this._oDashModel.getProperty("/weekStart");
+            const s = this._oDashModel.getProperty("/weekStart");
             const [y,m,d] = s.split("-").map(Number);
             this._setWeek(new Date(y, m - 1, d + 7));
         },
-
         onToday() { this._setWeek(new Date()); },
 
-        //Added to stop viewing future dates added on 07-may
         isCurrentOrFutureWeek(sWeekStart) {
-        const today = getWeekStart(new Date());
-        const current = new Date(sWeekStart);
-        return current >= today;
+            return new Date(sWeekStart) >= getWeekStart(new Date());
         },
-        //end of add code
 
         _setWeek(date) {
             const weekStart  = getWeekStart(date);
             const weekEnd    = new Date(weekStart);
             weekEnd.setDate(weekStart.getDate() + 6);
             const sWeekStart = toDateString(weekStart);
-            this._oDashModel.setProperty("/weekStart", sWeekStart);
-            this._oDashModel.setProperty("/weekLabel", `${toShortLabel(weekStart)} – ${toShortLabel(weekEnd)}`);
-            this._oDashModel.setProperty("/isNextDisabled", this.isCurrentOrFutureWeek(sWeekStart)); //added 07 may
+            this._oDashModel.setProperty("/weekStart",      sWeekStart);
+            this._oDashModel.setProperty("/weekLabel",      `${toShortLabel(weekStart)} – ${toShortLabel(weekEnd)}`);
+            this._oDashModel.setProperty("/isNextDisabled", this.isCurrentOrFutureWeek(sWeekStart));
             this._computeWeekHours(sWeekStart);
         },
 
-        // ── Stats ────────────────────────────────────────────────────────────
-
+        // ─────────────────────────────────────────────────────────────────────
+        // Stats (unchanged)
+        // ─────────────────────────────────────────────────────────────────────
         _computeStats() {
             const oHistModel  = this.getOwnerComponent().getModel("history");
             const submissions = oHistModel ? (oHistModel.getProperty("/submissions") || []) : [];
-
-            const total    = submissions.length;
-            const approved = submissions.filter(s => s.status === "Approved").length;
-            const pending  = submissions.filter(s => s.status === "Pending").length;
-            const rejected = submissions.filter(s => s.status === "Rejected").length;
-
-            // Store stats on model for _refreshDash to pick up
-            this._oDashModel.setProperty("/approved", approved);
-            this._oDashModel.setProperty("/pending",  pending);
-            this._oDashModel.setProperty("/rejected", rejected);
-            this._oDashModel.setProperty("/total",    total);
+            this._oDashModel.setProperty("/approved", submissions.filter(s => s.status === "Approved").length);
+            this._oDashModel.setProperty("/pending",  submissions.filter(s => s.status === "Pending").length);
+            this._oDashModel.setProperty("/rejected", submissions.filter(s => s.status === "Rejected").length);
+            this._oDashModel.setProperty("/total",    submissions.length);
         },
 
-        // ── Week Hours ───────────────────────────────────────────────────────
-
+        // ─────────────────────────────────────────────────────────────────────
+        // Week hours (unchanged)
+        // ─────────────────────────────────────────────────────────────────────
         _computeWeekHours(sWeekStart) {
             const oLocksModel = this.getOwnerComponent().getModel("locked");
             let rows = oLocksModel ? (oLocksModel.getProperty("/" + sWeekStart) || []) : [];
-
             if (rows.length === 0) {
-                const subs = this.getOwnerComponent().getModel("history")
-                    ?.getProperty("/submissions") || [];
+                const subs = this.getOwnerComponent().getModel("history")?.getProperty("/submissions") || [];
                 const sub  = subs.find(s => s.weekStart === sWeekStart);
                 rows = sub ? (sub.rows || []) : [];
             }
-
             const dayTotals = {};
-            DAYS.forEach(d => {
-                dayTotals[d] = rows.reduce((s, r) => s + parseHHMM(r[d] || ""), 0);
-            });
+            DAYS.forEach(d => { dayTotals[d] = rows.reduce((s, r) => s + parseHHMM(r[d] || ""), 0); });
 
-            const weekDays = DAYS.slice(0, 5).map((d, i) => ({
-                name:       DAY_NAMES[i],
-                hours:      dayTotals[d],
+            const weekDays   = DAYS.slice(0, 5).map((d, i) => ({
+                name: DAY_NAMES[i], hours: dayTotals[d],
                 hoursLabel: dayTotals[d] > 0 ? toHHMM(dayTotals[d]) + " hrs" : "–"
             }));
-
             const weekTotal  = DAYS.reduce((s, d) => s + dayTotals[d], 0);
             const filledDays = DAYS.slice(0, 5).filter(d => dayTotals[d] > 0).length;
             const pct        = Math.round(filledDays / 5 * 100);
@@ -209,74 +238,413 @@ sap.ui.define([
                     ? "All Mon–Fri days filled – ready to submit!"
                     : `${5 - filledDays} day${5 - filledDays !== 1 ? "s" : ""} remaining`
             });
-
-            // All data is now ready — build the full dashboard grid
             this._refreshDash();
-
-            // The grid replaces a large HTML node which can shift the
-            // scroll position; force back to the top so the greeting
-            // is the first thing visible.
             this._scrollToTop();
         },
 
         _scrollToTop() {
             const oPage = this.byId("dashPage");
-            if (oPage && oPage.scrollTo) { oPage.scrollTo(0, 0); }
-            const oView = this.getView();
-            const dom = oView && oView.getDomRef && oView.getDomRef();
-            if (dom) {
-                dom.querySelectorAll(
-                    ".sapMPageEnableScrolling, .sapMScrollCont, .sapMNavContainer"
-                ).forEach(el => { el.scrollTop = 0; });
-            }
-            // One more pass after the next paint — the grid HTML may
-            // still be settling the layout when this runs.
+            if (oPage && oPage.scrollTo) oPage.scrollTo(0, 0);
+            const dom = this.getView()?.getDomRef?.();
+            if (dom) dom.querySelectorAll(".sapMPageEnableScrolling,.sapMScrollCont,.sapMNavContainer")
+                        .forEach(el => { el.scrollTop = 0; });
             setTimeout(() => {
-                if (oPage && oPage.scrollTo) { oPage.scrollTo(0, 0); }
-                if (dom) {
-                    dom.querySelectorAll(
-                        ".sapMPageEnableScrolling, .sapMScrollCont, .sapMNavContainer"
-                    ).forEach(el => { el.scrollTop = 0; });
-                }
+                if (oPage && oPage.scrollTo) oPage.scrollTo(0, 0);
+                if (dom) dom.querySelectorAll(".sapMPageEnableScrolling,.sapMScrollCont,.sapMNavContainer")
+                            .forEach(el => { el.scrollTop = 0; });
             }, 50);
         },
 
-        // ── Rebuild full dashboard HTML ──────────────────────────────────────
-
-        _refreshDash() {
-            const oModel = this._oDashModel;
-
-            const iApproved = oModel.getProperty("/approved")        || 0;
-            const iPending  = oModel.getProperty("/pending")         || 0;
-            const iRejected = oModel.getProperty("/rejected")        || 0;
-            const iPct      = oModel.getProperty("/completion/pct")  || 0;
-            const sHint     = oModel.getProperty("/completion/hint") || "";
-            const sLabel    = oModel.getProperty("/completion/label")|| "";
-            const sWeek     = oModel.getProperty("/weekLabel")       || "";
-            const sBarHTML  = oModel.getProperty("/barChartHTML")    || "";
-
-            const sGrid = this._buildDashGridHTML({
-                approved : iApproved,
-                pending  : iPending,
-                rejected : iRejected,
-                pct      : iPct,
-                hint     : sHint,
-                label    : sLabel,
-                weekLabel: sWeek,
-                barHTML  : sBarHTML
+        // ─────────────────────────────────────────────────────────────────────
+        // Loaders — existing 3 (unchanged logic, now call _refreshDash)
+        // ─────────────────────────────────────────────────────────────────────
+        _loadWorkAnniversary() {
+            const oModel = this.getOwnerComponent().getModel("");
+            if (!oModel) return;
+            oModel.callFunction("/getWorkAnniversary", {
+                method: "POST",
+                success: (oData) => {
+                    const years = oData.yearsCompleted || 0;
+                    let yearsLabel;
+                    if (years >= 1) {
+                        yearsLabel = parseFloat(years.toFixed(1)) + " Years";
+                    } else {
+                        const months = Math.floor(years * 12);
+                        yearsLabel = months > 0 ? months + " Months" : "< 1 Month";
+                    }
+                    this._oDashModel.setProperty("/workAnniversary", {
+                        yearsCompleted: years,
+                        joiningDate:    oData.joiningDate || null,
+                        message:        oData.message || "Welcome!",
+                        yearsLabel:     yearsLabel
+                    });
+                    this._refreshDash();
+                },
+                error: () => {
+                    this._oDashModel.setProperty("/workAnniversary",
+                        { yearsCompleted: 0, joiningDate: null, message: "Welcome!", yearsLabel: "—" });
+                    this._refreshDash();
+                }
             });
-
-            oModel.setProperty("/dashGridHTML", sGrid);
         },
 
-        // ── Full grid HTML ───────────────────────────────────────────────────
+        _loadLeaveBalance() {
+            const oModel = this.getOwnerComponent().getModel("");
+            if (!oModel) return;
+            oModel.callFunction("/getLeaveBalance", {
+                method: "POST",
+                success: (oData) => {
+                    const casual  = oData.casualLeave  || 0;
+                    const sick    = oData.sickLeave    || 0;
+                    const annual  = oData.annualLeave  || 0;
+                    const total   = casual + sick + annual;
+                    this._oDashModel.setProperty("/leaveBalance", {
+                        casualLeave: casual, sickLeave: sick, annualLeave: annual,
+                        total:       total,
+                        usedPct:     Math.min(100, Math.round((total / 30) * 100))
+                    });
+                    this._refreshDash();
+                },
+                error: () => {
+                    this._oDashModel.setProperty("/leaveBalance",
+                        { casualLeave: 0, sickLeave: 0, annualLeave: 0, total: 0, usedPct: 0 });
+                    this._refreshDash();
+                }
+            });
+        },
 
+        _loadMyTasks() {
+            const oModel = this.getOwnerComponent().getModel("");
+            if (!oModel) return;
+            oModel.callFunction("/getMyTasks", {
+                method: "POST",
+                success: (oData) => {
+                    this._oDashModel.setProperty("/myTasks", {
+                        totalPending:      oData.totalPending      || 0,
+                        highPriorityCount: oData.highPriorityCount || 0,
+                        inProgressCount:   oData.inProgressCount   || 0,
+                        notStartedCount:   oData.notStartedCount   || 0
+                    });
+                    this._refreshDash();
+                },
+                error: () => {
+                    this._oDashModel.setProperty("/myTasks",
+                        { totalPending: 0, highPriorityCount: 0, inProgressCount: 0, notStartedCount: 0 });
+                    this._refreshDash();
+                }
+            });
+        },
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Loaders — new 4
+        // ─────────────────────────────────────────────────────────────────────
+
+        // Attendance: frontend-only mock (backend hook ready when needed)
+        _loadAttendance() {
+            const oModel = this.getOwnerComponent().getModel("");
+            if (!oModel) { this._setAttendanceMock(); return; }
+            oModel.callFunction("/getAttendance", {
+                method: "POST",
+                success: (oData) => {
+                    this._oDashModel.setProperty("/attendance", {
+                        attendancePercentage: oData.attendancePercentage || 0,
+                        presentCount:         oData.presentCount         || 0,
+                        absentCount:          oData.absentCount          || 0,
+                        monthLabel:           oData.monthLabel           || "Month"
+                    });
+                    this._refreshDash();
+                },
+                error: () => { this._setAttendanceMock(); }
+            });
+        },
+        _setAttendanceMock() {
+            const MNAMES = ["January","February","March","April","May","June",
+                            "July","August","September","October","November","December"];
+            this._oDashModel.setProperty("/attendance", {
+                attendancePercentage: 100,
+                presentCount:         22,
+                absentCount:          0,
+                monthLabel:           MNAMES[new Date().getMonth()]
+            });
+            this._refreshDash();
+        },
+
+        // Performance Rating
+        _loadPerformanceRating() {
+            const oModel = this.getOwnerComponent().getModel("");
+            if (!oModel) return;
+            oModel.callFunction("/getPerformanceRating", {
+                method: "POST",
+                success: (oData) => {
+                    this._oDashModel.setProperty("/performanceRating", {
+                        ratingValue:    parseFloat(oData.ratingValue || 0),
+                        ratingCategory: oData.ratingCategory || "N/A"
+                    });
+                    this._refreshDash();
+                },
+                error: () => {
+                    this._oDashModel.setProperty("/performanceRating",
+                        { ratingValue: 0, ratingCategory: "N/A" });
+                    this._refreshDash();
+                }
+            });
+        },
+
+        // Performance Trend
+        _loadPerformanceTrend(iYear) {
+            const oModel = this.getOwnerComponent().getModel("");
+            if (!oModel) return;
+            const year = iYear || parseInt(
+                this._oDashModel.getProperty("/performanceTrend/selectedYear") || new Date().getFullYear(), 10);
+            oModel.callFunction("/getPerformanceTrend", {
+                method: "POST",
+                urlParameters: { year: year },
+                success: (oData) => {
+                    let months = [];
+                    try { months = JSON.parse(oData.trendJSON || "[]"); } catch (e) { months = []; }
+                    this._oDashModel.setProperty("/performanceTrend/months", months);
+                    this._refreshDash();
+                },
+                error: () => {
+                    this._oDashModel.setProperty("/performanceTrend/months", Array(12).fill(null));
+                    this._refreshDash();
+                }
+            });
+        },
+
+        // Year selector change
+        onTrendYearChange(oEvent) {
+            const sYear = oEvent.getSource().getSelectedKey();
+            this._oDashModel.setProperty("/performanceTrend/selectedYear", sYear);
+            this._loadPerformanceTrend(parseInt(sYear, 10));
+        },
+
+        // Task Summary (reuses existing TaskMaster backend)
+        _loadTaskSummary() {
+            const oModel = this.getOwnerComponent().getModel("");
+            if (!oModel) return;
+            oModel.callFunction("/getTaskSummary", {
+                method: "POST",
+                success: (oData) => {
+                    this._oDashModel.setProperty("/taskSummary", {
+                        total:      oData.total      || 0,
+                        notStarted: oData.notStarted || 0,
+                        inProgress: oData.inProgress || 0,
+                        inReview:   oData.inReview   || 0,
+                        completed:  oData.completed  || 0
+                    });
+                    this._refreshDash();
+                },
+                error: () => {
+                    this._oDashModel.setProperty("/taskSummary",
+                        { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 });
+                    this._refreshDash();
+                }
+            });
+        },
+
+        // ─────────────────────────────────────────────────────────────────────
+        // _refreshDash — reads ALL model data, rebuilds the full HTML grid
+        // This is the ONLY place dashGridHTML is written to.
+        // ─────────────────────────────────────────────────────────────────────
+        _refreshDash() {
+            const m = this._oDashModel;
+            this._oDashModel.setProperty("/dashGridHTML", this._buildDashGridHTML({
+                // timesheet stats
+                approved:  m.getProperty("/approved")        || 0,
+                pending:   m.getProperty("/pending")         || 0,
+                rejected:  m.getProperty("/rejected")        || 0,
+                pct:       m.getProperty("/completion/pct")  || 0,
+                hint:      m.getProperty("/completion/hint") || "",
+                label:     m.getProperty("/completion/label")|| "",
+                weekLabel: m.getProperty("/weekLabel")       || "",
+                barHTML:   m.getProperty("/barChartHTML")    || "",
+                // card data
+                anniv:    m.getProperty("/workAnniversary")  || {},
+                leave:    m.getProperty("/leaveBalance")     || {},
+                tasks:    m.getProperty("/myTasks")          || {},
+                attend:   m.getProperty("/attendance")       || {},
+                perf:     m.getProperty("/performanceRating")|| {},
+                trend:    m.getProperty("/performanceTrend") || {},
+                summary:  m.getProperty("/taskSummary")      || {}
+            }));
+        },
+
+        // ─────────────────────────────────────────────────────────────────────
+        // _buildDashGridHTML — produces the complete dashboard HTML string
+        // Layout:
+        //   Row 1 : 5 info cards (Anniversary, Leave, Tasks, Attendance, Rating)
+        //   Row 2 : Timesheet pie  +  Week completion
+        //   Row 3 : Daily hours bar chart
+        //   Row 4 : Performance trend line  +  Task summary donut
+        // ─────────────────────────────────────────────────────────────────────
         _buildDashGridHTML(o) {
+
+            // ── card helpers ─────────────────────────────────────────────────
+            const card = (body) =>
+                `<div style="flex:1;min-width:0;background:#fff;border-radius:12px;
+                             box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;
+                             box-sizing:border-box;">${body}</div>`;
+
+            const cardHeader = (title, iconSvg) =>
+                `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                    <span style="font-size:0.95rem;font-weight:600;color:#111827;">${title}</span>
+                    ${iconSvg}
+                 </div>`;
+
+            const bigNum = (val, color) =>
+                `<div style="font-size:2.1rem;font-weight:700;color:${color};line-height:1.1;margin-bottom:2px;">${val}</div>`;
+
+            const subLabel = (txt) =>
+                `<div style="font-size:0.8rem;color:#6b7280;margin-bottom:10px;">${txt}</div>`;
+
+            // ── SVG icon snippets ────────────────────────────────────────────
+            const iconCircle = (bg, stroke, path) =>
+                `<span style="width:34px;height:34px;border-radius:50%;background:${bg};
+                              display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                         stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        ${path}
+                    </svg>
+                 </span>`;
+
+            // ── 1. Work Anniversary ──────────────────────────────────────────
+            const anniv      = o.anniv || {};
+            const yearsLabel = anniv.yearsLabel  || "—";
+            const annexMsg   = anniv.message     || "Welcome!";
+            const joinedTxt  = anniv.joiningDate ? "Joined: " + anniv.joiningDate : "";
+
+            const sAnnivCard = card(`
+                ${cardHeader("Work Anniversary",
+                    iconCircle("#eff6ff","#3b82f6",
+                        '<circle cx="12" cy="8" r="6"/><path d="M15.477 12.89L17 22l-5-3-5 3 1.523-9.11"/>'))}
+                ${bigNum(yearsLabel, "#111827")}
+                <div style="font-size:0.8rem;color:#6b7280;margin-bottom:6px;">with the organization</div>
+                <div style="font-size:0.75rem;color:#9ca3af;">${joinedTxt}</div>
+                <div style="font-size:0.75rem;color:#6b7280;margin-top:8px;font-style:italic;">${annexMsg}</div>
+            `);
+
+            // ── 2. Leave Balance ─────────────────────────────────────────────
+            const leave    = o.leave || {};
+            const casual   = leave.casualLeave  !== undefined ? leave.casualLeave  : 0;
+            const sick     = leave.sickLeave    !== undefined ? leave.sickLeave    : 0;
+            const annual   = leave.annualLeave  !== undefined ? leave.annualLeave  : 0;
+            const lTotal   = leave.total        !== undefined ? leave.total        : 0;
+            const lPct     = leave.usedPct      !== undefined ? leave.usedPct      : 0;
+
+            const sLeaveCard = card(`
+                ${cardHeader("Leave Balance",
+                    iconCircle("#ecfdf5","#10b981",
+                        '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'))}
+                ${bigNum(lTotal, "#10b981")}
+                ${subLabel("Days Available")}
+                <div style="width:100%;height:7px;background:#e5e7eb;border-radius:4px;overflow:hidden;margin-bottom:10px;">
+                    <div style="width:${lPct}%;height:100%;background:#10b981;border-radius:4px;"></div>
+                </div>
+                <div style="font-size:0.78rem;color:#6b7280;display:flex;gap:8px;">
+                    <span>Casual: <b style="color:#374151;">${casual}</b></span>
+                    <span style="color:#d1d5db;">|</span>
+                    <span>Sick: <b style="color:#374151;">${sick}</b></span>
+                    <span style="color:#d1d5db;">|</span>
+                    <span>Annual: <b style="color:#374151;">${annual}</b></span>
+                </div>
+            `);
+
+            // ── 3. My Tasks ──────────────────────────────────────────────────
+            const tasks    = o.tasks || {};
+            const tPending = tasks.totalPending      !== undefined ? tasks.totalPending      : 0;
+            const tHigh    = tasks.highPriorityCount !== undefined ? tasks.highPriorityCount : 0;
+            const tInProg  = tasks.inProgressCount   !== undefined ? tasks.inProgressCount   : 0;
+            const tNotSt   = tasks.notStartedCount   !== undefined ? tasks.notStartedCount   : 0;
+
+            const sTasksCard = card(`
+                ${cardHeader("My Tasks",
+                    iconCircle("#fffbeb","#f59e0b",
+                        '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>'))}
+                ${bigNum(tPending, "#111827")}
+                ${subLabel("Tasks Pending")}
+                ${tHigh > 0
+                    ? `<div style="font-size:0.82rem;font-weight:600;color:#dc2626;margin-bottom:8px;">${tHigh} High Priority</div>`
+                    : `<div style="font-size:0.82rem;color:#9ca3af;margin-bottom:8px;">No high priority tasks</div>`}
+                <div style="font-size:0.78rem;color:#6b7280;display:flex;flex-direction:column;gap:4px;">
+                    <div style="display:flex;justify-content:space-between;">
+                        <span>In Progress</span><b style="color:#3b82f6;">${tInProg}</b>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;">
+                        <span>Not Started</span><b style="color:#6b7280;">${tNotSt}</b>
+                    </div>
+                </div>
+            `);
+
+            // ── 4. Attendance ────────────────────────────────────────────────
+            const attend  = o.attend || {};
+            const attPct  = attend.attendancePercentage !== undefined ? attend.attendancePercentage : 0;
+            const present = attend.presentCount         !== undefined ? attend.presentCount         : 0;
+            const absent  = attend.absentCount          !== undefined ? attend.absentCount          : 0;
+            const attMon  = attend.monthLabel || "Month";
+
+            const sAttendCard = card(`
+                ${cardHeader("Attendance",
+                    iconCircle("#eff6ff","#3b82f6",
+                        '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><path d="M9 14l2 2 4-4"/>'))}
+                ${bigNum(attPct + "%", "#16a34a")}
+                ${subLabel("This " + attMon)}
+                <div style="border-top:1px solid #f3f4f6;padding-top:10px;
+                            font-size:0.78rem;color:#6b7280;display:flex;gap:16px;align-items:center;">
+                    <span>
+                        <span style="color:#16a34a;font-weight:700;margin-right:2px;">✓</span>
+                        Present : <b style="color:#111827;">${present}</b>
+                    </span>
+                    <span style="color:#e5e7eb;">|</span>
+                    <span>
+                        <span style="color:#dc2626;font-weight:700;margin-right:2px;">✕</span>
+                        Absent : <b style="color:#111827;">${absent}</b>
+                    </span>
+                </div>
+            `);
+
+            // ── 5. Performance Rating ────────────────────────────────────────
+            const perf     = o.perf || {};
+            const rVal     = parseFloat(perf.ratingValue || 0);
+            const rCat     = perf.ratingCategory || "N/A";
+            const rColor   = rVal >= 4.5 ? "#16a34a" : rVal >= 3.5 ? "#3b82f6" : rVal >= 2.5 ? "#f59e0b" : "#dc2626";
+
+            // Build star HTML inline (no separate helper needed)
+            const fullStars = Math.floor(rVal);
+            const hasHalf   = (rVal - fullStars) >= 0.25 && (rVal - fullStars) < 0.75;
+            const emptyStars = 5 - fullStars - (hasHalf ? 1 : 0);
+            let starsHTML = '<div style="display:flex;gap:3px;margin:6px 0;">';
+            for (let i = 0; i < fullStars;  i++) starsHTML += '<span style="font-size:1.2rem;color:#f59e0b;">★</span>';
+            if (hasHalf)                         starsHTML += '<span style="font-size:1.2rem;color:#f59e0b;">½</span>';
+            for (let i = 0; i < emptyStars; i++) starsHTML += '<span style="font-size:1.2rem;color:#d1d5db;">★</span>';
+            starsHTML += '</div>';
+
+            const sPerfCard = card(`
+                ${cardHeader("Performance Rating",
+                    iconCircle("#fffbeb","#f59e0b",
+                        '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'))}
+                <div style="display:flex;align-items:baseline;gap:4px;margin:4px 0 2px;">
+                    <span style="font-size:2.1rem;font-weight:700;color:#111827;line-height:1;">${rVal.toFixed(1)}</span>
+                    <span style="font-size:1rem;color:#9ca3af;">/5</span>
+                </div>
+                ${starsHTML}
+                <div style="font-size:0.88rem;font-weight:600;color:${rColor};margin-top:4px;">${rCat}</div>
+            `);
+
+            // ── Row 1: 5 cards ───────────────────────────────────────────────
+            const sRow1 = `
+                <div style="display:flex;flex-direction:row;gap:1rem;width:100%;box-sizing:border-box;">
+                    ${sAnnivCard}
+                    ${sLeaveCard}
+                    ${sTasksCard}
+                    ${sAttendCard}
+                    ${sPerfCard}
+                </div>`;
+
+            // ── Row 2: Pie + Week Completion ─────────────────────────────────
             const iTotal = o.approved + o.pending + o.rejected;
             const r = 54, cx = 70, cy = 70;
             const circ = 2 * Math.PI * r;
-
-            // Build pie segments
             const dA = ((o.approved / (iTotal || 1)) * circ).toFixed(2);
             const dP = ((o.pending  / (iTotal || 1)) * circ).toFixed(2);
             const dR = ((o.rejected / (iTotal || 1)) * circ).toFixed(2);
@@ -292,123 +660,249 @@ sap.ui.define([
                     o.rejected > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#dc2626" stroke-width="14" stroke-dasharray="${dR} ${circ}" stroke-dashoffset="${oR}" transform="rotate(-90 ${cx} ${cy})"/>` : ""
                   ].join("");
 
-            const sPie = `
-                <div style="display:flex;align-items:center;padding:16px 20px 24px;gap:20px;">
-                    <svg width="140" height="140" viewBox="0 0 140 140">
-                        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f3f4f6" stroke-width="14"/>
-                        ${segs}
-                        <text x="${cx}" y="${cy - 5}" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${iTotal}</text>
-                        <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="11" fill="#9ca3af">submitted</text>
-                    </svg>
-                    <div style="display:flex;flex-direction:column;gap:12px;">
-                        <div style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#16a34a;"></span><span style="font-size:13px;color:#374151;">Approved</span><b style="font-size:13px;color:#111827;margin-left:4px;">${o.approved}</b></div>
-                        <div style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;"></span><span style="font-size:13px;color:#374151;">Pending</span><b style="font-size:13px;color:#111827;margin-left:4px;">${o.pending}</b></div>
-                        <div style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#dc2626;"></span><span style="font-size:13px;color:#374151;">Rejected</span><b style="font-size:13px;color:#111827;margin-left:4px;">${o.rejected}</b></div>
+            const sRow2 = `
+                <div style="display:flex;flex-direction:row;gap:1rem;width:100%;box-sizing:border-box;">
+
+                    <div style="flex:1;background:#fff;border-radius:12px;
+                                box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;min-height:260px;">
+                        <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
+                            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Total Timesheets</div>
+                            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">All time submissions</div>
+                        </div>
+                        <div style="display:flex;align-items:center;padding:14px 18px 20px;gap:18px;">
+                            <svg width="130" height="130" viewBox="0 0 140 140">
+                                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f3f4f6" stroke-width="14"/>
+                                ${segs}
+                                <text x="${cx}" y="${cy - 5}" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${iTotal}</text>
+                                <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="11" fill="#9ca3af">submitted</text>
+                            </svg>
+                            <div style="display:flex;flex-direction:column;gap:10px;">
+                                <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#16a34a;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Approved</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.approved}</b></div>
+                                <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Pending</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.pending}</b></div>
+                                <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#dc2626;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Rejected</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.rejected}</b></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="flex:1;background:#fff;border-radius:12px;
+                                box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;min-height:260px;">
+                        <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
+                            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Week Completion</div>
+                            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">${o.label}</div>
+                            <div style="font-size:2.4rem;font-weight:700;color:#111827;line-height:1.2;margin-top:6px;">
+                                ${o.pct} <span style="font-size:0.95rem;font-weight:400;color:#6b7280;">%</span>
+                            </div>
+                        </div>
+                        <div style="padding:14px 18px 20px;display:flex;flex-direction:column;gap:10px;">
+                            <div style="width:100%;height:14px;background:#e5e7eb;border-radius:7px;overflow:hidden;">
+                                <div style="width:${o.pct}%;height:100%;background:#3b82f6;border-radius:7px;transition:width 0.4s;"></div>
+                            </div>
+                            <span style="font-size:0.78rem;color:#6b7280;">${o.hint}</span>
+                        </div>
+                    </div>
+
+                </div>`;
+
+            // ── Row 3: Bar chart ─────────────────────────────────────────────
+            const sRow3 = `
+                <div style="width:100%;background:#fff;border-radius:12px;
+                            box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
+                    <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
+                        <div style="font-size:0.95rem;font-weight:600;color:#111827;">Daily Hours Breakdown</div>
+                        <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">${o.weekLabel}</div>
+                    </div>
+                    <div style="padding:8px 0 0;overflow:hidden;">${o.barHTML}</div>
+                </div>`;
+
+            // ── Row 4: Trend + Donut ─────────────────────────────────────────
+
+            // Performance Trend line chart
+            const trend       = o.trend  || {};
+            const trendMonths = Array.isArray(trend.months) ? trend.months : Array(12).fill(null);
+            const trendYear   = trend.selectedYear || String(new Date().getFullYear());
+
+            const W = 440, H = 170, PL = 32, PR = 10, PT = 18, PB = 26;
+            const CW = W - PL - PR, CH = H - PT - PB;
+            const xOf = (i) => PL + (i / 11) * CW;
+            const yOf = (v) => PT + CH - ((v - 1) / 4) * CH;   // scale 1-5
+
+            let tGrid = "";
+            [1,2,3,4,5].forEach(v => {
+                const gy = yOf(v);
+                tGrid += `<line x1="${PL}" y1="${gy}" x2="${W-PR}" y2="${gy}" stroke="#f3f4f6" stroke-width="1"/>`;
+                tGrid += `<text x="${PL-4}" y="${gy+4}" text-anchor="end" font-size="9" fill="#9ca3af" font-family="sans-serif">${v}.0</text>`;
+            });
+
+            let tXLabels = "";
+            MONTHS.forEach((mn, i) => {
+                tXLabels += `<text x="${xOf(i)}" y="${H-4}" text-anchor="middle" font-size="9" fill="#9ca3af" font-family="sans-serif">${mn}</text>`;
+            });
+
+            const tPoints = trendMonths
+                .map((v, i) => v !== null ? { x: xOf(i), y: yOf(v) } : null)
+                .filter(Boolean);
+
+            let tPath = "", tArea = "", tDots = "";
+            if (tPoints.length > 1) {
+                const ptStr = tPoints.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+                tPath = `<polyline points="${ptStr}" fill="none" stroke="#3b82f6" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>`;
+                const base = PT + CH;
+                const areaPts = [`${tPoints[0].x.toFixed(1)},${base}`,
+                    ...tPoints.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`),
+                    `${tPoints[tPoints.length-1].x.toFixed(1)},${base}`].join(" ");
+                tArea = `<polygon points="${areaPts}" fill="rgba(59,130,246,0.08)" stroke="none"/>`;
+                tDots = tPoints.map(p =>
+                    `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="#fff" stroke="#3b82f6" stroke-width="2"/>`
+                ).join("");
+            } else {
+                tPath = `<text x="${W/2}" y="${H/2}" text-anchor="middle" font-size="12" fill="#d1d5db" font-family="sans-serif">No data for ${trendYear}</text>`;
+            }
+
+            // Year pill options
+            const curYear = new Date().getFullYear();
+            const yearPills = [curYear - 2, curYear - 1, curYear].map(y =>
+                `<span onclick="sap.ui.getCore().byId('${this.getView().getId()}').getController().onTrendYearChange({getSource:()=>({getSelectedKey:()=>'${y}'})})"
+                      style="padding:3px 10px;border-radius:12px;font-size:0.75rem;cursor:pointer;
+                             background:${String(y) === trendYear ? '#3b82f6' : '#f3f4f6'};
+                             color:${String(y) === trendYear ? '#fff' : '#6b7280'};">
+                    ${y === curYear ? 'This Year' : y}
+                 </span>`
+            ).join("");
+
+            const sTrend = `
+                <div style="flex:1.4;min-width:0;background:#fff;border-radius:12px;
+                            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+                        <span style="font-size:0.95rem;font-weight:600;color:#111827;">My Performance Trend</span>
+                        <div style="display:flex;gap:6px;">${yearPills}</div>
+                    </div>
+                    <div style="width:100%;overflow-x:auto;">
+                        <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible;">
+                            ${tGrid}${tArea}${tPath}${tDots}${tXLabels}
+                        </svg>
                     </div>
                 </div>`;
 
-            const sComp = `
-                <div style="padding:16px 20px 24px;display:flex;flex-direction:column;gap:12px;">
-                    <div style="width:100%;height:16px;background:#e5e7eb;border-radius:8px;overflow:hidden;">
-                        <div style="width:${o.pct}%;height:100%;background:#3b82f6;border-radius:8px;transition:width 0.4s;"></div>
+            // Task Summary donut
+            const sum   = o.summary || {};
+            const sTotal = sum.total      || 0;
+            const sNS    = sum.notStarted || 0;
+            const sIP    = sum.inProgress || 0;
+            const sIR    = sum.inReview   || 0;
+            const sCom   = sum.completed  || 0;
+            const safe   = sTotal || 1;
+            const sPct   = (n) => sTotal ? Math.round((n / sTotal) * 100) + "%" : "0%";
+
+            const dCirc  = 2 * Math.PI * 54;
+            const segs2  = [
+                { val: sNS, color: "#9ca3af" },
+                { val: sIP, color: "#f59e0b" },
+                { val: sIR, color: "#3b82f6" },
+                { val: sCom, color: "#16a34a" }
+            ];
+            let arcHTML = "", dOffset = 0;
+            if (sTotal === 0) {
+                arcHTML = `<circle cx="70" cy="70" r="54" fill="none" stroke="#e5e7eb" stroke-width="14"/>`;
+            } else {
+                segs2.forEach(seg => {
+                    if (seg.val <= 0) return;
+                    const dash = ((seg.val / safe) * dCirc).toFixed(2);
+                    arcHTML += `<circle cx="70" cy="70" r="54" fill="none" stroke="${seg.color}"
+                                        stroke-width="14"
+                                        stroke-dasharray="${dash} ${dCirc}"
+                                        stroke-dashoffset="${-dOffset}"
+                                        transform="rotate(-90 70 70)"/>`;
+                    dOffset += parseFloat(dash);
+                });
+            }
+
+            const legendRow = (color, label, val) =>
+                `<div style="display:flex;align-items:center;justify-content:space-between;
+                             padding:5px 0;border-bottom:1px solid #f9fafb;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="width:9px;height:9px;border-radius:50%;background:${color};flex-shrink:0;"></span>
+                        <span style="font-size:0.8rem;color:#374151;">${label}</span>
                     </div>
-                    <span style="font-size:0.82rem;color:#6b7280;">${o.hint}</span>
+                    <span style="font-size:0.8rem;font-weight:600;color:#111827;white-space:nowrap;margin-left:8px;">
+                        ${val} (${sPct(val)})
+                    </span>
+                 </div>`;
+
+            const sDonut = `
+                <div style="flex:1;min-width:0;background:#fff;border-radius:12px;
+                            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
+                    <div style="font-size:0.95rem;font-weight:600;color:#111827;margin-bottom:14px;">Task Summary</div>
+                    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+                        <svg width="140" height="140" viewBox="0 0 140 140" style="flex-shrink:0;">
+                            <circle cx="70" cy="70" r="54" fill="none" stroke="#f3f4f6" stroke-width="14"/>
+                            ${arcHTML}
+                            <text x="70" y="65" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${sTotal}</text>
+                            <text x="70" y="83" text-anchor="middle" font-size="10" fill="#9ca3af" font-family="sans-serif">Total Tasks</text>
+                        </svg>
+                        <div style="flex:1;min-width:150px;">
+                            ${legendRow("#9ca3af","Not Started", sNS)}
+                            ${legendRow("#f59e0b","In Progress",  sIP)}
+                            ${legendRow("#3b82f6","In Review",    sIR)}
+                            ${legendRow("#16a34a","Completed",    sCom)}
+                        </div>
+                    </div>
                 </div>`;
 
+            const sRow4 = `
+                <div style="display:flex;flex-direction:row;gap:1rem;width:100%;box-sizing:border-box;">
+                    ${sTrend}
+                    ${sDonut}
+                </div>`;
+
+            // ── Final: wrap all rows in outer column ─────────────────────────
             return `
-                <div style="padding:1.5rem;box-sizing:border-box;width:100%;display:flex;flex-direction:column;gap:1.5rem;">
-                    <div style="display:flex;flex-direction:row;gap:1.5rem;width:100%;">
-
-                        <div style="flex:1;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;min-height:280px;">
-                            <div style="padding:16px 20px 8px;border-bottom:1px solid #f3f4f6;">
-                                <div style="font-size:1rem;font-weight:600;color:#111827;">Total Timesheets</div>
-                                <div style="font-size:0.82rem;color:#6b7280;margin-top:2px;">All time submissions</div>
-                            </div>
-                            ${sPie}
-                        </div>
-
-                        <div style="flex:1;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;min-height:280px;">
-                            <div style="padding:16px 20px 8px;border-bottom:1px solid #f3f4f6;">
-                                <div style="font-size:1rem;font-weight:600;color:#111827;">Week Completion</div>
-                                <div style="font-size:0.82rem;color:#6b7280;margin-top:2px;">${o.label}</div>
-                                <div style="font-size:2.5rem;font-weight:700;color:#111827;line-height:1.2;margin-top:8px;">${o.pct} <span style="font-size:1rem;font-weight:400;color:#6b7280;">%</span></div>
-                            </div>
-                            ${sComp}
-                        </div>
-
-                    </div>
-
-<div style="width:100%;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;">
-    
-    <div style="padding:16px 20px 8px;border-bottom:1px solid #f3f4f6;">
-        <div style="font-size:1rem;font-weight:600;color:#111827;">
-            Daily Hours Breakdown
-        </div>
-        <div style="font-size:0.82rem;color:#6b7280;margin-top:2px;">
-            ${o.weekLabel}
-        </div>
-    </div>
-
-    <!-- no overflow hidden -->
-    <div style="padding:8px 0 0; overflow:hidden;">
-        ${o.barHTML}
-    </div>
+                <div style="padding:1.5rem;box-sizing:border-box;width:100%;
+                            display:flex;flex-direction:column;gap:1.5rem;">
+                    ${sRow1}
+                    ${sRow4}
+                    ${sRow2}
+                    ${sRow3}
+                    
                 </div>`;
         },
 
-        // ── Bar chart ────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
+        // Bar chart (unchanged)
+        // ─────────────────────────────────────────────────────────────────────
+        _buildBarChart(weekDays) {
+            const MAX_H = 12, X_STEP = 100, BAR_W = 60;
+            const CHART_W = X_STEP * 5, MAX_BAR = 80, TOP_PAD = 30;
+            const BASE_Y = MAX_BAR + TOP_PAD, VIEW_H = BASE_Y + 30;
 
-_buildBarChart(weekDays) {
-    const MAX_H   = 12;
-    const X_STEP  = 100;
-    const BAR_W   = 60;
-    const CHART_W = X_STEP * 5;         // 500
-    const MAX_BAR = 80;                  // max bar height in SVG units
-    const TOP_PAD = 30;                  // space above tallest bar for labels
-    const BASE_Y  = MAX_BAR + TOP_PAD;  // 110 — bars always fit below this
-    const VIEW_H  = BASE_Y + 30;        // total SVG height incl. day labels
+            let bars = "";
+            weekDays.slice(0, 5).forEach((day, i) => {
+                const x    = i * X_STEP + (X_STEP - BAR_W) / 2;
+                const barH = day.hours > 0 ? Math.max(6, (day.hours / MAX_H) * MAX_BAR) : 6;
+                const y    = BASE_Y - barH;
+                const col  = day.hours >= MAX_H ? "#16a34a" : day.hours > 0 ? "#3b82f6" : "#e5e7eb";
+                const cxB  = x + BAR_W / 2;
+                bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}" rx="6" fill="${col}"/>`;
+                bars += `<text x="${cxB}" y="${BASE_Y+16}" text-anchor="middle" font-size="11" fill="#6b7280" font-family="sans-serif">${day.name}</text>`;
+                if (day.hours > 0) {
+                    const lbl  = day.hoursLabel.replace(" hrs","h");
+                    const lblY = barH > 20 ? y + 16 : y - 5;
+                    const lblC = barH > 20 ? "#fff" : "#374151";
+                    bars += `<text x="${cxB}" y="${lblY}" text-anchor="middle" font-size="10" fill="${lblC}" font-weight="600" font-family="sans-serif">${lbl}</text>`;
+                }
+            });
 
-    let bars = "";
-    weekDays.slice(0, 5).forEach((day, i) => {
-        const x     = i * X_STEP + (X_STEP - BAR_W) / 2;
-        const barH  = day.hours > 0
-            ? Math.max(6, (day.hours / MAX_H) * MAX_BAR)
-            : 6;
-        const y     = BASE_Y - barH;
-        const color = day.hours >= MAX_H ? "#16a34a" : day.hours > 0 ? "#3b82f6" : "#e5e7eb";
-        const cxBar = x + BAR_W / 2;
+            let grid = "";
+            [3,6,9,12].forEach(hrs => {
+                const gy = BASE_Y - (hrs / MAX_H) * MAX_BAR;
+                grid += `<line x1="0" y1="${gy}" x2="${CHART_W}" y2="${gy}" stroke="#f3f4f6" stroke-width="1"/>`;
+                grid += `<text x="${CHART_W+4}" y="${gy+3}" font-size="9" fill="#d1d5db" font-family="sans-serif">${hrs}h</text>`;
+            });
 
-        bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}" rx="6" fill="${color}"/>`;
-        bars += `<text x="${cxBar}" y="${BASE_Y + 16}" text-anchor="middle" font-size="11" fill="#6b7280" font-family="sans-serif">${day.name}</text>`;
-
-        if (day.hours > 0) {
-            const label = day.hoursLabel.replace(" hrs", "h");
-            // label sits inside bar if bar is tall enough, else above
-            const labelY = barH > 20 ? y + 16 : y - 5;
-            const labelColor = barH > 20 ? "#ffffff" : "#374151";
-            bars += `<text x="${cxBar}" y="${labelY}" text-anchor="middle" font-size="10" fill="${labelColor}" font-weight="600" font-family="sans-serif">${label}</text>`;
+            return `<div style="padding:0 14px 14px;width:100%;box-sizing:border-box;margin-top:10px;">
+                        <svg viewBox="0 0 ${CHART_W+30} ${VIEW_H}" width="100%"
+                             style="overflow:visible;display:block;">${grid}${bars}</svg>
+                    </div>`;
         }
-    });
-
-    let grid = "";
-    [3, 6, 9, 12].forEach(hrs => {
-        const gy = BASE_Y - (hrs / MAX_H) * MAX_BAR;
-        grid += `<line x1="0" y1="${gy}" x2="${CHART_W}" y2="${gy}" stroke="#f3f4f6" stroke-width="1"/>`;
-        grid += `<text x="${CHART_W + 4}" y="${gy + 3}" font-size="9" fill="#d1d5db" font-family="sans-serif">${hrs}h</text>`;
-    });
-
-    return `<div style="padding:0 14px 14px; width:100%; box-sizing:border-box; margin-top:10px;">
-                <svg viewBox="0 0 ${CHART_W + 30} ${VIEW_H}"
-                     width="100%"
-                     style="overflow:visible; display:block;">
-                    ${grid}${bars}
-                </svg>
-            </div>`;
-},
-
-        // ── Removed: _buildPieChart (duplicate — logic moved into _buildDashGridHTML) ──
-        // ── Removed: onAfterRendering / _mountCardsToGrid (conflicts with HTML binding) ──
 
     });
 });
-

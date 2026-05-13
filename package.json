@@ -35,7 +35,7 @@
             },
             "punit": {
               "password": "punit",
-              "roles": ["Employee"]
+              "roles": ["HR"]
             },
             "Neha": {
               "roles": [

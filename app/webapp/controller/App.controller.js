@@ -39,7 +39,7 @@ sap.ui.define([
 
             this._oAppModel = new JSONModel({
                 unreadCount:    0,
-                userRole:       sInitRole === "manager" ? "manager" : "employee",
+                userRole:       sInitRole === "manager" ? "manager" : sInitRole === "hr" ? "hr" : "employee",
                 userName:       "",
                 userInitials:   "JD",
                 userProfile:    null

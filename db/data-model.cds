@@ -122,4 +122,27 @@ entity TimesheetEntry : managed {
     entryStatus        : String(20);   // Open, Locked, Approved
     isLocked           : Boolean default false;
 }
+
+entity LeaveBalance : managed {
+    key balanceId      : String(20);
+    employee           : Association to EmployeeMaster;
+    casualLeave        : Integer default 0;       // Casual Leave days
+    sickLeave          : Integer default 0;       // Sick Leave days
+    annualLeave        : Integer default 0;       // Annual Leave days
+    lastUpdated        : Timestamp;
+}
+// Stores monthly performance review scores for each employee.
+// The ratingValue (0.0 – 5.0) drives both the Performance Rating card
+// and the Performance Trend line graph on the dashboard.
+entity PerformanceRating : managed {
+    key ratingId        : String(20);
+    employee            : Association to EmployeeMaster;
+    ratingValue         : Decimal(3,1);   // e.g. 4.6  (0.0 – 5.0)
+    reviewMonth         : Integer;        // 1 – 12
+    reviewYear          : Integer;        // e.g. 2024
+    reviewComment       : String(500);
+    ratingCategory      : String(30);     // Excellent / Good / Average / Needs Improvement
+                                          // computed on insert/update via business logic
+}
+
 }

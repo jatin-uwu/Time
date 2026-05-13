@@ -44,6 +44,7 @@ sap.ui.define([
         },
 
         _onRouteMatched() {
+            this.onReset();
             this._loadManagers();
         },
 
@@ -144,6 +145,10 @@ sap.ui.define([
                 if (!newId) throw new Error("Server did not return an employeeId.");
                 return this._uploadPendingDocs(newId).then(() => newId);
             }).then(newId => {
+                const oHrModel = this.getOwnerComponent().getModel("hr");
+                if (oHrModel && typeof oHrModel.refresh === "function") {
+                    oHrModel.refresh(true);
+                }
                 this._oFormModel.setProperty("/saving", false);
                 MessageBox.success(
                     `Employee ${newId} created successfully.`,

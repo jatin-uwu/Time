@@ -52,6 +52,7 @@ service EmployeeService @(path:'/employee') {
     entity MyTasks      @(requires: ['Employee','Manager']) as projection on db.timesheet.TaskMaster;
     entity TaskUpdates  @(requires: ['Employee','Manager']) as projection on db.timesheet.TaskUpdate;
     entity Employees    @(requires: ['Employee','Manager']) as projection on db.timesheet.EmployeeMaster;
+    entity PerformanceRatings as projection on db.timesheet.PerformanceRating; 
 
     // Submitting a timesheet is an Employee action (a Manager submitting
     // their own timesheet still has the Employee scope via role mapping).
@@ -88,6 +89,67 @@ service EmployeeService @(path:'/employee') {
         mimeType   : String(100);
         dataBase64 : LargeString;
     };
+
+    // Dashboard action: Get work anniversary info for the logged-in employee.
+    // Returns years completed, joining date, and a message.
+    @(requires: ['Employee','Manager'])
+    action getWorkAnniversary() returns {
+        yearsCompleted : Decimal(5,2);
+        joiningDate    : Date;
+        message        : String(255);
+    };
+
+    // Dashboard action: Get leave balance for the logged-in employee.
+    // Returns casual, sick, annual leave counts and total.
+    @(requires: ['Employee','Manager'])
+    action getLeaveBalance() returns {
+        casualLeave : Integer;
+        sickLeave   : Integer;
+        annualLeave : Integer;
+        total       : Integer;
+    };
+
+    // Dashboard action: Get my tasks summary for the logged-in employee.
+    // Returns count of pending tasks and high priority tasks.
+    @(requires: ['Employee','Manager'])
+    action getMyTasks() returns {
+        totalPending      : Integer;
+        highPriorityCount : Integer;
+        inProgressCount   : Integer;
+        notStartedCount   : Integer;
+    };
+
+    // Attendance card  (frontend-only for now; backend returns mock/stub data)
+function getAttendance() returns {
+    attendancePercentage : Integer;
+    presentCount         : Integer;
+    absentCount          : Integer;
+    monthLabel           : String;
+};
+
+// Performance Rating card
+function getPerformanceRating() returns {
+    ratingValue      : Decimal(3,1);
+    ratingCategory   : String(30);
+    reviewMonth      : Integer;
+    reviewYear       : Integer;
+    reviewComment    : String(500);
+};
+
+// Performance Trend graph  (returns JSON array as a String for flexibility)
+function getPerformanceTrend(year : Integer) returns {
+    trendJSON : String;   // JSON array: [{month,monthName,rating}, ...]
+};
+
+// Task Summary donut chart  (reuses existing TaskMaster entity)
+function getTaskSummary() returns {
+    total       : Integer;
+    notStarted  : Integer;
+    inProgress  : Integer;
+    inReview    : Integer;
+    completed   : Integer;
+};
+
 }
 
 // ── Manager Service ──────────────────────────────────────────────────────────

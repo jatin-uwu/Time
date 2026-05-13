@@ -12,24 +12,50 @@
             <VBox class="tsDashOuter">
 
                 <!-- ── Greeting ── -->
-                <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsDashGreetingRow">
+                <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsDashGreetingRow"
+                    style="padding: 1.2rem 1.5rem 0.8rem; background: #fff; border-bottom: 1px solid #f3f4f6;">
                     <VBox>
-                        <Title text="{dash>/greeting}" level="H4" class="sapUiSmallMarginBegin sapUiTinyMarginTop sapUiTinyMarginBottom" />
-                        <Text text="Here's your timesheet activity" class="sapUiSmallMarginBegin sapUiTinyMarginTop sapUiSmallMarginBottom" />
+                        <!-- Use core:HTML so we have full control over font rendering -->
+                        <core:HTML sanitizeContent="false"
+                            content="{= 
+            '&lt;div style=&quot;display:flex;align-items:center;gap:10px;margin-bottom:6px;&quot;&gt;' +
+            '&lt;span style=&quot;font-size:1.9rem;font-weight:800;color:#111827;' +
+            'letter-spacing:-0.5px;font-family:Georgia,serif;&quot;&gt;' +
+            ( ${dash>/greeting} || &apos;Good Morning&apos; ) +
+            '&lt;/span&gt;' +
+            '&lt;span style=&quot;font-size:1.6rem;line-height:1;&quot;&gt;' +
+            ( ${dash>/greetingEmoji} || &apos;👋&apos; ) +
+            '&lt;/span&gt;&lt;/div&gt;'
+        }" />
+                        <Text text="Here's what's happening with you today."
+                            style="font-size: 0.88rem; color: #6b7280; margin: 0;" />
                     </VBox>
-                    <Text text="{dash>/todayLabel}" class="tsDashDateLabel" />
+                    <VBox alignItems="End">
+                        <Text text="{dash>/todayLabel}"
+                            style="font-size: 0.82rem; font-weight: 500; color: #9ca3af;" />
+                    </VBox>
                 </HBox>
 
                 <!-- ── Week Navigator ── -->
                 <Toolbar class="tsDashWeekBar" style="Clear">
                     <Title text="{dash>/weekLabel}" level="H5" class="tsDashWeekTitle" />
                     <ToolbarSpacer />
-                    <Button icon="sap-icon://navigation-left-arrow" type="Transparent" press=".onPrevWeek" />
+                    <Button icon="sap-icon://navigation-left-arrow" type="Transparent"
+                        press=".onPrevWeek" />
                     <Button text="Today" type="Transparent" press=".onToday" />
-                    <Button icon="sap-icon://navigation-right-arrow" type="Transparent" press=".onNextWeek" enabled="{= !${dash>/isNextDisabled} }" />
+                    <Button icon="sap-icon://navigation-right-arrow" type="Transparent"
+                        press=".onNextWeek" enabled="{= !${dash>/isNextDisabled} }" />
                 </Toolbar>
 
-                <!-- ── Full dashboard grid rendered by controller ── -->
+                <!--
+                    ALL dashboard content lives in this single HTML block.
+                    _buildDashGridHTML() in the controller produces all rows:
+                      Row 1 : Work Anniversary | Leave Balance | My Tasks | Attendance | Performance Rating
+                      Row 2 : Total Timesheets pie  +  Week Completion
+                      Row 3 : Daily Hours bar chart
+                      Row 4 : My Performance Trend (line)  +  Task Summary (donut)
+                    No native SAPUI5 card controls exist outside this element.
+                -->
                 <core:HTML id="dashGrid" sanitizeContent="false" content="{dash>/dashGridHTML}" />
 
             </VBox>
