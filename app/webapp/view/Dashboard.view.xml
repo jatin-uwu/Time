@@ -11,41 +11,31 @@
         <content>
             <VBox class="tsDashOuter">
 
-                <!-- ── Greeting ── -->
-                <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsDashGreetingRow"
-                    style="padding: 1.2rem 1.5rem 0.8rem; background: #fff; border-bottom: 1px solid #f3f4f6;">
-                    <VBox>
-                        <!-- Use core:HTML so we have full control over font rendering -->
-                        <core:HTML sanitizeContent="false"
-                            content="{= 
-            '&lt;div style=&quot;display:flex;align-items:center;gap:10px;margin-bottom:6px;&quot;&gt;' +
-            '&lt;span style=&quot;font-size:1.9rem;font-weight:800;color:#111827;' +
-            'letter-spacing:-0.5px;font-family:Georgia,serif;&quot;&gt;' +
-            ( ${dash>/greeting} || &apos;Good Morning&apos; ) +
-            '&lt;/span&gt;' +
-            '&lt;span style=&quot;font-size:1.6rem;line-height:1;&quot;&gt;' +
-            ( ${dash>/greetingEmoji} || &apos;👋&apos; ) +
-            '&lt;/span&gt;&lt;/div&gt;'
-        }" />
-                        <Text text="Here's what's happening with you today."
-                            style="font-size: 0.88rem; color: #6b7280; margin: 0;" />
-                    </VBox>
-                    <VBox alignItems="End">
-                        <Text text="{dash>/todayLabel}"
-                            style="font-size: 0.82rem; font-weight: 500; color: #9ca3af;" />
-                    </VBox>
-                </HBox>
+<!-- ── Greeting ── -->
+<HBox justifyContent="SpaceBetween" alignItems="Center" class="tsDashGreetingRow"
+      style="padding: 1.2rem 1.5rem 0.8rem; background: #fff; border-bottom: 1px solid #f3f4f6;">
 
-                <!-- ── Week Navigator ── -->
-                <Toolbar class="tsDashWeekBar" style="Clear">
-                    <Title text="{dash>/weekLabel}" level="H5" class="tsDashWeekTitle" />
-                    <ToolbarSpacer />
-                    <Button icon="sap-icon://navigation-left-arrow" type="Transparent"
-                        press=".onPrevWeek" />
-                    <Button text="Today" type="Transparent" press=".onToday" />
-                    <Button icon="sap-icon://navigation-right-arrow" type="Transparent"
-                        press=".onNextWeek" enabled="{= !${dash>/isNextDisabled} }" />
-                </Toolbar>
+    <!-- Left: greeting + subtitle both in one HTML block -->
+    <core:HTML sanitizeContent="false" content="{dash>/greetingHTML}" />
+
+    <!-- Right: Active button + Bell + Date -->
+    <HBox alignItems="Center" style="gap:12px; flex-shrink:0;">
+        <Button id="activeBtn"
+                text="{dash>/attendanceBtnLabel}"
+                type="{dash>/attendanceBtnType}"
+                press=".onMarkAttendance"
+                enabled="{dash>/attendanceBtnEnabled}"
+                style="border-radius:20px; font-weight:600;" />
+        <Button icon="sap-icon://bell"
+                type="Transparent"
+                press=".onNotificationPress"
+                tooltip="Notifications" />
+        <Text text="{dash>/todayLabel}"
+              style="font-size:0.82rem; font-weight:500; color:#9ca3af; white-space:nowrap;" />
+    </HBox>
+
+</HBox>
+
 
                 <!--
                     ALL dashboard content lives in this single HTML block.

@@ -5,6 +5,8 @@ const ENTRY = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetEntry';
 const EMPLOYEE = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeMaster';
 const TASK = 'ccentrik.employee.timesheet.schema.timesheet.TaskMaster';
 const PERFORMANCE_RATING = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
+const NOTIFICATION = 'ccentrik.employee.timesheet.schema.timesheet.Notification';
+const ATTENDANCE = 'ccentrik.employee.timesheet.schema.timesheet.AttendanceRecord';
 
 const PRIORITY_PREFIX = {
     'High': '[HIGH PRIORITY]',
@@ -34,6 +36,26 @@ function getMailer() {
         _mailer = false;
     }
     return _mailer;
+}
+// ── Notification helper ───────────────────────────────────────────────────
+// Called from any handler to create a Notification row. Fire-and-forget:
+// errors are logged but never bubble up to disrupt the parent operation.
+async function createNotification(employeeId, type, title, message, referenceId) {
+    try {
+        const notificationId = `NOTIF-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+        await INSERT.into(NOTIFICATION).entries({
+            notificationId,
+            employee_employeeId: employeeId,
+            type,
+            title,
+            message,
+            isRead: false,
+            referenceId: referenceId || '',
+            notifiedAt: new Date()
+        });
+    } catch (e) {
+        cds.log('notif').warn('Could not create notification:', e.message || e);
+    }
 }
 
 class EmployeeService extends cds.ApplicationService {
@@ -186,6 +208,152 @@ class EmployeeService extends cds.ApplicationService {
             return result;
         });
 
+        // ── Dashboard: Recent Notifications ───────────────────────────────────────
+        this.on('getRecentNotifications', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            if (!emp) return [];
+
+            const rows = await SELECT.from(NOTIFICATION)
+                .where({ employee_employeeId: emp.employeeId })
+                .orderBy({ notifiedAt: 'desc' })
+                .limit(5);
+
+            return (rows || []).map(n => ({
+                notificationId: n.notificationId,
+                type: n.type || '',
+                title: n.title || '',
+                message: n.message || '',
+                isRead: n.isRead || false,
+                referenceId: n.referenceId || '',
+                notifiedAt: n.notifiedAt ? new Date(n.notifiedAt).toISOString() : ''
+            }));
+        });
+
+        // ── Dashboard: Upcoming Calendar (Google Calendar API) ─────────────────────
+        // Reads GOOGLE_CALENDAR_API_KEY + GOOGLE_CALENDAR_ID from environment.
+        // Falls back to empty array if not configured — card shows "No events".
+        this.on('getUpcomingCalendar', async (req) => {
+            const apiKey = process.env.GOOGLE_CALENDAR_API_KEY;
+            const calendarId = process.env.GOOGLE_CALENDAR_ID; // usually the employee's email
+
+            if (!apiKey || !calendarId) {
+                // Not configured — return empty so frontend shows graceful empty state
+                return { eventsJSON: JSON.stringify([]) };
+            }
+
+            try {
+                const now = new Date();
+                const maxTime = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // next 7 days
+                const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events` +
+                    `?key=${apiKey}` +
+                    `&timeMin=${now.toISOString()}` +
+                    `&timeMax=${maxTime.toISOString()}` +
+                    `&singleEvents=true` +
+                    `&orderBy=startTime` +
+                    `&maxResults=5`;
+
+                // Use built-in fetch (Node 18+) or fallback to https module
+                let body;
+                if (typeof fetch !== 'undefined') {
+                    const res = await fetch(url);
+                    body = await res.json();
+                } else {
+                    const https = require('https');
+                    body = await new Promise((resolve, reject) => {
+                        https.get(url, res => {
+                            let data = '';
+                            res.on('data', chunk => data += chunk);
+                            res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } });
+                        }).on('error', reject);
+                    });
+                }
+
+                const todayStr = now.toDateString();
+                const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                const MON_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+                const events = (body.items || []).map(ev => {
+                    const start = new Date(ev.start.dateTime || ev.start.date);
+                    const end = new Date(ev.end.dateTime || ev.end.date);
+                    const isToday = start.toDateString() === todayStr;
+                    const isTomorrow = start.toDateString() === new Date(now.getTime() + 86400000).toDateString();
+
+                    // Format: "10:00 AM – 10:30 AM"
+                    const fmt = (d) => d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+                    const timeLabel = ev.start.dateTime ? `${fmt(start)} – ${fmt(end)}` : 'All Day';
+                    const dateLabel = isToday ? 'Today'
+                        : isTomorrow ? 'Tomorrow'
+                            : `${DAY_NAMES[start.getDay()]}, ${MON_NAMES[start.getMonth()]} ${start.getDate()}`;
+
+                    return {
+                        id: ev.id,
+                        title: ev.summary || 'Untitled Event',
+                        start: start.toISOString(),
+                        end: end.toISOString(),
+                        timeLabel,
+                        dateLabel,
+                        isToday,
+                        colorId: ev.colorId || '1'
+                    };
+                });
+
+                return { eventsJSON: JSON.stringify(events) };
+            } catch (e) {
+                cds.log('calendar').warn('Google Calendar fetch failed:', e.message || e);
+                return { eventsJSON: JSON.stringify([]) };
+            }
+        });
+
+        // ── Dashboard: My Leave Overview ───────────────────────────────────────────
+        // Returns remaining leave balance + how much has been taken this year.
+        // "Taken" is approximated from LeaveBalance initial allotment vs current.
+        // Your colleague's leave-request module should decrement LeaveBalance when
+        // a leave is approved — this handler just reads what's already stored.
+        this.on('getLeaveOverview', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            if (!emp) {
+                return {
+                    casual: 0, sick: 0, annual: 0, unpaid: 0, totalDays: 0,
+                    takenJSON: JSON.stringify([])
+                };
+            }
+
+            const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
+            const balance = await SELECT.one.from(LEAVE_BALANCE)
+                .where({ employee_employeeId: emp.employeeId });
+
+            // Standard annual allotments (adjust to match your HR policy)
+            const ALLOTMENT = { casual: 12, sick: 8, annual: 15, unpaid: 0 };
+
+            const casual = balance ? (balance.casualLeave || 0) : ALLOTMENT.casual;
+            const sick = balance ? (balance.sickLeave || 0) : ALLOTMENT.sick;
+            const annual = balance ? (balance.annualLeave || 0) : ALLOTMENT.annual;
+            const unpaid = 0; // extend LeaveBalance entity if you track unpaid leave
+
+            // "Taken" = allotment minus remaining balance
+            const takenCasual = Math.max(0, ALLOTMENT.casual - casual);
+            const takenSick = Math.max(0, ALLOTMENT.sick - sick);
+            const takenAnnual = Math.max(0, ALLOTMENT.annual - annual);
+
+            const totalDays = casual + sick + annual + unpaid;
+
+            const takenData = [
+                { type: 'casual', label: 'Casual Leave', taken: takenCasual, balance: casual, color: '#16a34a' },
+                { type: 'sick', label: 'Sick Leave', taken: takenSick, balance: sick, color: '#3b82f6' },
+                { type: 'annual', label: 'Annual Leave', taken: takenAnnual, balance: annual, color: '#f59e0b' },
+                { type: 'unpaid', label: 'Unpaid Leave', taken: 0, balance: 0, color: '#9ca3af' }
+            ];
+
+            return { casual, sick, annual, unpaid, totalDays, takenJSON: JSON.stringify(takenData) };
+        });
+
+
         // ── Dashboard: Work Anniversary ────────────────────────────────
         // Calculate years completed since joining date for the logged-in employee.
         this.on('getWorkAnniversary', async (req) => {
@@ -306,6 +474,21 @@ class EmployeeService extends cds.ApplicationService {
             };
 
             const category = latest.ratingCategory || deriveCategory(latest.ratingValue || 0);
+
+            // Notify only once per rating — check if a notification already exists for this ratingId
+            if (latest && latest.ratingId) {
+                const exists = await SELECT.one.from(NOTIFICATION)
+                    .where({ employee_employeeId: emp.employeeId, referenceId: latest.ratingId });
+                if (!exists) {
+                    await createNotification(
+                        emp.employeeId,
+                        'PERFORMANCE_RATED',
+                        'Performance Review Published',
+                        `Your rating for ${latest.reviewMonth}/${latest.reviewYear} is ${latest.ratingValue}/5 — ${category}.`,
+                        latest.ratingId
+                    );
+                }
+            }
 
             return {
                 ratingValue: parseFloat((latest.ratingValue || 0).toFixed(1)),
@@ -517,6 +700,87 @@ class EmployeeService extends cds.ApplicationService {
             };
         });
 
+        // ── Mark Attendance ───────────────────────────────────────────────────
+this.on('markAttendance', async (req) => {
+    const { attendanceDate, attendanceDay, attendanceTime } = req.data;
+    const user  = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+               || user.id || '';
+
+    if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
+
+    const emp = await SELECT.one.from(EMPLOYEE)
+        .columns('employeeId', 'employeeName')
+        .where({ email });
+
+    if (!emp) return req.error(404, 'Employee not found for this login.');
+
+    // Prevent duplicate marking for the same day
+    const existing = await SELECT.one.from(ATTENDANCE)
+        .where({
+            employee_employeeId: emp.employeeId,
+            attendanceDate:      attendanceDate
+        });
+
+    if (existing) {
+        return req.error(409,
+            `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`
+        );
+    }
+
+    const attendanceId = `${emp.employeeId}-${attendanceDate}`;
+
+    await INSERT.into(ATTENDANCE).entries({
+        attendanceId,
+        employee_employeeId: emp.employeeId,
+        attendanceDate,
+        attendanceDay:  attendanceDay  || '',
+        attendanceTime: attendanceTime || new Date().toTimeString().split(' ')[0],
+        status:         'Present'
+    });
+
+    cds.log('attend').info(
+        `Attendance marked: ${emp.employeeId} (${emp.employeeName}) ` +
+        `on ${attendanceDate} at ${attendanceTime}`
+    );
+
+    return {
+        attendanceId,
+        employeeId:    emp.employeeId,
+        employeeName:  emp.employeeName,
+        attendanceDate,
+        attendanceDay,
+        attendanceTime,
+        message: `Attendance recorded successfully for ${attendanceDay}, ${attendanceDate}.`
+    };
+}),
+
+// ── Check Today Attendance ────────────────────────────────────────────
+this.on('getTodayAttendance', async (req) => {
+    const { attendanceDate } = req.data;
+    const user  = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+               || user.id || '';
+
+    const emp = await SELECT.one.from(EMPLOYEE)
+        .columns('employeeId')
+        .where({ email });
+
+    if (!emp) return { alreadyMarked: false };
+
+    const existing = await SELECT.one.from(ATTENDANCE)
+        .where({
+            employee_employeeId: emp.employeeId,
+            attendanceDate:      attendanceDate
+        });
+
+    return {
+        alreadyMarked:  !!existing,
+        attendanceTime: existing ? existing.attendanceTime : null,
+        attendanceDay:  existing ? existing.attendanceDay  : null
+    };
+});
+
         return super.init();
     }
 }
@@ -542,6 +806,16 @@ class ManagerService extends cds.ApplicationService {
             await UPDATE(HEADER)
                 .set({ status: 'Approved', approvedOn: new Date(), remarks: remarks || '' })
                 .where({ timesheetId });
+
+            // Auto-notify employee
+            const hdr = await SELECT.one.from(HEADER).columns('employee_employeeId').where({ timesheetId });
+            if (hdr) await createNotification(
+                hdr.employee_employeeId,
+                'TIMESHEET_APPROVED',
+                'Timesheet Approved ✓',
+                `Your timesheet ${timesheetId} has been approved.${remarks ? ' Remarks: ' + remarks : ''}`,
+                timesheetId
+            );
 
             await UPDATE(ENTRY)
                 .set({ isLocked: true, entryStatus: 'Approved' })
@@ -591,6 +865,14 @@ class ManagerService extends cds.ApplicationService {
                 }
             }
 
+            await createNotification(
+                assigneeId,
+                'TASK_ASSIGNED',
+                `New Task: ${taskName}`,
+                `You have been assigned "${taskName}" (${priority || 'Normal'} priority).`,
+                taskId
+            );
+
             // No SMTP configured — log the message so we have a reproducible trail.
             cds.log('mail').info(
                 `[Email simulated]\nFROM: ${from}\nTO: ${employee.email}\nSUBJECT: ${subject}\n${body}`
@@ -621,6 +903,15 @@ class ManagerService extends cds.ApplicationService {
             await UPDATE(HEADER)
                 .set({ status: 'Rejected', rejectedOn: new Date(), remarks: remarks || '' })
                 .where({ timesheetId });
+
+            const hdr2 = await SELECT.one.from(HEADER).columns('employee_employeeId').where({ timesheetId });
+            if (hdr2) await createNotification(
+                hdr2.employee_employeeId,
+                'TIMESHEET_REJECTED',
+                'Timesheet Returned ✗',
+                `Your timesheet ${timesheetId} was returned.${remarks ? ' Reason: ' + remarks : ''}`,
+                timesheetId
+            );
 
             await UPDATE(ENTRY)
                 .set({ isLocked: false, entryStatus: 'Open' })

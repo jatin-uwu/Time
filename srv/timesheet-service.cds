@@ -1,4 +1,4 @@
-// using { ccentrik.employee.timesheet.schema as db } from '../db/data-model';
+using { ccentrik.employee.timesheet.schema as db } from '../db/data-model';
 
 // // ── Employee Service ──────────────────────────────────────────────────────────
 // service EmployeeService @(path:'/employee') {
@@ -38,8 +38,6 @@
 //     @(requires: 'Manager')
 //     action rejectTimesheet (timesheetId : String(15), remarks : String(255)) returns String;
 // }
-
-using { ccentrik.employee.timesheet.schema as db } from '../db/data-model';
 
 // ── Employee Service ─────────────────────────────────────────────────────────
 // Accessible by users with EITHER Employee OR Manager scope, because
@@ -148,6 +146,32 @@ function getTaskSummary() returns {
     inProgress  : Integer;
     inReview    : Integer;
     completed   : Integer;
+};
+
+// Recent Notifications (last 5 for logged-in employee)
+function getRecentNotifications() returns array of {
+    notificationId : String(30);
+    type           : String(30);
+    title          : String(100);
+    message        : String(500);
+    isRead         : Boolean;
+    referenceId    : String(30);
+    notifiedAt     : String;   // ISO timestamp string
+};
+
+// Upcoming Calendar events from Google Calendar
+function getUpcomingCalendar() returns {
+    eventsJSON : String;   // JSON array of {id, title, start, end, timeLabel, dateLabel, isToday}
+};
+
+// My Leave Overview — yearly taken vs balance
+function getLeaveOverview(year : Integer) returns {
+    casual       : Integer;   // balance remaining
+    sick         : Integer;
+    annual       : Integer;
+    unpaid       : Integer;
+    totalDays    : Integer;
+    takenJSON    : String;    // [{type,label,taken,balance,color}]
 };
 
 }
