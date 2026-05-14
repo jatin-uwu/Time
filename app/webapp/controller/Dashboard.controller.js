@@ -119,21 +119,21 @@ sap.ui.define([
         // ─────────────────────────────────────────────────────────────────────
         // Greeting
         // ─────────────────────────────────────────────────────────────────────
-_loadGreeting() {
-    const oComp = this.getOwnerComponent();
-    if (!oComp) return;
+        _loadGreeting() {
+            const oComp = this.getOwnerComponent();
+            if (!oComp) return;
 
-    const hour      = new Date().getHours();
-    const timeGreet = hour < 12 ? "Good Morning"
-                    : hour < 17 ? "Good Afternoon"
-                    :             "Good Evening";
-    // const emoji     = hour < 12 ? "☀️" : hour < 17 ? "👋" : "🌙";
+            const hour = new Date().getHours();
+            const timeGreet = hour < 12 ? "Good Morning"
+                : hour < 17 ? "Good Afternoon"
+                    : "Good Evening";
+            // const emoji     = hour < 12 ? "☀️" : hour < 17 ? "👋" : "🌙";
 
-    const buildHTML = (name) => {
-        const namePart = name
-            ? `, <span style="color:black;font-style:italic;">${name}!</span>`
-            : `!`;
-        return `
+            const buildHTML = (name) => {
+                const namePart = name
+                    ? `, <span style="color:black;font-style:italic;">${name}!</span>`
+                    : `!`;
+                return `
             <div>
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
                     <span style="
@@ -153,32 +153,32 @@ _loadGreeting() {
                     margin: 0;
                 ">Here's what's happening with you today.</div>
             </div>`;
-    };
+            };
 
-    // Set immediately — never blank
-    this._oDashModel.setProperty("/greetingHTML", buildHTML(""));
+            // Set immediately — never blank
+            this._oDashModel.setProperty("/greetingHTML", buildHTML(""));
 
-    const setName = (name) => {
-        if (name) this._oDashModel.setProperty("/greetingHTML", buildHTML(name));
-    };
+            const setName = (name) => {
+                if (name) this._oDashModel.setProperty("/greetingHTML", buildHTML(name));
+            };
 
-    if (oComp.getCurrentUser) {
-        oComp.getCurrentUser().then(u => {
-            if (u && u.employeeName) { setName(u.employeeName); return; }
+            if (oComp.getCurrentUser) {
+                oComp.getCurrentUser().then(u => {
+                    if (u && u.employeeName) { setName(u.employeeName); return; }
+                    if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
+                        oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
+                            if (emp && emp.employeeName) setName(emp.employeeName);
+                        });
+                    }
+                });
+                return;
+            }
             if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
                 oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
                     if (emp && emp.employeeName) setName(emp.employeeName);
                 });
             }
-        });
-        return;
-    }
-    if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
-        oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
-            if (emp && emp.employeeName) setName(emp.employeeName);
-        });
-    }
-},
+        },
 
         // ─────────────────────────────────────────────────────────────────────
         // Route match — kick off all loaders
@@ -363,129 +363,124 @@ _loadGreeting() {
         },
 
         // ─────────────────────────────────────────────────────────────────────
-// _callAction — OData V4 wrapper replacing callFunction (which is V2 only)
-// Usage: this._callAction("actionName", { param1: val1 })
-//          .then(result => { ... })
-//          .catch(() => { ... });
-// ─────────────────────────────────────────────────────────────────────
-_callAction(sActionName, mParams) {
-    if (!this.getOwnerComponent()) {
-        return Promise.reject(new Error("No component"));
-    }
-
-    return new Promise((resolve, reject) => {
-        fetch("/employee/" + sActionName, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Accept":       "application/json"
-            },
-            body:        JSON.stringify(mParams || {}),
-            credentials: "include"
-        })
-        .then(async (res) => {
-            try {
-                if (res.status === 204) {
-                    resolve({});
-                    return;
-                }
-
-                const text = await res.text();
-
-                if (!res.ok) {
-                    reject(new Error(text || res.statusText));
-                    return;
-                }
-
-                if (!text || text.trim() === "") {
-                    resolve({});
-                    return;
-                }
-
-                const data = JSON.parse(text);
-                const cleaned = Object.fromEntries(
-                    Object.entries(data).filter(([k]) => !k.startsWith("@"))
-                );
-                resolve(cleaned.value !== undefined ? cleaned.value : cleaned);
-
-            } catch(e) {
-                reject(e);
+        // _callAction — OData V4 wrapper replacing callFunction (which is V2 only)
+        // Usage: this._callAction("actionName", { param1: val1 })
+        //          .then(result => { ... })
+        //          .catch(() => { ... });
+        // ─────────────────────────────────────────────────────────────────────
+        _callAction(sActionName, mParams) {
+            if (!this.getOwnerComponent()) {
+                return Promise.reject(new Error("No component"));
             }
-        })
-        .catch(reject);
-    });
-},
+
+            return new Promise((resolve, reject) => {
+                fetch("/employee/" + sActionName, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    },
+                    body: JSON.stringify(mParams || {}),
+                    credentials: "include"
+                })
+                    .then(async (res) => {
+                        try {
+                            if (res.status === 204) {
+                                resolve({});
+                                return;
+                            }
+
+                            const text = await res.text();
+
+                            if (!res.ok) {
+                                reject(new Error(text || res.statusText));
+                                return;
+                            }
+
+                            if (!text || text.trim() === "") {
+                                resolve({});
+                                return;
+                            }
+
+                            const data = JSON.parse(text);
+                            const cleaned = Object.fromEntries(
+                                Object.entries(data).filter(([k]) => !k.startsWith("@"))
+                            );
+                            resolve(cleaned.value !== undefined ? cleaned.value : cleaned);
+
+                        } catch (e) {
+                            reject(e);
+                        }
+                    })
+                    .catch(reject);
+            });
+        },
 
         // ─────────────────────────────────────────────────────────────────────
         // Loaders — existing 3 (unchanged logic, now call _refreshDash)
         // ─────────────────────────────────────────────────────────────────────
-_loadWorkAnniversary() {
-    this._callAction("getWorkAnniversary")
-    .then(result => {
-        const years = result.yearsCompleted || 0;
-        const yearsLabel = years >= 1
-            ? parseFloat(years.toFixed(1)) + " Years"
-            : (Math.floor(years * 12) > 0
-                ? Math.floor(years * 12) + " Months"
-                : "< 1 Month");
+        _loadWorkAnniversary() {
+            this._callAction("getWorkAnniversary")
+                .then(result => {
+                    const years = result.yearsCompleted || 0;
+                    const yearsLabel = years >= 1
+                        ? parseFloat(years.toFixed(1)) + " Years"
+                        : (Math.floor(years * 12) > 0
+                            ? Math.floor(years * 12) + " Months"
+                            : "< 1 Month");
 
-        this._oDashModel.setProperty("/workAnniversary", {
-            yearsCompleted: years,
-            joiningDate:    result.joiningDate || null,
-            message:        result.message     || "Welcome!",
-            yearsLabel:     yearsLabel
-        });
-    })
-    .catch((e) => {
-        console.error("getWorkAnniversary failed:", e);
-        this._oDashModel.setProperty("/workAnniversary", {
-            yearsCompleted: 0,
-            joiningDate:    null,
-            message:        "Welcome!",
-            yearsLabel:     "—"
-        });
-    })
-    .finally(() => this._refreshDash());
-},
-
- _loadLeaveBalance() {
-    this._callAction("getLeaveBalance").then(oData => {
-        const casual = oData.casualLeave || 0;
-        const sick   = oData.sickLeave   || 0;
-        const annual = oData.annualLeave  || 0;
-        const total  = casual + sick + annual;
-        this._oDashModel.setProperty("/leaveBalance", {
-            casualLeave: casual, sickLeave: sick, annualLeave: annual,
-            total,
-            usedPct: Math.min(100, Math.round((total / 30) * 100))
-        });
-    }).catch(() => {
-        this._oDashModel.setProperty("/leaveBalance",
-            { casualLeave: 0, sickLeave: 0, annualLeave: 0, total: 0, usedPct: 0 });
-    }).finally(() => this._refreshDash());
-},
-
-        _loadMyTasks() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getMyTasks", {
-                method: "POST",
-                success: (oData) => {
-                    this._oDashModel.setProperty("/myTasks", {
-                        totalPending: oData.totalPending || 0,
-                        highPriorityCount: oData.highPriorityCount || 0,
-                        inProgressCount: oData.inProgressCount || 0,
-                        notStartedCount: oData.notStartedCount || 0
+                    this._oDashModel.setProperty("/workAnniversary", {
+                        yearsCompleted: years,
+                        joiningDate: result.joiningDate || null,
+                        message: result.message || "Welcome!",
+                        yearsLabel: yearsLabel
                     });
-                    this._refreshDash();
-                },
-                error: () => {
-                    this._oDashModel.setProperty("/myTasks",
-                        { totalPending: 0, highPriorityCount: 0, inProgressCount: 0, notStartedCount: 0 });
-                    this._refreshDash();
-                }
-            });
+                })
+                .catch((e) => {
+                    console.error("getWorkAnniversary failed:", e);
+                    this._oDashModel.setProperty("/workAnniversary", {
+                        yearsCompleted: 0,
+                        joiningDate: null,
+                        message: "Welcome!",
+                        yearsLabel: "—"
+                    });
+                })
+                .finally(() => this._refreshDash());
         },
+
+        _loadLeaveBalance() {
+            this._callAction("getLeaveBalance").then(oData => {
+                const casual = oData.casualLeave || 0;
+                const sick = oData.sickLeave || 0;
+                const annual = oData.annualLeave || 0;
+                const total = casual + sick + annual;
+                this._oDashModel.setProperty("/leaveBalance", {
+                    casualLeave: casual, sickLeave: sick, annualLeave: annual,
+                    total,
+                    usedPct: Math.min(100, Math.round((total / 30) * 100))
+                });
+            }).catch(() => {
+                this._oDashModel.setProperty("/leaveBalance",
+                    { casualLeave: 0, sickLeave: 0, annualLeave: 0, total: 0, usedPct: 0 });
+            }).finally(() => this._refreshDash());
+        },
+
+_loadMyTasks() {
+    this._callAction("getMyTasks")
+        .then(oData => {
+            this._oDashModel.setProperty("/myTasks", {
+                totalPending:      oData.totalPending      || 0,
+                highPriorityCount: oData.highPriorityCount || 0,
+                inProgressCount:   oData.inProgressCount   || 0,
+                notStartedCount:   oData.notStartedCount   || 0
+            });
+        })
+        .catch(() => {
+            this._oDashModel.setProperty("/myTasks",
+                { totalPending: 0, highPriorityCount: 0, inProgressCount: 0, notStartedCount: 0 });
+        })
+        .finally(() => this._refreshDash());
+},
 
         // ─────────────────────────────────────────────────────────────────────
         // Loaders — new 4
