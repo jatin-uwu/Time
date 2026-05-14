@@ -11,25 +11,41 @@
         <content>
             <VBox class="tsDashOuter">
 
-                <!-- ── Greeting ── -->
-                <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsDashGreetingRow">
-                    <VBox>
-                        <Title text="{dash>/greeting}" level="H4" class="sapUiSmallMarginBegin sapUiTinyMarginTop sapUiTinyMarginBottom" />
-                        <Text text="Here's your timesheet activity" class="sapUiSmallMarginBegin sapUiTinyMarginTop sapUiSmallMarginBottom" />
-                    </VBox>
-                    <Text text="{dash>/todayLabel}" class="tsDashDateLabel" />
-                </HBox>
+<!-- ── Greeting ── -->
+<HBox justifyContent="SpaceBetween" alignItems="Center" class="tsDashGreetingRow"
+      style="padding: 1.2rem 1.5rem 0.8rem; background: #fff; border-bottom: 1px solid #f3f4f6;">
 
-                <!-- ── Week Navigator ── -->
-                <Toolbar class="tsDashWeekBar" style="Clear">
-                    <Title text="{dash>/weekLabel}" level="H5" class="tsDashWeekTitle" />
-                    <ToolbarSpacer />
-                    <Button icon="sap-icon://navigation-left-arrow" type="Transparent" press=".onPrevWeek" />
-                    <Button text="Today" type="Transparent" press=".onToday" />
-                    <Button icon="sap-icon://navigation-right-arrow" type="Transparent" press=".onNextWeek" enabled="{= !${dash>/isNextDisabled} }" />
-                </Toolbar>
+    <!-- Left: greeting + subtitle both in one HTML block -->
+    <core:HTML sanitizeContent="false" content="{dash>/greetingHTML}" />
 
-                <!-- ── Full dashboard grid rendered by controller ── -->
+    <!-- Right: Active button + Bell + Date -->
+    <HBox alignItems="Center" style="gap:12px; flex-shrink:0;">
+        <Button id="activeBtn"
+                text="{dash>/attendanceBtnLabel}"
+                type="{dash>/attendanceBtnType}"
+                press=".onMarkAttendance"
+                enabled="{dash>/attendanceBtnEnabled}"
+                style="border-radius:20px; font-weight:600;" />
+        <Button icon="sap-icon://bell"
+                type="Transparent"
+                press=".onNotificationPress"
+                tooltip="Notifications" />
+        <Text text="{dash>/todayLabel}"
+              style="font-size:0.82rem; font-weight:500; color:#9ca3af; white-space:nowrap;" />
+    </HBox>
+
+</HBox>
+
+
+                <!--
+                    ALL dashboard content lives in this single HTML block.
+                    _buildDashGridHTML() in the controller produces all rows:
+                      Row 1 : Work Anniversary | Leave Balance | My Tasks | Attendance | Performance Rating
+                      Row 2 : Total Timesheets pie  +  Week Completion
+                      Row 3 : Daily Hours bar chart
+                      Row 4 : My Performance Trend (line)  +  Task Summary (donut)
+                    No native SAPUI5 card controls exist outside this element.
+                -->
                 <core:HTML id="dashGrid" sanitizeContent="false" content="{dash>/dashGridHTML}" />
 
             </VBox>

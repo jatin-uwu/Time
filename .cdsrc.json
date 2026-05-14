@@ -1,7 +1,7 @@
 {
   "requires": {
     "db": {
-      "kind": "hana"
+      "kind": "sqlite"
     }
   },
   "build": {

@@ -1,7 +1,7 @@
 namespace ccentrik.employee.timesheet.schema;
 
 using { managed } from '@sap/cds/common';
-  
+
 context timesheet{
 
 entity EmployeeMaster : managed {
@@ -26,14 +26,6 @@ entity EmployeeMaster : managed {
     emergencyContact    : String(15);
     bloodGroup          : String(5);
 
-    // ── New fields ─────────────────────────────────────────────────
-    workLocation        : String(50);
-    maritalStatus       : String(20);   // Single / Married / Divorced / Widowed
-    fatherName          : String(100);  // shown when Single
-    partnerName         : String(100);  // shown when Married
-    marriageDate        : Date;         // shown when Married
-    hasKids             : String(5);    // Yes / No, shown when Married
-    
     // Bank details (kept inline; promote to a separate entity if you ever
     // need to support multiple bank accounts per employee).
     bankAccountNumber   : String(30);
@@ -131,6 +123,7 @@ entity TimesheetEntry : managed {
     isLocked           : Boolean default false;
 }
 
+<<<<<<< HEAD
 entity LeaveRequest : managed {
     key leaveId        : String(20);
     employee           : Association to EmployeeMaster;
@@ -144,5 +137,53 @@ entity LeaveRequest : managed {
     managerRemarks     : String(255);
     approvedBy         : Association to EmployeeMaster;
     approvedOn         : Timestamp;
+=======
+entity LeaveBalance : managed {
+    key balanceId      : String(20);
+    employee           : Association to EmployeeMaster;
+    casualLeave        : Integer default 0;       // Casual Leave days
+    sickLeave          : Integer default 0;       // Sick Leave days
+    annualLeave        : Integer default 0;       // Annual Leave days
+    lastUpdated        : Timestamp;
+}
+
+// Stores monthly performance review scores for each employee.
+// The ratingValue (0.0 – 5.0) drives both the Performance Rating card
+// and the Performance Trend line graph on the dashboard.
+entity PerformanceRating : managed {
+    key ratingId        : String(20);
+    employee            : Association to EmployeeMaster;
+    ratingValue         : Decimal(3,1);   // e.g. 4.6  (0.0 – 5.0)
+    reviewMonth         : Integer;        // 1 – 12
+    reviewYear          : Integer;        // e.g. 2024
+    reviewComment       : String(500);
+    ratingCategory      : String(30);     // Excellent / Good / Average / Needs Improvement
+                                          // computed on insert/update via business logic
+}
+
+// ── Notifications ──────────────────────────────────────────────────────────
+// Auto-created by service handlers on key events (timesheet approved/rejected,
+// task assigned, performance rated, leave approved).
+entity Notification : managed {
+    key notificationId : String(30);
+    employee           : Association to EmployeeMaster;
+    type               : String(30);    // TIMESHEET_APPROVED | TIMESHEET_REJECTED |
+                                        // TASK_ASSIGNED | PERFORMANCE_RATED |
+                                        // LEAVE_APPROVED | LEAVE_REJECTED
+    title              : String(100);
+    message            : String(500);
+    isRead             : Boolean default false;
+    referenceId        : String(30);    // timesheetId / taskId / ratingId etc.
+    notifiedAt         : Timestamp;
+}
+// ── Attendance Record ─────────────────────────────────────────────────────
+entity AttendanceRecord : managed {
+    key attendanceId   : String(30);     // EMP1001-2026-05-13
+    employee           : Association to EmployeeMaster;
+    attendanceDate     : Date;           // 2026-05-13
+    attendanceDay      : String(15);     // Wednesday
+    attendanceTime     : Time;           // 14:32:00
+    status             : String(10) default 'Present';
+>>>>>>> 17f43d825c7224e6d8b2001a6c164bb59a5ece07
 }
 }

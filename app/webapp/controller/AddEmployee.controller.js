@@ -80,6 +80,7 @@ sap.ui.define([
         },
 
         _onRouteMatched() {
+            this.onReset();
             this._loadManagers();
         },
 

@@ -3,8 +3,8 @@
     "sap.app": {
         "id":          "timesheet.app",
         "type":        "application",
-        "title":       "Timesheet",
-        "description": "Weekly Timesheet Dashboard",
+        "title":       "Employee Dashboard",
+        "description": "Present Employee Dashboard",
         "dataSources": {
             "TimesheetService": {
                 "uri":  "/employee/",

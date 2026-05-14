@@ -1,15 +1,22 @@
 const cds = require('@sap/cds');
 
-const HEADER   = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetHeader';
-const ENTRY    = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetEntry';
+const HEADER = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetHeader';
+const ENTRY = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetEntry';
 const EMPLOYEE = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeMaster';
+<<<<<<< HEAD
 const TASK     = 'ccentrik.employee.timesheet.schema.timesheet.TaskMaster';
 const LEAVE_REQUEST = 'ccentrik.employee.timesheet.schema.timesheet.LeaveRequest';
+=======
+const TASK = 'ccentrik.employee.timesheet.schema.timesheet.TaskMaster';
+const PERFORMANCE_RATING = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
+const NOTIFICATION = 'ccentrik.employee.timesheet.schema.timesheet.Notification';
+const ATTENDANCE = 'ccentrik.employee.timesheet.schema.timesheet.AttendanceRecord';
+>>>>>>> 17f43d825c7224e6d8b2001a6c164bb59a5ece07
 
 const PRIORITY_PREFIX = {
-    'High':   '[HIGH PRIORITY]',
+    'High': '[HIGH PRIORITY]',
     'Medium': '[Medium Priority]',
-    'Low':    '[Low Priority]'
+    'Low': '[Low Priority]'
 };
 
 // Lazy-load nodemailer so the service still works even if it isn't installed.
@@ -35,6 +42,26 @@ function getMailer() {
     }
     return _mailer;
 }
+// ── Notification helper ───────────────────────────────────────────────────
+// Called from any handler to create a Notification row. Fire-and-forget:
+// errors are logged but never bubble up to disrupt the parent operation.
+async function createNotification(employeeId, type, title, message, referenceId) {
+    try {
+        const notificationId = `NOTIF-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+        await INSERT.into(NOTIFICATION).entries({
+            notificationId,
+            employee_employeeId: employeeId,
+            type,
+            title,
+            message,
+            isRead: false,
+            referenceId: referenceId || '',
+            notifiedAt: new Date()
+        });
+    } catch (e) {
+        cds.log('notif').warn('Could not create notification:', e.message || e);
+    }
+}
 
 class EmployeeService extends cds.ApplicationService {
     async init() {
@@ -42,8 +69,8 @@ class EmployeeService extends cds.ApplicationService {
         // Expose current user role to frontend
         this.on('getUserRole', (req) => {
             const user = req.user;
-            if (user.is('HR'))       return { role: 'hr' };
-            if (user.is('Manager'))  return { role: 'manager' };
+            if (user.is('HR')) return { role: 'hr' };
+            if (user.is('Manager')) return { role: 'manager' };
             if (user.is('Employee')) return { role: 'employee' };
             return { role: 'unknown' };
         });
@@ -53,15 +80,15 @@ class EmployeeService extends cds.ApplicationService {
         // gracefully when no matching record exists so the UI can still
         // render a usable header instead of crashing.
         this.on('getCurrentUser', async (req) => {
-            const user  = req.user || {};
+            const user = req.user || {};
             const email = (user.attr && (user.attr.email || user.attr.mail))
-                       || user.id
-                       || '';
+                || user.id
+                || '';
             // HR scope wins over Manager wins over Employee — matches the
             // sidebar gating priority on the frontend.
-            const role  = user.is && user.is('HR')       ? 'hr'
-                        : user.is && user.is('Manager')  ? 'manager'
-                        : user.is && user.is('Employee') ? 'employee'
+            const role = user.is && user.is('HR') ? 'hr'
+                : user.is && user.is('Manager') ? 'manager'
+                    : user.is && user.is('Employee') ? 'employee'
                         : 'unknown';
 
             let emp = null;
@@ -76,30 +103,30 @@ class EmployeeService extends cds.ApplicationService {
                 // minimal record built from the JWT itself so the
                 // frontend can still greet them by name.
                 return {
-                    email:        email,
-                    role:         role,
-                    employeeId:   '',
+                    email: email,
+                    role: role,
+                    employeeId: '',
                     employeeName: (user.attr && user.attr.given_name)
-                                  || (email && email.split('@')[0])
-                                  || 'User',
-                    designation:  '',
-                    address:      '',
+                        || (email && email.split('@')[0])
+                        || 'User',
+                    designation: '',
+                    address: '',
                     mobileNumber: '',
-                    managerId:    '',
-                    isActive:     true
+                    managerId: '',
+                    isActive: true
                 };
             }
 
             return {
-                email:        emp.email || email,
-                role:         role,
-                employeeId:   emp.employeeId,
+                email: emp.email || email,
+                role: role,
+                employeeId: emp.employeeId,
                 employeeName: emp.employeeName || '',
-                designation:  emp.designation  || '',
-                address:      emp.address      || '',
+                designation: emp.designation || '',
+                address: emp.address || '',
                 mobileNumber: emp.mobileNumber || '',
-                managerId:    emp.manager_employeeId || '',
-                isActive:     emp.isActive !== false
+                managerId: emp.manager_employeeId || '',
+                isActive: emp.isActive !== false
             };
         });
 
@@ -167,8 +194,8 @@ class EmployeeService extends cds.ApplicationService {
             }
 
             const result = {
-                fileName:   task.attachmentName,
-                mimeType:   task.attachmentMimeType || 'application/octet-stream',
+                fileName: task.attachmentName,
+                mimeType: task.attachmentMimeType || 'application/octet-stream',
                 dataBase64: base64
             };
 
@@ -186,6 +213,7 @@ class EmployeeService extends cds.ApplicationService {
             return result;
         });
 
+<<<<<<< HEAD
         this.on('applyLeave', async (req) => {
             const { employeeId, leaveType, fromDate, toDate, days, reason, isUnpaid } = req.data;
 
@@ -266,6 +294,581 @@ class EmployeeService extends cds.ApplicationService {
             return { leaveId, status: 'Pending', isUnpaid: isUnpaid || false };
         });
 
+=======
+        // ── Dashboard: Recent Notifications ───────────────────────────────────────
+        this.on('getRecentNotifications', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            if (!emp) return [];
+
+            const rows = await SELECT.from(NOTIFICATION)
+                .where({ employee_employeeId: emp.employeeId })
+                .orderBy({ notifiedAt: 'desc' })
+                .limit(5);
+
+            return (rows || []).map(n => ({
+                notificationId: n.notificationId,
+                type: n.type || '',
+                title: n.title || '',
+                message: n.message || '',
+                isRead: n.isRead || false,
+                referenceId: n.referenceId || '',
+                notifiedAt: n.notifiedAt ? new Date(n.notifiedAt).toISOString() : ''
+            }));
+        });
+
+        // ── Dashboard: Upcoming Calendar (Google Calendar API) ─────────────────────
+        // Reads GOOGLE_CALENDAR_API_KEY + GOOGLE_CALENDAR_ID from environment.
+        // Falls back to empty array if not configured — card shows "No events".
+        this.on('getUpcomingCalendar', async (req) => {
+            const apiKey = process.env.GOOGLE_CALENDAR_API_KEY;
+            const calendarId = process.env.GOOGLE_CALENDAR_ID; // usually the employee's email
+
+            if (!apiKey || !calendarId) {
+                // Not configured — return empty so frontend shows graceful empty state
+                return { eventsJSON: JSON.stringify([]) };
+            }
+
+            try {
+                const now = new Date();
+                const maxTime = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // next 7 days
+                const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events` +
+                    `?key=${apiKey}` +
+                    `&timeMin=${now.toISOString()}` +
+                    `&timeMax=${maxTime.toISOString()}` +
+                    `&singleEvents=true` +
+                    `&orderBy=startTime` +
+                    `&maxResults=5`;
+
+                // Use built-in fetch (Node 18+) or fallback to https module
+                let body;
+                if (typeof fetch !== 'undefined') {
+                    const res = await fetch(url);
+                    body = await res.json();
+                } else {
+                    const https = require('https');
+                    body = await new Promise((resolve, reject) => {
+                        https.get(url, res => {
+                            let data = '';
+                            res.on('data', chunk => data += chunk);
+                            res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } });
+                        }).on('error', reject);
+                    });
+                }
+
+                const todayStr = now.toDateString();
+                const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                const MON_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+                const events = (body.items || []).map(ev => {
+                    const start = new Date(ev.start.dateTime || ev.start.date);
+                    const end = new Date(ev.end.dateTime || ev.end.date);
+                    const isToday = start.toDateString() === todayStr;
+                    const isTomorrow = start.toDateString() === new Date(now.getTime() + 86400000).toDateString();
+
+                    // Format: "10:00 AM – 10:30 AM"
+                    const fmt = (d) => d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+                    const timeLabel = ev.start.dateTime ? `${fmt(start)} – ${fmt(end)}` : 'All Day';
+                    const dateLabel = isToday ? 'Today'
+                        : isTomorrow ? 'Tomorrow'
+                            : `${DAY_NAMES[start.getDay()]}, ${MON_NAMES[start.getMonth()]} ${start.getDate()}`;
+
+                    return {
+                        id: ev.id,
+                        title: ev.summary || 'Untitled Event',
+                        start: start.toISOString(),
+                        end: end.toISOString(),
+                        timeLabel,
+                        dateLabel,
+                        isToday,
+                        colorId: ev.colorId || '1'
+                    };
+                });
+
+                return { eventsJSON: JSON.stringify(events) };
+            } catch (e) {
+                cds.log('calendar').warn('Google Calendar fetch failed:', e.message || e);
+                return { eventsJSON: JSON.stringify([]) };
+            }
+        });
+
+        // ── Dashboard: My Leave Overview ───────────────────────────────────────────
+        // Returns remaining leave balance + how much has been taken this year.
+        // "Taken" is approximated from LeaveBalance initial allotment vs current.
+        // Your colleague's leave-request module should decrement LeaveBalance when
+        // a leave is approved — this handler just reads what's already stored.
+        this.on('getLeaveOverview', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            if (!emp) {
+                return {
+                    casual: 0, sick: 0, annual: 0, unpaid: 0, totalDays: 0,
+                    takenJSON: JSON.stringify([])
+                };
+            }
+
+            const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
+            const balance = await SELECT.one.from(LEAVE_BALANCE)
+                .where({ employee_employeeId: emp.employeeId });
+
+            // Standard annual allotments (adjust to match your HR policy)
+            const ALLOTMENT = { casual: 12, sick: 8, annual: 15, unpaid: 0 };
+
+            const casual = balance ? (balance.casualLeave || 0) : ALLOTMENT.casual;
+            const sick = balance ? (balance.sickLeave || 0) : ALLOTMENT.sick;
+            const annual = balance ? (balance.annualLeave || 0) : ALLOTMENT.annual;
+            const unpaid = 0; // extend LeaveBalance entity if you track unpaid leave
+
+            // "Taken" = allotment minus remaining balance
+            const takenCasual = Math.max(0, ALLOTMENT.casual - casual);
+            const takenSick = Math.max(0, ALLOTMENT.sick - sick);
+            const takenAnnual = Math.max(0, ALLOTMENT.annual - annual);
+
+            const totalDays = casual + sick + annual + unpaid;
+
+            const takenData = [
+                { type: 'casual', label: 'Casual Leave', taken: takenCasual, balance: casual, color: '#16a34a' },
+                { type: 'sick', label: 'Sick Leave', taken: takenSick, balance: sick, color: '#3b82f6' },
+                { type: 'annual', label: 'Annual Leave', taken: takenAnnual, balance: annual, color: '#f59e0b' },
+                { type: 'unpaid', label: 'Unpaid Leave', taken: 0, balance: 0, color: '#9ca3af' }
+            ];
+
+            return { casual, sick, annual, unpaid, totalDays, takenJSON: JSON.stringify(takenData) };
+        });
+
+
+        // ── Dashboard: Work Anniversary ────────────────────────────────
+        // Calculate years completed since joining date for the logged-in employee.
+        this.on('getWorkAnniversary', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id
+                || '';
+
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .columns('employeeId', 'employeeName', 'joiningDate')
+                .where({ email: email });
+
+            if (!emp || !emp.joiningDate) {
+                return {
+                    yearsCompleted: 0,
+                    joiningDate: null,
+                    message: 'No joining date found.'
+                };
+            }
+
+            const joining = new Date(emp.joiningDate);
+            const today = new Date();
+            const years = today.getFullYear() - joining.getFullYear();
+            const months = today.getMonth() - joining.getMonth();
+            const days = today.getDate() - joining.getDate();
+
+            // Calculate exact years with decimal precision
+            let yearsCompleted = years;
+            if (months < 0 || (months === 0 && days < 0)) {
+                yearsCompleted = years - 1;
+            }
+            const totalDays = (today - joining) / (1000 * 60 * 60 * 24);
+            yearsCompleted = Math.max(0, totalDays / 365.25);
+
+            const message = yearsCompleted >= 1
+                ? `Congratulations! You have completed ${Math.floor(yearsCompleted)} years with us.`
+                : `Welcome! You joined on ${joining.toLocaleDateString()}`;
+
+            return {
+                yearsCompleted: parseFloat(yearsCompleted.toFixed(2)),
+                joiningDate: emp.joiningDate,
+                message: message
+            };
+        });
+
+        this.on('getAttendance', async (req) => {
+            const now = new Date();
+            const monthNames = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+            ];
+
+            // ── MOCK DATA (replace with real query when backend is ready) ────────
+            // To hook up real data, query an Attendance entity here and calculate
+            // presentCount / absentCount from actual records.
+            const presentCount = 22;
+            const absentCount = 0;
+            const workingDays = presentCount + absentCount || 1;
+            const attendancePct = Math.round((presentCount / workingDays) * 100);
+            // ─────────────────────────────────────────────────────────────────────
+
+            return {
+                attendancePercentage: attendancePct,
+                presentCount: presentCount,
+                absentCount: absentCount,
+                monthLabel: monthNames[now.getMonth()]
+            };
+        });
+
+        // ── Dashboard: Performance Rating ─────────────────────────────────────────
+        // Fetches the most-recent PerformanceRating row for the logged-in employee.
+        this.on('getPerformanceRating', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email: email });
+
+            if (!emp) {
+                return {
+                    ratingValue: 0,
+                    ratingCategory: 'N/A',
+                    reviewMonth: 0,
+                    reviewYear: 0,
+                    reviewComment: ''
+                };
+            }
+
+            // Most recent rating = highest year + month combination
+            const ratings = await SELECT
+                .from(PERFORMANCE_RATING)
+                .where({ employee_employeeId: emp.employeeId })
+                .orderBy({ reviewYear: 'desc', reviewMonth: 'desc' })
+                .limit(1);
+
+            if (!ratings || ratings.length === 0) {
+                return {
+                    ratingValue: 0,
+                    ratingCategory: 'No Rating Yet',
+                    reviewMonth: 0,
+                    reviewYear: 0,
+                    reviewComment: ''
+                };
+            }
+
+            const latest = ratings[0];
+
+            // Derive category from value (business rule)
+            const deriveCategory = (val) => {
+                if (val >= 4.5) return 'Excellent';
+                if (val >= 3.5) return 'Good';
+                if (val >= 2.5) return 'Average';
+                return 'Needs Improvement';
+            };
+
+            const category = latest.ratingCategory || deriveCategory(latest.ratingValue || 0);
+
+            // Notify only once per rating — check if a notification already exists for this ratingId
+            if (latest && latest.ratingId) {
+                const exists = await SELECT.one.from(NOTIFICATION)
+                    .where({ employee_employeeId: emp.employeeId, referenceId: latest.ratingId });
+                if (!exists) {
+                    await createNotification(
+                        emp.employeeId,
+                        'PERFORMANCE_RATED',
+                        'Performance Review Published',
+                        `Your rating for ${latest.reviewMonth}/${latest.reviewYear} is ${latest.ratingValue}/5 — ${category}.`,
+                        latest.ratingId
+                    );
+                }
+            }
+
+            return {
+                ratingValue: parseFloat((latest.ratingValue || 0).toFixed(1)),
+                ratingCategory: category,
+                reviewMonth: latest.reviewMonth || 0,
+                reviewYear: latest.reviewYear || 0,
+                reviewComment: latest.reviewComment || ''
+            };
+        });
+
+        // ── Dashboard: Performance Trend ──────────────────────────────────────────
+        // Returns all monthly ratings for the current (or requested) year,
+        // sorted Jan→Dec, so the frontend can draw a line chart.
+        this.on('getPerformanceTrend', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+
+            const requestedYear = req.data && req.data.year
+                ? parseInt(req.data.year, 10)
+                : new Date().getFullYear();
+
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email: email });
+
+            const MONTH_NAMES = [
+                'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+            ];
+
+            if (!emp) {
+                return { trendJSON: JSON.stringify([]) };
+            }
+
+            const ratings = await SELECT
+                .from(PERFORMANCE_RATING)
+                .where({
+                    employee_employeeId: emp.employeeId,
+                    reviewYear: requestedYear
+                })
+                .orderBy({ reviewMonth: 'asc' });
+
+            // Build month-keyed map so gaps are visible as null (not omitted)
+            const map = {};
+            (ratings || []).forEach(r => {
+                map[r.reviewMonth] = parseFloat((r.ratingValue || 0).toFixed(1));
+            });
+
+            const trend = [];
+            for (let m = 1; m <= 12; m++) {
+                trend.push({
+                    month: m,
+                    monthName: MONTH_NAMES[m - 1],
+                    rating: map[m] !== undefined ? map[m] : null
+                });
+            }
+
+            return { trendJSON: JSON.stringify(trend) };
+        });
+
+        // ── Dashboard: Task Summary ────────────────────────────────────────────────
+        // Reuses existing TaskMaster entity.  Counts tasks by status for the
+        // logged-in employee.  No duplicate entity or service is created.
+        this.on('getTaskSummary', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email: email });
+
+            if (!emp) {
+                return { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 };
+            }
+
+            const tasks = await SELECT
+                .from(TASK)
+                .where({ assignedTo_employeeId: emp.employeeId });
+
+            let notStarted = 0, inProgress = 0, inReview = 0, completed = 0;
+
+            (tasks || []).forEach(t => {
+                const s = (t.status || '').toLowerCase().replace(/\s+/g, '');
+                if (s === 'notstarted') notStarted++;
+                else if (s === 'inprogress') inProgress++;
+                else if (s === 'inreview') inReview++;
+                else if (s === 'completed') completed++;
+                // 'closed' intentionally omitted from chart — adjust if needed
+            });
+
+            return {
+                total: notStarted + inProgress + inReview + completed,
+                notStarted: notStarted,
+                inProgress: inProgress,
+                inReview: inReview,
+                completed: completed
+            };
+        });
+
+        // ── Dashboard: Leave Balance ───────────────────────────────────
+        // Get leave balance for the logged-in employee.
+        // Fetches or creates default balance data.
+        this.on('getLeaveBalance', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id
+                || '';
+
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email: email });
+
+            if (!emp) {
+                return {
+                    casualLeave: 0,
+                    sickLeave: 0,
+                    annualLeave: 0,
+                    total: 0
+                };
+            }
+
+            // Try to fetch the balance; if it doesn't exist, return defaults
+            const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
+            const balance = await SELECT.one
+                .from(LEAVE_BALANCE)
+                .where({ employee_employeeId: emp.employeeId });
+
+            if (balance) {
+                const total = (balance.casualLeave || 0) + (balance.sickLeave || 0) + (balance.annualLeave || 0);
+                return {
+                    casualLeave: balance.casualLeave || 0,
+                    sickLeave: balance.sickLeave || 0,
+                    annualLeave: balance.annualLeave || 0,
+                    total: total
+                };
+            }
+
+            // Return default values if no balance record exists
+            return {
+                casualLeave: 6,
+                sickLeave: 4,
+                annualLeave: 8,
+                total: 18
+            };
+        });
+
+        // ── Dashboard: My Tasks ────────────────────────────────────────
+        // Get summary of tasks assigned to the logged-in employee.
+        // Returns counts of pending and high-priority tasks.
+        this.on('getMyTasks', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id
+                || '';
+
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email: email });
+
+            if (!emp) {
+                return {
+                    totalPending: 0,
+                    highPriorityCount: 0,
+                    inProgressCount: 0,
+                    notStartedCount: 0
+                };
+            }
+
+            // Fetch all tasks assigned to this employee
+            const tasks = await SELECT.from(TASK)
+                .where({ assignedTo_employeeId: emp.employeeId });
+
+            // Count by status and priority
+            let totalPending = 0;
+            let highPriorityCount = 0;
+            let inProgressCount = 0;
+            let notStartedCount = 0;
+
+            tasks.forEach(t => {
+                // Count pending tasks (not 'Completed' or 'Closed')
+                if (t.status && t.status !== 'Completed' && t.status !== 'Closed') {
+                    totalPending++;
+
+                    // Count high priority items
+                    if (t.priority === 'High') {
+                        highPriorityCount++;
+                    }
+
+                    // Count by status
+                    if (t.status === 'In Progress') {
+                        inProgressCount++;
+                    } else if (t.status === 'Not Started') {
+                        notStartedCount++;
+                    }
+                }
+            });
+
+            return {
+                totalPending: totalPending,
+                highPriorityCount: highPriorityCount,
+                inProgressCount: inProgressCount,
+                notStartedCount: notStartedCount
+            };
+        });
+
+        // ── Mark Attendance ───────────────────────────────────────────────────
+this.on('markAttendance', async (req) => {
+    const { attendanceDate, attendanceDay, attendanceTime } = req.data;
+    const user  = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+               || user.id || '';
+
+    if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
+
+    const emp = await SELECT.one.from(EMPLOYEE)
+        .columns('employeeId', 'employeeName')
+        .where({ email });
+
+    if (!emp) return req.error(404, 'Employee not found for this login.');
+
+    // Prevent duplicate marking for the same day
+    const existing = await SELECT.one.from(ATTENDANCE)
+        .where({
+            employee_employeeId: emp.employeeId,
+            attendanceDate:      attendanceDate
+        });
+
+    if (existing) {
+        return req.error(409,
+            `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`
+        );
+    }
+
+    const attendanceId = `${emp.employeeId}-${attendanceDate}`;
+
+    await INSERT.into(ATTENDANCE).entries({
+        attendanceId,
+        employee_employeeId: emp.employeeId,
+        attendanceDate,
+        attendanceDay:  attendanceDay  || '',
+        attendanceTime: attendanceTime || new Date().toTimeString().split(' ')[0],
+        status:         'Present'
+    });
+
+    cds.log('attend').info(
+        `Attendance marked: ${emp.employeeId} (${emp.employeeName}) ` +
+        `on ${attendanceDate} at ${attendanceTime}`
+    );
+
+    return {
+        attendanceId,
+        employeeId:    emp.employeeId,
+        employeeName:  emp.employeeName,
+        attendanceDate,
+        attendanceDay,
+        attendanceTime,
+        message: `Attendance recorded successfully for ${attendanceDay}, ${attendanceDate}.`
+    };
+}),
+
+// ── Check Today Attendance ────────────────────────────────────────────
+this.on('getTodayAttendance', async (req) => {
+    const { attendanceDate } = req.data;
+    const user  = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+               || user.id || '';
+
+    const emp = await SELECT.one.from(EMPLOYEE)
+        .columns('employeeId')
+        .where({ email });
+
+    if (!emp) return { alreadyMarked: false };
+
+    const existing = await SELECT.one.from(ATTENDANCE)
+        .where({
+            employee_employeeId: emp.employeeId,
+            attendanceDate:      attendanceDate
+        });
+
+    return {
+        alreadyMarked:  !!existing,
+        attendanceTime: existing ? existing.attendanceTime : null,
+        attendanceDay:  existing ? existing.attendanceDay  : null
+    };
+});
+
+>>>>>>> 17f43d825c7224e6d8b2001a6c164bb59a5ece07
         return super.init();
     }
 }
@@ -292,6 +895,16 @@ class ManagerService extends cds.ApplicationService {
                 .set({ status: 'Approved', approvedOn: new Date(), remarks: remarks || '' })
                 .where({ timesheetId });
 
+            // Auto-notify employee
+            const hdr = await SELECT.one.from(HEADER).columns('employee_employeeId').where({ timesheetId });
+            if (hdr) await createNotification(
+                hdr.employee_employeeId,
+                'TIMESHEET_APPROVED',
+                'Timesheet Approved ✓',
+                `Your timesheet ${timesheetId} has been approved.${remarks ? ' Remarks: ' + remarks : ''}`,
+                timesheetId
+            );
+
             await UPDATE(ENTRY)
                 .set({ isLocked: true, entryStatus: 'Approved' })
                 .where({ timesheet_timesheetId: timesheetId });
@@ -313,7 +926,7 @@ class ManagerService extends cds.ApplicationService {
                 return req.error(400, `Employee '${assigneeId}' has no email on file.`);
             }
 
-            const prefix  = PRIORITY_PREFIX[priority] || `[${priority || 'Normal'} Priority]`;
+            const prefix = PRIORITY_PREFIX[priority] || `[${priority || 'Normal'} Priority]`;
             const subject = `${prefix} New task assigned: ${taskName}`;
             const body =
                 `Hi ${employee.employeeName || ''},\n\n` +
@@ -340,15 +953,23 @@ class ManagerService extends cds.ApplicationService {
                 }
             }
 
+            await createNotification(
+                assigneeId,
+                'TASK_ASSIGNED',
+                `New Task: ${taskName}`,
+                `You have been assigned "${taskName}" (${priority || 'Normal'} priority).`,
+                taskId
+            );
+
             // No SMTP configured — log the message so we have a reproducible trail.
             cds.log('mail').info(
                 `[Email simulated]\nFROM: ${from}\nTO: ${employee.email}\nSUBJECT: ${subject}\n${body}`
             );
             return {
-                sent:      false,
+                sent: false,
                 recipient: employee.email,
                 subject,
-                message:   'SMTP not configured — email content was logged on the server.'
+                message: 'SMTP not configured — email content was logged on the server.'
             };
         });
 
@@ -371,6 +992,15 @@ class ManagerService extends cds.ApplicationService {
                 .set({ status: 'Rejected', rejectedOn: new Date(), remarks: remarks || '' })
                 .where({ timesheetId });
 
+            const hdr2 = await SELECT.one.from(HEADER).columns('employee_employeeId').where({ timesheetId });
+            if (hdr2) await createNotification(
+                hdr2.employee_employeeId,
+                'TIMESHEET_REJECTED',
+                'Timesheet Returned ✗',
+                `Your timesheet ${timesheetId} was returned.${remarks ? ' Reason: ' + remarks : ''}`,
+                timesheetId
+            );
+
             await UPDATE(ENTRY)
                 .set({ isLocked: false, entryStatus: 'Open' })
                 .where({ timesheet_timesheetId: timesheetId });
@@ -383,8 +1013,8 @@ class ManagerService extends cds.ApplicationService {
         // employee can later pull it via consumeTaskAttachment.
         this.on('uploadTaskAttachment', async (req) => {
             const { taskId, fileName, mimeType, dataBase64 } = req.data;
-            if (!taskId)     return req.error(400, 'taskId is required.');
-            if (!fileName)   return req.error(400, 'fileName is required.');
+            if (!taskId) return req.error(400, 'taskId is required.');
+            if (!fileName) return req.error(400, 'fileName is required.');
             if (!dataBase64) return req.error(400, 'dataBase64 is required.');
 
             const exists = await SELECT.one.from(TASK).columns('taskId').where({ taskId });
@@ -401,8 +1031,8 @@ class ManagerService extends cds.ApplicationService {
 
             await UPDATE(TASK)
                 .set({
-                    attachment:         buf,
-                    attachmentName:     fileName,
+                    attachment: buf,
+                    attachmentName: fileName,
                     attachmentMimeType: mimeType || 'application/octet-stream'
                 })
                 .where({ taskId });
@@ -497,7 +1127,7 @@ class HRService extends cds.ApplicationService {
         this.on('addEmployee', async (req) => {
             const d = req.data || {};
             if (!d.employeeName) return req.error(400, 'employeeName is required.');
-            if (!d.email)        return req.error(400, 'email is required.');
+            if (!d.email) return req.error(400, 'email is required.');
 
             // Reject if the email is already taken — keeps the
             // EmployeeMaster.email lookup used by getCurrentUser unique.
@@ -509,27 +1139,27 @@ class HRService extends cds.ApplicationService {
 
             const newId = await generateEmployeeId();
             const row = {
-                employeeId:        newId,
-                employeeName:      d.employeeName,
-                designation:       d.designation       || null,
-                email:             d.email,
-                address:           d.address           || null,
-                mobileNumber:      d.mobileNumber      || null,
+                employeeId: newId,
+                employeeName: d.employeeName,
+                designation: d.designation || null,
+                email: d.email,
+                address: d.address || null,
+                mobileNumber: d.mobileNumber || null,
                 manager_employeeId: d.managerEmployeeId || null,
-                isActive:          true,
-                dateOfBirth:       d.dateOfBirth       || null,
-                gender:            d.gender            || null,
-                department:        d.department        || null,
-                joiningDate:       d.joiningDate       || null,
-                employmentType:    d.employmentType    || null,
-                aadhaarNumber:     d.aadhaarNumber     || null,
-                panNumber:         d.panNumber         || null,
-                status:            'Active',
-                emergencyContact:  d.emergencyContact  || null,
-                bloodGroup:        d.bloodGroup        || null,
+                isActive: true,
+                dateOfBirth: d.dateOfBirth || null,
+                gender: d.gender || null,
+                department: d.department || null,
+                joiningDate: d.joiningDate || null,
+                employmentType: d.employmentType || null,
+                aadhaarNumber: d.aadhaarNumber || null,
+                panNumber: d.panNumber || null,
+                status: 'Active',
+                emergencyContact: d.emergencyContact || null,
+                bloodGroup: d.bloodGroup || null,
                 bankAccountNumber: d.bankAccountNumber || null,
-                bankName:          d.bankName          || null,
-                bankIfsc:          d.bankIfsc          || null
+                bankName: d.bankName || null,
+                bankIfsc: d.bankIfsc || null
             };
             await INSERT.into(EMPLOYEE).entries(row);
             cds.log('hr').info(`HR created employee ${newId} (${d.employeeName})`);

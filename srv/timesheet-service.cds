@@ -1,4 +1,4 @@
-// using { ccentrik.employee.timesheet.schema as db } from '../db/data-model';
+using { ccentrik.employee.timesheet.schema as db } from '../db/data-model';
 
 // // ── Employee Service ──────────────────────────────────────────────────────────
 // service EmployeeService @(path:'/employee') {
@@ -39,8 +39,6 @@
 //     action rejectTimesheet (timesheetId : String(15), remarks : String(255)) returns String;
 // }
 
-using { ccentrik.employee.timesheet.schema as db } from '../db/data-model';
-
 // ── Employee Service ─────────────────────────────────────────────────────────
 service EmployeeService @(path:'/employee') {
 
@@ -49,6 +47,7 @@ service EmployeeService @(path:'/employee') {
     entity MyTasks      @(requires: ['Employee','Manager']) as projection on db.timesheet.TaskMaster;
     entity TaskUpdates  @(requires: ['Employee','Manager']) as projection on db.timesheet.TaskUpdate;
     entity Employees    @(requires: ['Employee','Manager']) as projection on db.timesheet.EmployeeMaster;
+    entity PerformanceRatings as projection on db.timesheet.PerformanceRating; 
 
     // ── Leave ────────────────────────────────────────────────────────
     @(requires: ['Employee','Manager','HR'])
@@ -94,6 +93,93 @@ service EmployeeService @(path:'/employee') {
         mimeType   : String(100);
         dataBase64 : LargeString;
     };
+
+    // Dashboard action: Get work anniversary info for the logged-in employee.
+    // Returns years completed, joining date, and a message.
+    @(requires: ['Employee','Manager'])
+    action getWorkAnniversary() returns {
+        yearsCompleted : Decimal(5,2);
+        joiningDate    : Date;
+        message        : String(255);
+    };
+
+    // Dashboard action: Get leave balance for the logged-in employee.
+    // Returns casual, sick, annual leave counts and total.
+    @(requires: ['Employee','Manager'])
+    action getLeaveBalance() returns {
+        casualLeave : Integer;
+        sickLeave   : Integer;
+        annualLeave : Integer;
+        total       : Integer;
+    };
+
+    // Dashboard action: Get my tasks summary for the logged-in employee.
+    // Returns count of pending tasks and high priority tasks.
+    @(requires: ['Employee','Manager'])
+    action getMyTasks() returns {
+        totalPending      : Integer;
+        highPriorityCount : Integer;
+        inProgressCount   : Integer;
+        notStartedCount   : Integer;
+    };
+
+    // Attendance card  (frontend-only for now; backend returns mock/stub data)
+function getAttendance() returns {
+    attendancePercentage : Integer;
+    presentCount         : Integer;
+    absentCount          : Integer;
+    monthLabel           : String;
+};
+
+// Performance Rating card
+function getPerformanceRating() returns {
+    ratingValue      : Decimal(3,1);
+    ratingCategory   : String(30);
+    reviewMonth      : Integer;
+    reviewYear       : Integer;
+    reviewComment    : String(500);
+};
+
+// Performance Trend graph  (returns JSON array as a String for flexibility)
+function getPerformanceTrend(year : Integer) returns {
+    trendJSON : String;   // JSON array: [{month,monthName,rating}, ...]
+};
+
+// Task Summary donut chart  (reuses existing TaskMaster entity)
+function getTaskSummary() returns {
+    total       : Integer;
+    notStarted  : Integer;
+    inProgress  : Integer;
+    inReview    : Integer;
+    completed   : Integer;
+};
+
+// Recent Notifications (last 5 for logged-in employee)
+function getRecentNotifications() returns array of {
+    notificationId : String(30);
+    type           : String(30);
+    title          : String(100);
+    message        : String(500);
+    isRead         : Boolean;
+    referenceId    : String(30);
+    notifiedAt     : String;   // ISO timestamp string
+};
+
+// Upcoming Calendar events from Google Calendar
+function getUpcomingCalendar() returns {
+    eventsJSON : String;   // JSON array of {id, title, start, end, timeLabel, dateLabel, isToday}
+};
+
+// My Leave Overview — yearly taken vs balance
+function getLeaveOverview(year : Integer) returns {
+    casual       : Integer;   // balance remaining
+    sick         : Integer;
+    annual       : Integer;
+    unpaid       : Integer;
+    totalDays    : Integer;
+    takenJSON    : String;    // [{type,label,taken,balance,color}]
+};
+
 }
 
 // ── Manager Service ──────────────────────────────────────────────────────────

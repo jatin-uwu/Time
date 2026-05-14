@@ -13,7 +13,7 @@
                 type="Transparent"
                 press=".onMenuToggle"
                 style="color:#ffffff;" />
-        <Title text="TIMESHEET" style="color:#ffffff; font-weight:700; letter-spacing:2px;" />
+        <Title text="Employee Dashboard" style="color:#ffffff; font-weight:700; letter-spacing:2px;" />
         <ToolbarSpacer />
         <Avatar initials="{= ${appView>/userInitials} || 'JD' }"
                 displaySize="XS"
@@ -34,7 +34,7 @@
                       backgroundDesign="Transparent"
                       style="background:transparent;">
                     <items>
-                        <StandardListItem title="Dashboard"
+                        <StandardListItem title="Overview"
                             icon="sap-icon://home"
                             type="Active"
                             press=".onNavSelect"
