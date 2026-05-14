@@ -55,6 +55,13 @@
                             style="background:transparent; color:#cbd5e1;">
                             <customData><core:CustomData key="target" value="task-description" /></customData>
                         </StandardListItem>
+                        <StandardListItem title="Apply Leave"
+                            icon="sap-icon://away"
+                            type="Active"
+                            press=".onNavSelect"
+                            style="background:transparent; color:#cbd5e1;">
+                            <customData><core:CustomData key="target" value="apply-leave" /></customData>
+                        </StandardListItem>
                         <StandardListItem title="Timesheet History"
                             icon="sap-icon://history"
                             type="Active"
@@ -94,6 +101,14 @@
                             visible="{= ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
                             <customData><core:CustomData key="target" value="task-status" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="Leave Approvals"
+                            icon="sap-icon://away"
+                            type="Active"
+                            press=".onNavSelect"
+                            visible="{= ${appView>/userRole} === 'manager'}"
+                            style="background:transparent; color:#cbd5e1;">
+                            <customData><core:CustomData key="target" value="leave-approvals" /></customData>
                         </StandardListItem>
 
                         <!-- HR-only entries -->

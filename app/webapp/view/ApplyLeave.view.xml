@@ -1,0 +1,210 @@
+<mvc:View
+    controllerName="timesheet.app.controller.ApplyLeave"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:f="sap.ui.layout.form"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="applyLeavePage" title="Leave Portal" showNavButton="false">
+        <content>
+
+            <!-- ── Balance Cards ── -->
+            <Panel headerText="My Leave Balance" expandable="false" class="sapUiSmallMargin">
+                <content>
+                    <HBox wrap="Wrap" justifyContent="SpaceBetween" class="sapUiSmallMargin">
+
+                        <VBox alignItems="Center" class="tsLeaveCard">
+                            <Title text="{leave>/balance/casual}" level="H2" />
+                            <Text text="Casual" />
+                            <ObjectStatus text="of 5 days" state="None" />
+                        </VBox>
+
+                        <VBox alignItems="Center" class="tsLeaveCard">
+                            <Title text="{leave>/balance/sick}" level="H2" />
+                            <Text text="Sick" />
+                            <ObjectStatus text="of 5 days" state="None" />
+                        </VBox>
+
+                        <VBox alignItems="Center" class="tsLeaveCard">
+                            <Title text="{leave>/balance/paid}" level="H2" />
+                            <Text text="Paid" />
+                            <ObjectStatus text="of 11 days" state="None" />
+                        </VBox>
+
+                        <VBox alignItems="Center" class="tsLeaveCard"
+                              visible="{= ${appView>/userRole} !== 'manager' }">
+                            <Title text="{leave>/balance/maternity}" level="H2" />
+                            <Text text="Maternity" />
+                            <ObjectStatus text="of 180 days" state="None" />
+                        </VBox>
+
+                        <VBox alignItems="Center" class="tsLeaveCard">
+                            <Title text="{leave>/balance/paternity}" level="H2" />
+                            <Text text="Paternity" />
+                            <ObjectStatus text="of 2 days" state="None" />
+                        </VBox>
+
+                    </HBox>
+                </content>
+            </Panel>
+
+            <!-- ── Apply Form ── -->
+            <Panel headerText="Apply for Leave" expandable="true" expanded="true" class="sapUiSmallMargin">
+                <content>
+                    <f:Form editable="true" class="sapUiSmallMargin">
+                        <f:layout>
+                            <f:ResponsiveGridLayout
+                                labelSpanXL="3" labelSpanL="3" labelSpanM="4" labelSpanS="12"
+                                columnsXL="2" columnsL="2" columnsM="1" />
+                        </f:layout>
+                        <f:formContainers>
+                            <f:FormContainer>
+                                <f:formElements>
+
+                                    <f:FormElement label="Leave Type *">
+                                        <f:fields>
+                                            <Select id="selLeaveType"
+                                                    selectedKey="{leave>/form/leaveType}"
+                                                    change=".onLeaveTypeChange">
+                                                <core:Item key="" text="— Select —" />
+                                                <core:Item key="Casual"    text="Casual Leave (5 days/year)" />
+                                                <core:Item key="Sick"      text="Sick Leave (5 days/year)" />
+                                                <core:Item key="Paid"      text="Paid Leave (11 days/year)" />
+                                                <core:Item key="Maternity" text="Maternity Leave (180 days)" />
+                                                <core:Item key="Paternity" text="Paternity Leave (2 days)" />
+                                            </Select>
+                                        </f:fields>
+                                    </f:FormElement>
+
+                                    <f:FormElement label="From Date *">
+                                        <f:fields>
+                                            <DatePicker id="dpFrom"
+                                                        value="{leave>/form/fromDate}"
+                                                        valueFormat="yyyy-MM-dd"
+                                                        displayFormat="MMM d, yyyy"
+                                                        change=".onDateChange" />
+                                        </f:fields>
+                                    </f:FormElement>
+
+                                    <f:FormElement label="To Date *">
+                                        <f:fields>
+                                            <DatePicker id="dpTo"
+                                                        value="{leave>/form/toDate}"
+                                                        valueFormat="yyyy-MM-dd"
+                                                        displayFormat="MMM d, yyyy"
+                                                        change=".onDateChange" />
+                                        </f:fields>
+                                    </f:FormElement>
+
+                                    <f:FormElement label="Working Days">
+                                        <f:fields>
+                                            <ObjectStatus
+                                                id="daysCount"
+                                                text="{= ${leave>/form/days} > 0 ? ${leave>/form/days} + ' working day(s)' : '—' }"
+                                                state="{= ${leave>/form/isUnpaid} ? 'Error' : 'Success' }" />
+                                        </f:fields>
+                                    </f:FormElement>
+
+                                    <!-- Warning: Sick leave will cascade into Casual / Paid -->
+                                    <f:FormElement label=" "
+                                                   visible="{= ${leave>/form/leaveType} === 'Sick' &amp;&amp;
+                                                               ${leave>/form/cascade} !== null &amp;&amp;
+                                                               ( (${leave>/form/cascade/casual} || 0) +
+                                                                 (${leave>/form/cascade/paid}   || 0) +
+                                                                 (${leave>/form/cascade/unpaid} || 0) ) > 0 }">
+                                        <f:fields>
+                                            <MessageStrip
+                                                text="{= 'Sick Leave balance is insufficient. Excess days will be drawn from: ' +
+                                                         ( (${leave>/form/cascade/casual} || 0) > 0 ? (${leave>/form/cascade/casual}) + ' day(s) Casual  ' : '' ) +
+                                                         ( (${leave>/form/cascade/paid}   || 0) > 0 ? (${leave>/form/cascade/paid})   + ' day(s) Paid  '   : '' ) +
+                                                         ( (${leave>/form/cascade/unpaid} || 0) > 0 ? (${leave>/form/cascade/unpaid}) + ' day(s) Unpaid'    : '' ) }"
+                                                type="Warning"
+                                                showIcon="true"
+                                                showCloseButton="false" />
+                                        </f:fields>
+                                    </f:FormElement>
+
+                                    <!-- Warning: Non-sick leave going unpaid -->
+                                    <f:FormElement label=" "
+                                                   visible="{= ${leave>/form/isUnpaid} &amp;&amp;
+                                                               ${leave>/form/leaveType} !== 'Sick' }">
+                                        <f:fields>
+                                            <MessageStrip
+                                                text="⚠ Your leave balance is insufficient. Excess days will be marked as Unpaid Leave."
+                                                type="Warning"
+                                                showIcon="true"
+                                                showCloseButton="false" />
+                                        </f:fields>
+                                    </f:FormElement>
+
+                                    <f:FormElement label="Reason *">
+                                        <f:fields>
+                                            <TextArea id="taReason"
+                                                      value="{leave>/form/reason}"
+                                                      rows="3"
+                                                      maxLength="500"
+                                                      placeholder="Brief reason for leave..." />
+                                        </f:fields>
+                                    </f:FormElement>
+
+                                </f:formElements>
+                            </f:FormContainer>
+                        </f:formContainers>
+                    </f:Form>
+
+                    <Bar class="sapUiSmallMargin">
+                        <contentRight>
+                            <Button text="Reset" press=".onReset" class="sapUiSmallMarginEnd" />
+                            <Button text="Submit Leave Request"
+                                    type="Emphasized"
+                                    press=".onSubmit"
+                                    busy="{leave>/submitting}" />
+                        </contentRight>
+                    </Bar>
+                </content>
+            </Panel>
+
+            <!-- ── Leave History ── -->
+            <Panel headerText="My Leave History" expandable="true" expanded="true" class="sapUiSmallMargin">
+                <content>
+                    <Table id="leaveHistoryTable"
+                           items="{leave>/history}"
+                           noDataText="No leave requests found."
+                           class="sapUiSmallMargin">
+                        <columns>
+                            <Column><Text text="Type" /></Column>
+                            <Column><Text text="From" /></Column>
+                            <Column><Text text="To" /></Column>
+                            <Column width="5rem"><Text text="Days" /></Column>
+                            <Column><Text text="Status" /></Column>
+                            <Column><Text text="Unpaid" /></Column>
+                            <Column><Text text="Reason" /></Column>
+                            <Column><Text text="Applied On" /></Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem>
+                                <cells>
+                                    <Text text="{leave>leaveType}" />
+                                    <Text text="{leave>fromDate}" />
+                                    <Text text="{leave>toDate}" />
+                                    <Text text="{leave>days}" />
+                                    <ObjectStatus
+                                        text="{leave>status}"
+                                        state="{= ${leave>status} === 'Approved' ? 'Success' :
+                                                   ${leave>status} === 'Rejected' ? 'Error' : 'Warning' }" />
+                                    <ObjectStatus
+                                        text="{= ${leave>isUnpaid} ? 'Yes' : 'No' }"
+                                        state="{= ${leave>isUnpaid} ? 'Error' : 'None' }" />
+                                    <Text text="{leave>reason}" wrapping="false" maxLines="1" />
+                                    <Text text="{leave>createdAt}" />
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+                </content>
+            </Panel>
+
+        </content>
+    </Page>
+</mvc:View>

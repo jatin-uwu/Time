@@ -1,0 +1,73 @@
+<mvc:View
+    controllerName="timesheet.app.controller.LeaveApprovals"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="leaveApprovalsPage" title="Leave Approvals" showNavButton="false">
+        <content>
+            <Table id="leaveTable"
+                   items="{leaveMgr>/requests}"
+                   noDataText="No pending leave requests."
+                   class="sapUiSmallMargin">
+                <headerToolbar>
+                    <Toolbar>
+                        <Title text="Pending Leave Requests" level="H4" />
+                        <ToolbarSpacer />
+                        <SegmentedButton id="filterBtn" selectionChange=".onFilterChange">
+                            <items>
+                                <SegmentedButtonItem key="Pending"  text="Pending"  />
+                                <SegmentedButtonItem key="Approved" text="Approved" />
+                                <SegmentedButtonItem key="Rejected" text="Rejected" />
+                                <SegmentedButtonItem key="All"      text="All"      />
+                            </items>
+                        </SegmentedButton>
+                        <Button icon="sap-icon://refresh" press=".onRefresh" tooltip="Refresh" />
+                    </Toolbar>
+                </headerToolbar>
+                <columns>
+                    <Column><Text text="Employee" /></Column>
+                    <Column><Text text="Leave Type" /></Column>
+                    <Column><Text text="From" /></Column>
+                    <Column><Text text="To" /></Column>
+                    <Column width="4rem"><Text text="Days" /></Column>
+                    <Column><Text text="Reason" /></Column>
+                    <Column><Text text="Unpaid" /></Column>
+                    <Column><Text text="Status" /></Column>
+                    <Column width="14rem"><Text text="Actions" /></Column>
+                </columns>
+                <items>
+                    <ColumnListItem>
+                        <cells>
+                            <Text text="{leaveMgr>employeeName}" />
+                            <Text text="{leaveMgr>leaveType}" />
+                            <Text text="{leaveMgr>fromDate}" />
+                            <Text text="{leaveMgr>toDate}" />
+                            <Text text="{leaveMgr>days}" />
+                            <Text text="{leaveMgr>reason}" wrapping="false" maxLines="2" />
+                            <ObjectStatus
+                                text="{= ${leaveMgr>isUnpaid} ? 'Yes' : 'No' }"
+                                state="{= ${leaveMgr>isUnpaid} ? 'Error' : 'None' }" />
+                            <ObjectStatus
+                                text="{leaveMgr>status}"
+                                state="{= ${leaveMgr>status} === 'Approved' ? 'Success' :
+                                           ${leaveMgr>status} === 'Rejected' ? 'Error' : 'Warning' }" />
+                            <HBox>
+                                <Button text="Approve"
+                                        type="Accept"
+                                        visible="{= ${leaveMgr>status} === 'Pending' }"
+                                        press=".onApprove"
+                                        class="sapUiTinyMarginEnd" />
+                                <Button text="Reject"
+                                        type="Reject"
+                                        visible="{= ${leaveMgr>status} === 'Pending' }"
+                                        press=".onReject" />
+                            </HBox>
+                        </cells>
+                    </ColumnListItem>
+                </items>
+            </Table>
+        </content>
+    </Page>
+</mvc:View>

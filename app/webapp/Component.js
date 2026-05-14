@@ -15,6 +15,8 @@ sap.ui.define([
             // Honour ?role=employee|manager in the URL (query string OR
             // first segment of the hash) so power users can deep-link
             // into a specific role without flipping localStorage manually.
+            // NOTE: This only controls the SIDEBAR UI — the actual logged-in
+            // user is always determined by getCurrentUser() from the backend.
             try {
                 const params = new URLSearchParams(window.location.search);
                 let sRole = params.get("role");
@@ -22,8 +24,9 @@ sap.ui.define([
                     const hashQ = window.location.hash.split("?")[1];
                     if (hashQ) sRole = new URLSearchParams(hashQ).get("role");
                 }
-                if (sRole && (sRole === "employee" || sRole === "manager")) {
+                if (sRole && (sRole === "employee" || sRole === "manager" || sRole === "hr")) {
                     localStorage.setItem("tsRole", sRole);
+                    localStorage.removeItem("tsEmployeeId");
                 }
             } catch (e) { /* ignore — non-blocking */ }
 
@@ -38,15 +41,17 @@ sap.ui.define([
 
             this.getRouter().initialize();
 
-            // Kick off the JWT → EmployeeMaster lookup as early as
-            // possible so the App/Dashboard controllers find the cached
-            // record on their first read.
-            this.getCurrentUser();
+            // Kick off the JWT → EmployeeMaster lookup as early as possible.
+            // This also sets localStorage.tsRole to the REAL backend role so
+            // the sidebar shows the correct items after the promise resolves.
+            this.getCurrentUser().then(user => {
+                if (user && user.role) {
+                    try { localStorage.setItem("tsRole", user.role); } catch (e) {}
+                }
+            });
         },
 
-        // ── Demo seed (idempotent — only fires when storages are empty) ─────
-        // Tip: to wipe and reseed at any time, run in DevTools console:
-        //   localStorage.clear(); location.reload();
+        // ── Demo seed (idempotent) ────────────────────────────────────────
         _seedDemoData() {
             const oTasks   = this.getModel("tasks");
             const oUpdates = this.getModel("taskUpdates");
@@ -63,9 +68,6 @@ sap.ui.define([
                 const d = new Date(today); d.setDate(d.getDate() + n); return d;
             };
 
-            // A tiny in-memory text file used as the manager's reference
-            // attachment on TASK001, so you can exercise the download flow
-            // without manually uploading a file.
             const sampleText =
                 "Reference document for Dashboard Widget task\n" +
                 "===========================================\n" +
@@ -267,26 +269,34 @@ sap.ui.define([
         },
 
         // ── Current user identity ─────────────────────────────────────────
-        // In production, fetches the JWT user from the backend and matches
-        // it against EmployeeMaster by email. In local-dev (no auth) or
-        // before the backend has answered, falls back to a role-based
-        // demo id so the UI still renders.
+        // Always prefer the backend-resolved record from getCurrentUser().
+        // The localStorage fallback is only used before the first backend
+        // call resolves (i.e. during the very first render tick).
         getCurrentEmployeeId() {
-            // Prefer the resolved record from getCurrentUser (cached on
-            // first successful call below).
-            if (this._oCurrentUser && this._oCurrentUser.employeeId) {
-                return this._oCurrentUser.employeeId;
-            }
-            // Local-dev fallback: switch by ?role=… or localStorage.tsRole
-            let sRole = "employee";
-            try { sRole = (localStorage.getItem("tsRole") || "employee").toLowerCase(); } catch (e) {}
-            return sRole === "manager" ? "EMP1005" : "EMP1001";
+        // Always prefer the backend-resolved user first
+        if (this._oCurrentUser && this._oCurrentUser.employeeId) {
+            return this._oCurrentUser.employeeId;
+        }
+
+        // ── Fallback: read from localStorage ────────────────────────────
+        // Check if a real employeeId was persisted directly (set during login)
+        try {
+            const sStoredEmpId = localStorage.getItem("tsEmployeeId");
+            if (sStoredEmpId) return sStoredEmpId;
+        } catch (e) {}
+
+        // Last resort: derive from role
+        let sRole = "employee";
+        try { sRole = (localStorage.getItem("tsRole") || "employee").toLowerCase(); } catch (e) {}
+        if (sRole === "manager") return "EMP1005";
+        if (sRole === "hr")      return "EMP1002";
+        return "EMP1001";
         },
 
         // Returns a promise that resolves to the JWT-resolved user record.
-        // First call hits the backend `/employee/getCurrentUser` action;
-        // subsequent calls return the cached promise so every controller
-        // can `await` the same network call.
+        // Caches the promise so every controller awaits the same call.
+        // On resolution it ALSO writes localStorage.tsRole so the sidebar
+        // immediately reflects the real backend role without a page reload.
         getCurrentUser() {
             if (this._pCurrentUser) return this._pCurrentUser;
             const oModel = this.getModel();
@@ -300,9 +310,14 @@ sap.ui.define([
                     const oResult = oCtx.getBoundContext().getObject();
                     if (oResult && (oResult.employeeId || oResult.email)) {
                         this._oCurrentUser = oResult;
-                        // Persist role so localStorage-driven code paths
-                        // (sidebar visibility) keep working.
-                        try { localStorage.setItem("tsRole", oResult.role || "employee"); } catch (e) {}
+                        try {
+                            localStorage.setItem("tsRole", oResult.role || "employee");
+                            // ── Persist the real employeeId so getCurrentEmployeeId()
+                            //    works correctly before the next getCurrentUser() resolves
+                            if (oResult.employeeId) {
+                                localStorage.setItem("tsEmployeeId", oResult.employeeId);
+                            }
+                        } catch (e) {}
                         return oResult;
                     }
                     return null;
@@ -313,21 +328,19 @@ sap.ui.define([
             return this._pCurrentUser;
         },
 
-        // Built-in employee directory — mirrors db/data/EmployeeMaster.csv.
-        // Used as a fallback when the OData /Employees call is blocked
-        // (e.g. local-dev without auth, or 401/403 from xsuaa).
+        // Built-in employee directory — mirrors EmployeeMaster.csv exactly.
+        // Used as fallback when the OData /Employees call fails.
         _builtinEmployees: {
-            "EMP1001": { employeeId: "EMP1001", employeeName: "Jatin Bajaj",    designation: "Developer",       email: "jatin.bajaj@ccentrik.com",  address: "Delhi India",   mobileNumber: "9876543210", manager_employeeId: "EMP1005", isActive: true },
-            "EMP1002": { employeeId: "EMP1002", employeeName: "Rahul Sharma",   designation: "HR",              email: "rahul.sharma@ccentrik.com", address: "Mumbai India",  mobileNumber: "9876543211", manager_employeeId: "EMP1005", isActive: true },
-            "EMP1003": { employeeId: "EMP1003", employeeName: "Neha Kapoor",    designation: "Sales Executive", email: "neha.kapoor@ccentrik.com",  address: "Gurgaon India", mobileNumber: "9876543212", manager_employeeId: "EMP1006", isActive: true },
-            "EMP1004": { employeeId: "EMP1004", employeeName: "Ankit Verma",    designation: "Accountant",      email: "ankit.verma@ccentrik.com",  address: "Noida India",   mobileNumber: "9876543213", manager_employeeId: "EMP1005", isActive: true },
-            "EMP1005": { employeeId: "EMP1005", employeeName: "Pankaj Sir",     designation: "Manager",         email: "pankaj@ccentrik.com",       address: "Delhi India",   mobileNumber: "9876543214", manager_employeeId: "EMP1006", isActive: true },
-            "EMP1006": { employeeId: "EMP1006", employeeName: "Founder Member", designation: "Founder",         email: "founder@ccentrik.com",      address: "Delhi India",   mobileNumber: "9876543215", manager_employeeId: null,     isActive: true }
+            "EMP1001": { employeeId: "EMP1001", employeeName: "Jatin Bajaj",     designation: "Developer",       email: "jatin.bajaj@ccentrik.com",   address: "Delhi India",    mobileNumber: "9876543210", manager_employeeId: "EMP1005", isActive: true },
+            "EMP1002": { employeeId: "EMP1002", employeeName: "Punit Sharma",    designation: "HR",              email: "punit.sharma@ccentrik.com",  address: "Gwalior India",  mobileNumber: "9876543211", manager_employeeId: "EMP1005", isActive: true },
+            "EMP1003": { employeeId: "EMP1003", employeeName: "Neha Kapoor",     designation: "Sales Executive", email: "neha.kapoor@ccentrik.com",   address: "Gurgaon India",  mobileNumber: "9876543212", manager_employeeId: "EMP1006", isActive: true },
+            "EMP1004": { employeeId: "EMP1004", employeeName: "Ankit Verma",     designation: "Accountant",      email: "ankit.verma@ccentrik.com",   address: "Noida India",    mobileNumber: "9876543213", manager_employeeId: "EMP1005", isActive: true },
+            "EMP1005": { employeeId: "EMP1005", employeeName: "Vineet",          designation: "Manager",         email: "vineet@ccentrik.com",         address: "Delhi India",    mobileNumber: "9876543214", manager_employeeId: "EMP1006", isActive: true },
+            "EMP1006": { employeeId: "EMP1006", employeeName: "Founder Member",  designation: "Founder",         email: "founder@ccentrik.com",        address: "Delhi India",    mobileNumber: "9876543215", manager_employeeId: null,      isActive: true },
+            "EMP1007": { employeeId: "EMP1007", employeeName: "Punit Sharma",    designation: "Developer",       email: "punit.sharma@ccentrik.com",   address: "Delhi India",    mobileNumber: "9876543216", manager_employeeId: "EMP1005", isActive: true },
+            "EMP1008": { employeeId: "EMP1008", employeeName: "Priya Singh",     designation: "HR Manager",      email: "priya.singh@ccentrik.com",    address: "Bangalore India",mobileNumber: "9876543217", manager_employeeId: "EMP1006", isActive: true }
         },
 
-        // Looks up an employee record by id. Tries the OData "Employees"
-        // entity first (so the UI reflects live edits), falls back to the
-        // built-in directory above if the call fails or returns nothing.
         getEmployeeById(sEmployeeId) {
             if (!sEmployeeId) return Promise.resolve(null);
             this._employeeCache = this._employeeCache || {};
@@ -356,25 +369,11 @@ sap.ui.define([
             } catch (e) { return oDefault; }
         },
 
-        persistHistory() {
-            try { localStorage.setItem("tsHistory",       JSON.stringify(this.getModel("history").getData()));       } catch (e) {}
-        },
-
-        persistLocked() {
-            try { localStorage.setItem("tsLocked",        JSON.stringify(this.getModel("locked").getData()));        } catch (e) {}
-        },
-
-        persistNotifications() {
-            try { localStorage.setItem("tsNotifications", JSON.stringify(this.getModel("notifications").getData())); } catch (e) {}
-        },
-
-        persistTasks() {
-            try { localStorage.setItem("tsTasks",         JSON.stringify(this.getModel("tasks").getData()));         } catch (e) {}
-        },
-
-        persistTaskUpdates() {
-            try { localStorage.setItem("tsTaskUpdates",   JSON.stringify(this.getModel("taskUpdates").getData()));   } catch (e) {}
-        },
+        persistHistory()       { try { localStorage.setItem("tsHistory",       JSON.stringify(this.getModel("history").getData()));       } catch (e) {} },
+        persistLocked()        { try { localStorage.setItem("tsLocked",        JSON.stringify(this.getModel("locked").getData()));        } catch (e) {} },
+        persistNotifications() { try { localStorage.setItem("tsNotifications", JSON.stringify(this.getModel("notifications").getData())); } catch (e) {} },
+        persistTasks()         { try { localStorage.setItem("tsTasks",         JSON.stringify(this.getModel("tasks").getData()));         } catch (e) {} },
+        persistTaskUpdates()   { try { localStorage.setItem("tsTaskUpdates",   JSON.stringify(this.getModel("taskUpdates").getData()));   } catch (e) {} },
 
         getContentDensityClass() {
             return Device.support.touch ? "sapUiSizeCozy" : "sapUiSizeCompact";

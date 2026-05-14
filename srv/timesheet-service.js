@@ -4,6 +4,7 @@ const HEADER   = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetHeader';
 const ENTRY    = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetEntry';
 const EMPLOYEE = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeMaster';
 const TASK     = 'ccentrik.employee.timesheet.schema.timesheet.TaskMaster';
+const LEAVE_REQUEST = 'ccentrik.employee.timesheet.schema.timesheet.LeaveRequest';
 
 const PRIORITY_PREFIX = {
     'High':   '[HIGH PRIORITY]',
@@ -185,6 +186,86 @@ class EmployeeService extends cds.ApplicationService {
             return result;
         });
 
+        this.on('applyLeave', async (req) => {
+            const { employeeId, leaveType, fromDate, toDate, days, reason, isUnpaid } = req.data;
+
+            if (!employeeId) return req.error(400, 'employeeId is required.');
+            if (!leaveType)  return req.error(400, 'leaveType is required.');
+            if (!fromDate)   return req.error(400, 'fromDate is required.');
+            if (!toDate)     return req.error(400, 'toDate is required.');
+            if (!days)       return req.error(400, 'days is required.');
+            if (!reason)     return req.error(400, 'reason is required.');
+
+            // Block founders from applying leave
+            const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId });
+            if (!emp) return req.error(404, `Employee '${employeeId}' not found.`);
+            if (emp.designation && emp.designation.toLowerCase() === 'founder') {
+                return req.error(403, 'Founders are not eligible to apply for leave.');
+            }
+
+            const leaveId = `${employeeId}-LV-${Date.now()}`;
+
+            await INSERT.into(LEAVE_REQUEST).entries({
+                leaveId,
+                employee_employeeId: employeeId,
+                leaveType,
+                fromDate,
+                toDate,
+                days,
+                reason,
+                status:   'Pending',
+                isUnpaid: isUnpaid || false
+                // cascade is stored as a JSON string in managerRemarks temporarily
+                // OR: add cascadeSick/cascadeCasual/cascadePaid columns to the schema.
+                // Simplest: store it in a spare string field for now.
+            });
+
+            // After INSERT, if cascade was passed, log it (for auditability)
+            const cascadeStr = req.data.cascade || null;
+            if (cascadeStr) {
+                cds.log('leave').info(`Cascade breakdown for ${leaveId}: ${cascadeStr}`);
+            }
+
+            //cds.log('leave').info(`Leave request ${leaveId} submitted by ${employeeId}`);
+
+            // Notify manager via email if SMTP configured
+            if (emp.manager_employeeId) {
+                const manager = await SELECT.one.from(EMPLOYEE)
+                    .where({ employeeId: emp.manager_employeeId });
+                if (manager && manager.email) {
+                    const mailer = getMailer();
+                    const subject = `Leave Request from ${emp.employeeName}`;
+                    const body =
+                        `Hi ${manager.employeeName || 'Manager'},\n\n` +
+                        `${emp.employeeName} has applied for leave.\n\n` +
+                        `Leave Type : ${leaveType}\n` +
+                        `From       : ${fromDate}\n` +
+                        `To         : ${toDate}\n` +
+                        `Days       : ${days}${isUnpaid ? ' (includes unpaid days)' : ''}\n` +
+                        `Reason     : ${reason}\n\n` +
+                        `Please login to the Timesheet app to approve or reject.\n\n` +
+                        `— Timesheet System`;
+
+                    if (mailer) {
+                        try {
+                            await mailer.sendMail({
+                                from: process.env.SMTP_FROM || 'no-reply@timesheet.local',
+                                to:   manager.email,
+                                subject,
+                                text: body
+                            });
+                        } catch (e) {
+                            cds.log('mail').warn('Leave notification email failed:', e.message);
+                        }
+                    } else {
+                        cds.log('leave').info(`[Email simulated] TO: ${manager.email}\n${body}`);
+                    }
+                }
+            }
+
+            return { leaveId, status: 'Pending', isUnpaid: isUnpaid || false };
+        });
+
         return super.init();
     }
 }
@@ -329,7 +410,63 @@ class ManagerService extends cds.ApplicationService {
             cds.log('attach').info(`Attachment '${fileName}' (${buf.length} bytes) stored for task ${taskId}`);
             return `Attachment uploaded for task '${taskId}'.`;
         });
+        
+        this.on('approveLeave', async (req) => {
+            const { leaveId, approved, remarks } = req.data;
+            if (!leaveId) return req.error(400, 'leaveId is required.');
 
+            const leave = await SELECT.one.from(LEAVE_REQUEST).where({ leaveId });
+            if (!leave) return req.error(404, `Leave request '${leaveId}' not found.`);
+            if (leave.status !== 'Pending') {
+                return req.error(400, `Leave is already '${leave.status}'.`);
+            }
+
+            const newStatus = approved ? 'Approved' : 'Rejected';
+
+            await UPDATE(LEAVE_REQUEST)
+                .set({
+                    status:          newStatus,
+                    managerRemarks:  remarks || '',
+                    approvedOn:      new Date()
+                })
+                .where({ leaveId });
+
+            // Notify employee
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .where({ employeeId: leave.employee_employeeId });
+
+            if (emp && emp.email) {
+                const mailer = getMailer();
+                const subject = `Your leave request has been ${newStatus}`;
+                const body =
+                    `Hi ${emp.employeeName || ''},\n\n` +
+                    `Your leave request has been ${newStatus.toLowerCase()} by your manager.\n\n` +
+                    `Leave Type : ${leave.leaveType}\n` +
+                    `From       : ${leave.fromDate}\n` +
+                    `To         : ${leave.toDate}\n` +
+                    `Days       : ${leave.days}\n` +
+                    (remarks ? `Remarks    : ${remarks}\n` : '') +
+                    `\n— Timesheet System`;
+
+                if (mailer) {
+                    try {
+                        await mailer.sendMail({
+                            from: process.env.SMTP_FROM || 'no-reply@timesheet.local',
+                            to:   emp.email,
+                            subject,
+                            text: body
+                        });
+                    } catch (e) {
+                        cds.log('mail').warn('Leave approval email failed:', e.message);
+                    }
+                } else {
+                    cds.log('leave').info(`[Email simulated] TO: ${emp.email}\n${body}`);
+                }
+            }
+
+            cds.log('leave').info(`Leave ${leaveId} ${newStatus} by manager`);
+            return { leaveId, status: newStatus };
+        });
         return super.init();
     }
 }

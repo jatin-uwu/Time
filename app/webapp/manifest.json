@@ -93,7 +93,8 @@
                 "viewPath":           "timesheet.app.view",
                 "controlAggregation": "pages",
                 "controlId":          "detailNav",
-                "transition":         "slide"
+                "transition":         "slide",
+                "clearControlAggregation": false
             },
             "routes": [
                 { "name": "dashboard",     "pattern": "",              "target": "dashboard"     },
@@ -106,20 +107,24 @@
                 { "name": "task-status",   "pattern": "task-status",   "target": "task-status"   },
                 { "name": "notifications", "pattern": "notifications", "target": "notifications" },
                 { "name": "add-employee",  "pattern": "add-employee",  "target": "add-employee"  },
-                { "name": "all-employees", "pattern": "all-employees", "target": "all-employees" }
+                { "name": "all-employees", "pattern": "all-employees", "target": "all-employees" },
+                { "name": "apply-leave", "pattern": "apply-leave", "target": "apply-leave" },
+                { "name": "leave-approvals", "pattern": "leave-approvals", "target": "leave-approvals" }
             ],
             "targets": {
-                "dashboard":     { "viewName": "Dashboard",     "viewId": "dashboard"     },
-                "timesheet":     { "viewName": "Timesheet",     "viewId": "timesheet"     },
-                "task-description": { "viewName": "TaskDescription", "viewId": "task-description" },
-                "task-detail":   { "viewName": "TaskDetail",   "viewId": "task-detail"   },
-                "history":       { "viewName": "History",       "viewId": "history"       },
-                "manager":       { "viewName": "Manager",       "viewId": "manager"       },
-                "task-assignment": { "viewName": "TaskAssignment", "viewId": "task-assignment" },
-                "task-status":   { "viewName": "TaskStatus",   "viewId": "task-status"   },
-                "notifications": { "viewName": "Notifications", "viewId": "notifications" },
-                "add-employee":  { "viewName": "AddEmployee",   "viewId": "add-employee"  },
-                "all-employees": { "viewName": "AllEmployees",  "viewId": "all-employees" }
+                "dashboard":     { "viewName": "Dashboard"     },
+                "timesheet":     { "viewName": "Timesheet"    },
+                "task-description": { "viewName": "TaskDescription" },
+                "task-detail":   { "viewName": "TaskDetail"},
+                "history":       { "viewName": "History"      },
+                "manager":       { "viewName": "Manager"    },
+                "task-assignment": { "viewName": "TaskAssignment"},
+                "task-status":   { "viewName": "TaskStatus" },
+                "notifications": { "viewName": "Notifications"},
+                "add-employee":  { "viewName": "AddEmployee" },
+                "all-employees": { "viewName": "AllEmployees"},
+                "apply-leave": { "viewName": "ApplyLeave" },
+                "leave-approvals":{ "viewName": "LeaveApprovals"}
             }
         }
     }

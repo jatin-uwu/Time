@@ -234,13 +234,15 @@ sap.ui.define([
                 dashboard:        "mainNavList",
                 timesheet:        "mainNavList",
                 "task-description": "mainNavList",
+                "apply-leave": "mainNavList",
                 history:          "mainNavList",
                 manager:          "mainNavList",
                 "task-assignment": "mainNavList",
                 "task-status":    "mainNavList",
                 notifications:    "mainNavList",
                 "add-employee":     "mainNavList",
-                "all-employees":    "mainNavList" 
+                "all-employees":    "mainNavList",
+                "leave-approvals": "mainNavList"                
             };
 
             ["mainNavList", "managerNavList", "accountNavList"].forEach(sId => {

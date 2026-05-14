@@ -130,4 +130,19 @@ entity TimesheetEntry : managed {
     entryStatus        : String(20);   // Open, Locked, Approved
     isLocked           : Boolean default false;
 }
+
+entity LeaveRequest : managed {
+    key leaveId        : String(20);
+    employee           : Association to EmployeeMaster;
+    leaveType          : String(20);   // Casual / Sick / Paid / Maternity / Paternity
+    fromDate           : Date;
+    toDate             : Date;
+    days               : Integer;
+    reason             : String(500);
+    status             : String(20) default 'Pending';  // Pending / Approved / Rejected
+    isUnpaid           : Boolean default false;
+    managerRemarks     : String(255);
+    approvedBy         : Association to EmployeeMaster;
+    approvedOn         : Timestamp;
+}
 }
