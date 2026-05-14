@@ -122,6 +122,29 @@ service EmployeeService @(path:'/employee') {
         inProgressCount   : Integer;
         notStartedCount   : Integer;
     };
+       action markAttendance(
+        attendanceDate : String,
+        attendanceDay  : String,
+        attendanceTime : String
+    ) returns {
+        attendanceId   : String;
+        employeeId     : String;
+        employeeName   : String;
+        attendanceDate : String;
+        attendanceDay  : String;
+        attendanceTime : String;
+        message        : String;
+    };
+
+    action getTodayAttendance(
+        attendanceDate : String
+    ) returns {
+        alreadyMarked  : Boolean;
+        attendanceTime : String;
+        attendanceDay  : String;
+    };
+
+     entity AttendanceRecord as projection on db.timesheet.AttendanceRecord;
 
     // Attendance card  (frontend-only for now; backend returns mock/stub data)
 function getAttendance() returns {

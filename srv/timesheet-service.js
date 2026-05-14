@@ -3,15 +3,11 @@ const cds = require('@sap/cds');
 const HEADER = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetHeader';
 const ENTRY = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetEntry';
 const EMPLOYEE = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeMaster';
-<<<<<<< HEAD
-const TASK     = 'ccentrik.employee.timesheet.schema.timesheet.TaskMaster';
 const LEAVE_REQUEST = 'ccentrik.employee.timesheet.schema.timesheet.LeaveRequest';
-=======
 const TASK = 'ccentrik.employee.timesheet.schema.timesheet.TaskMaster';
 const PERFORMANCE_RATING = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
 const NOTIFICATION = 'ccentrik.employee.timesheet.schema.timesheet.Notification';
 const ATTENDANCE = 'ccentrik.employee.timesheet.schema.timesheet.AttendanceRecord';
->>>>>>> 17f43d825c7224e6d8b2001a6c164bb59a5ece07
 
 const PRIORITY_PREFIX = {
     'High': '[HIGH PRIORITY]',
@@ -213,7 +209,6 @@ class EmployeeService extends cds.ApplicationService {
             return result;
         });
 
-<<<<<<< HEAD
         this.on('applyLeave', async (req) => {
             const { employeeId, leaveType, fromDate, toDate, days, reason, isUnpaid } = req.data;
 
@@ -294,7 +289,6 @@ class EmployeeService extends cds.ApplicationService {
             return { leaveId, status: 'Pending', isUnpaid: isUnpaid || false };
         });
 
-=======
         // ── Dashboard: Recent Notifications ───────────────────────────────────────
         this.on('getRecentNotifications', async (req) => {
             const user = req.user || {};
@@ -868,7 +862,6 @@ this.on('getTodayAttendance', async (req) => {
     };
 });
 
->>>>>>> 17f43d825c7224e6d8b2001a6c164bb59a5ece07
         return super.init();
     }
 }

@@ -52,7 +52,7 @@
                 "settings": {
                     "synchronizationMode": "None",
                     "operationMode":       "Server",
-                    "autoExpandSelect":    true
+                    "autoExpandSelect":    false
                 }
             },
             "manager": {

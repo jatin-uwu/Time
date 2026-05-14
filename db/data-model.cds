@@ -123,7 +123,6 @@ entity TimesheetEntry : managed {
     isLocked           : Boolean default false;
 }
 
-<<<<<<< HEAD
 entity LeaveRequest : managed {
     key leaveId        : String(20);
     employee           : Association to EmployeeMaster;
@@ -137,7 +136,7 @@ entity LeaveRequest : managed {
     managerRemarks     : String(255);
     approvedBy         : Association to EmployeeMaster;
     approvedOn         : Timestamp;
-=======
+}
 entity LeaveBalance : managed {
     key balanceId      : String(20);
     employee           : Association to EmployeeMaster;
@@ -184,6 +183,5 @@ entity AttendanceRecord : managed {
     attendanceDay      : String(15);     // Wednesday
     attendanceTime     : Time;           // 14:32:00
     status             : String(10) default 'Present';
->>>>>>> 17f43d825c7224e6d8b2001a6c164bb59a5ece07
 }
 }
