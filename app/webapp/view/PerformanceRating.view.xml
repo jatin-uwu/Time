@@ -1,0 +1,154 @@
+<mvc:View
+    controllerName="timesheet.app.controller.PerformanceRating"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.f"
+    displayBlock="true">
+
+    <Page id="perfRatingPage"
+          title="Performance Rating"
+          showHeader="true"
+          showNavButton="false">
+
+        <content>
+            <VBox style="padding:1.5rem;gap:1rem;">
+
+                <!-- Header -->
+                <HBox justifyContent="SpaceBetween" alignItems="Center"
+                      style="margin-bottom:1rem;">
+                    <VBox>
+                        <Title text="Performance Rating" level="H3"
+                               style="font-size:1.4rem;font-weight:700;color:#111827;"/>
+                        <Text text="Rate your team members monthly performance"
+                              style="font-size:0.88rem;color:#6b7280;margin-top:4px;"/>
+                    </VBox>
+                </HBox>
+
+                <!-- Rating Form Card -->
+                <VBox style="background:#fff;border-radius:12px;
+                             box-shadow:0 2px 12px rgba(0,0,0,0.08);
+                             padding:24px;box-sizing:border-box;">
+
+                    <Title text="Add / Update Rating"
+                           level="H5"
+                           style="font-size:1rem;font-weight:600;
+                                  color:#111827;margin-bottom:20px;"/>
+
+                    <!-- Employee Selection -->
+                    <VBox style="margin-bottom:16px;">
+                        <Label text="Select Employee" required="true"
+                               style="font-size:0.85rem;font-weight:600;
+                                      color:#374151;margin-bottom:6px;"/>
+                        <Select id="empSelect"
+                                width="100%"
+                                change=".onEmployeeChange"
+                                forceSelection="false">
+                            <core:Item key="" text="-- Select Employee --"/>
+                        </Select>
+                    </VBox>
+
+                    <!-- Month and Year row -->
+                    <HBox style="gap:16px;margin-bottom:16px;">
+                        <VBox style="flex:1;">
+                            <Label text="Month" required="true"
+                                   style="font-size:0.85rem;font-weight:600;
+                                          color:#374151;margin-bottom:6px;"/>
+                            <Select id="monthSelect" width="100%">
+                                <core:Item key="1"  text="January"/>
+                                <core:Item key="2"  text="February"/>
+                                <core:Item key="3"  text="March"/>
+                                <core:Item key="4"  text="April"/>
+                                <core:Item key="5"  text="May"/>
+                                <core:Item key="6"  text="June"/>
+                                <core:Item key="7"  text="July"/>
+                                <core:Item key="8"  text="August"/>
+                                <core:Item key="9"  text="September"/>
+                                <core:Item key="10" text="October"/>
+                                <core:Item key="11" text="November"/>
+                                <core:Item key="12" text="December"/>
+                            </Select>
+                        </VBox>
+                        <VBox style="flex:1;">
+                            <Label text="Year" required="true"
+                                   style="font-size:0.85rem;font-weight:600;
+                                          color:#374151;margin-bottom:6px;"/>
+                            <Select id="yearSelect" width="100%">
+                                <core:Item key="2024" text="2024"/>
+                                <core:Item key="2025" text="2025"/>
+                                <core:Item key="2026" text="2026"/>
+                            </Select>
+                        </VBox>
+                    </HBox>
+
+                    <!-- Rating Input -->
+                    <VBox style="margin-bottom:16px;">
+                        <Label text="Rating (1.0 - 5.0)" required="true"
+                               style="font-size:0.85rem;font-weight:600;
+                                      color:#374151;margin-bottom:6px;"/>
+                        <Slider id="ratingSlider"
+                                min="1" max="5" step="0.1"
+                                value="{perfRating>/form/ratingValue}"
+                                liveChange=".onRatingChange"
+                                width="100%"
+                                enableTickmarks="true"/>
+                        <!-- Star display -->
+                        <core:HTML id="starsDisplay"
+                                   sanitizeContent="false"
+                                   content="{perfRating>/form/starsHTML}"/>
+                        <Text text="{perfRating>/form/ratingLabel}"
+                              style="font-size:1.1rem;font-weight:700;
+                                     color:#3b82f6;margin-top:4px;"/>
+                    </VBox>
+
+                    <!-- Comment -->
+                    <VBox style="margin-bottom:20px;">
+                        <Label text="Review Comment"
+                               style="font-size:0.85rem;font-weight:600;
+                                      color:#374151;margin-bottom:6px;"/>
+                        <TextArea id="commentArea"
+                                  value="{perfRating>/form/comment}"
+                                  placeholder="Enter performance review comments..."
+                                  rows="4"
+                                  width="100%"
+                                  maxLength="500"/>
+                    </VBox>
+
+                    <!-- Submit Button -->
+                    <HBox justifyContent="End">
+                        <Button text="Submit Rating"
+                                type="Emphasized"
+                                press=".onSubmitRating"
+                                style="border-radius:8px;"/>
+                    </HBox>
+
+                </VBox>
+
+                <!-- Ratings History Table -->
+                <VBox style="background:#fff;border-radius:12px;
+                             box-shadow:0 2px 12px rgba(0,0,0,0.08);
+                             padding:24px;box-sizing:border-box;margin-top:1rem;">
+
+                    <HBox justifyContent="SpaceBetween" alignItems="Center"
+                          style="margin-bottom:16px;">
+                        <Title text="Rating History" level="H5"
+                               style="font-size:1rem;font-weight:600;color:#111827;"/>
+                        <Select id="historyEmpSelect"
+                                width="200px"
+                                change=".onHistoryEmployeeChange"
+                                forceSelection="false">
+                            <core:Item key="" text="All Employees"/>
+                        </Select>
+                    </HBox>
+
+                    <core:HTML id="ratingsTableHTML"
+                               sanitizeContent="false"
+                               content="{perfRating>/ratingsTableHTML}"/>
+
+                </VBox>
+
+            </VBox>
+        </content>
+    </Page>
+
+</mvc:View>

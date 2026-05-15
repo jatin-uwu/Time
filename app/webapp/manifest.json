@@ -109,7 +109,8 @@
                 { "name": "add-employee",  "pattern": "add-employee",  "target": "add-employee"  },
                 { "name": "all-employees", "pattern": "all-employees", "target": "all-employees" },
                 { "name": "apply-leave", "pattern": "apply-leave", "target": "apply-leave" },
-                { "name": "leave-approvals", "pattern": "leave-approvals", "target": "leave-approvals" }
+                { "name": "leave-approvals", "pattern": "leave-approvals", "target": "leave-approvals" },
+                { "name": "performance-rating", "pattern": "performance-rating", "target": "performance-rating" }
             ],
             "targets": {
                 "dashboard":     { "viewName": "Dashboard"     },
@@ -124,7 +125,8 @@
                 "add-employee":  { "viewName": "AddEmployee" },
                 "all-employees": { "viewName": "AllEmployees"},
                 "apply-leave": { "viewName": "ApplyLeave" },
-                "leave-approvals":{ "viewName": "LeaveApprovals"}
+                "leave-approvals":{ "viewName": "LeaveApprovals"},
+                "performance-rating": { "viewName": "PerformanceRating" }
             }
         }
     }

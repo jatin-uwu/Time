@@ -6,68 +6,78 @@
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
-    
+
     <Toolbar style="background:#1e293b; height:48px;">
         <Button id="menuToggleBtn"
-                icon="sap-icon://menu2"
-                type="Transparent"
-                press=".onMenuToggle"
-                style="color:#ffffff;" />
+            icon="sap-icon://menu2"
+            type="Transparent"
+            press=".onMenuToggle"
+            style="color:#ffffff;" />
         <Title text="Employee Dashboard" style="color:#ffffff; font-weight:700; letter-spacing:2px;" />
         <ToolbarSpacer />
         <Avatar initials="{= ${appView>/userInitials} || 'JD' }"
-                displaySize="XS"
-                press=".onProfilePress"
-                tooltip="My profile" />
+            displaySize="XS"
+            press=".onProfilePress"
+            tooltip="My profile" />
     </Toolbar>
 
     <SplitApp id="app">
 
         <masterPages>
             <Page id="navPage" showHeader="false"
-                  class="timesheetSidebar"
-                  backgroundDesign="Transparent">
+                class="timesheetSidebar"
+                backgroundDesign="Transparent">
 
                 <!-- Unified navigation -->
                 <List id="mainNavList"
-                      mode="None"
-                      backgroundDesign="Transparent"
-                      style="background:transparent;">
+                    mode="None"
+                    backgroundDesign="Transparent"
+                    style="background:transparent;">
                     <items>
                         <StandardListItem title="Overview"
                             icon="sap-icon://home"
                             type="Active"
                             press=".onNavSelect"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="dashboard" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="dashboard" />
+                            </customData>
                         </StandardListItem>
                         <StandardListItem title="Timesheet"
                             icon="sap-icon://calendar"
                             type="Active"
                             press=".onNavSelect"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="timesheet" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="timesheet" />
+                            </customData>
                         </StandardListItem>
                         <StandardListItem title="Task Descriptions"
                             icon="sap-icon://wallet"
                             type="Active"
                             press=".onNavSelect"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="task-description" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="task-description" />
+                            </customData>
                         </StandardListItem>
                         <StandardListItem title="Apply Leave"
                             icon="sap-icon://away"
                             type="Active"
                             press=".onNavSelect"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="apply-leave" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="apply-leave" />
+                            </customData>
                         </StandardListItem>
                         <StandardListItem title="Timesheet History"
                             icon="sap-icon://history"
                             type="Active"
                             press=".onNavSelect"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="history" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="history" />
+                            </customData>
                         </StandardListItem>
                         <StandardListItem title="Notifications"
                             icon="sap-icon://bell"
@@ -76,7 +86,9 @@
                             infoState="Error"
                             press=".onNavSelect"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="notifications" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="notifications" />
+                            </customData>
                         </StandardListItem>
                         <StandardListItem title="Approvals"
                             icon="sap-icon://approvals"
@@ -84,7 +96,9 @@
                             press=".onNavSelect"
                             visible="{= ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="manager" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="manager" />
+                            </customData>
                         </StandardListItem>
                         <StandardListItem title="Assign Task"
                             icon="sap-icon://create-form"
@@ -92,7 +106,9 @@
                             press=".onNavSelect"
                             visible="{= ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="task-assignment" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="task-assignment" />
+                            </customData>
                         </StandardListItem>
                         <StandardListItem title="Task Status"
                             icon="sap-icon://activity-items"
@@ -100,15 +116,25 @@
                             press=".onNavSelect"
                             visible="{= ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="task-status" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="task-status" />
+                            </customData>
                         </StandardListItem>
+                        <StandardListItem
+                            id="navPerfRating"
+                            title="Performance Rating"
+                            icon="sap-icon://survey"
+                            press=".onNavPerfRating"
+                            visible="{= ${app>/role} === 'manager' }" />
                         <StandardListItem title="Leave Approvals"
                             icon="sap-icon://away"
                             type="Active"
                             press=".onNavSelect"
                             visible="{= ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="leave-approvals" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="leave-approvals" />
+                            </customData>
                         </StandardListItem>
 
                         <!-- HR-only entries -->
@@ -118,7 +144,9 @@
                             press=".onNavSelect"
                             visible="{= ${appView>/userRole} === 'hr'}"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="add-employee" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="add-employee" />
+                            </customData>
                         </StandardListItem>
                         <StandardListItem title="All Employees"
                             icon="sap-icon://employee"
@@ -126,17 +154,20 @@
                             press=".onNavSelect"
                             visible="{= ${appView>/userRole} === 'hr'}"
                             style="background:transparent; color:#cbd5e1;">
-                            <customData><core:CustomData key="target" value="all-employees" /></customData>
+                            <customData>
+                                <core:CustomData key="target" value="all-employees" />
+                            </customData>
                         </StandardListItem>
                     </items>
                 </List>
 
-                <!-- Empty placeholder kept so existing code referencing managerNavList still resolves safely -->
+                <!-- Empty placeholder kept so existing code referencing managerNavList still
+                resolves safely -->
                 <List id="managerNavList"
-                      mode="None"
-                      backgroundDesign="Transparent"
-                      visible="false"
-                      style="background:transparent;" />
+                    mode="None"
+                    backgroundDesign="Transparent"
+                    visible="false"
+                    style="background:transparent;" />
 
             </Page>
         </masterPages>

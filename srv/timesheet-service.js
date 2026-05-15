@@ -209,15 +209,121 @@ class EmployeeService extends cds.ApplicationService {
             return result;
         });
 
+        this.on('getPerformanceRating', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email });
+
+            if (!emp) {
+                return {
+                    ratingValue: 0,
+                    ratingCategory: 'N/A',
+                    reviewMonth: 0,
+                    reviewYear: 0,
+                    reviewComment: ''
+                };
+            }
+
+            const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
+
+            // Get the most recent rating — highest year then month
+            const ratings = await SELECT.from(PERF)
+                .where({ employee_employeeId: emp.employeeId })
+                .orderBy('reviewYear desc', 'reviewMonth desc')
+                .limit(1);
+
+            if (!ratings || ratings.length === 0) {
+                return {
+                    ratingValue: 0,
+                    ratingCategory: 'N/A',
+                    reviewMonth: 0,
+                    reviewYear: 0,
+                    reviewComment: ''
+                };
+            }
+
+            const r = ratings[0];
+            const val = parseFloat(r.ratingValue) || 0;
+            const category = val >= 4.5 ? 'Excellent'
+                : val >= 3.5 ? 'Good'
+                    : val >= 2.5 ? 'Average'
+                        : val > 0 ? 'Needs Improvement'
+                            : 'N/A';
+
+            return {
+                ratingValue: val,
+                ratingCategory: category,
+                reviewMonth: r.reviewMonth || 0,
+                reviewYear: r.reviewYear || 0,
+                reviewComment: r.reviewComment || ''
+            };
+        });
+
+
+        this.on('getPerformanceTrend', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+            const year = req.data.year || new Date().getFullYear();
+
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email });
+
+            if (!emp) {
+                return { trendJSON: JSON.stringify(Array(12).fill(null)) };
+            }
+
+            const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
+
+            const ratings = await SELECT.from(PERF)
+                .where({
+                    employee_employeeId: emp.employeeId,
+                    reviewYear: year
+                })
+                .orderBy('reviewMonth asc');
+
+            // Build 12-slot array — null for months with no rating
+            const MONTH_NAMES = [
+                'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+            ];
+
+            const slots = Array(12).fill(null);
+            ratings.forEach(r => {
+                const idx = (r.reviewMonth || 1) - 1;
+                if (idx >= 0 && idx < 12) {
+                    slots[idx] = {
+                        rating: parseFloat(r.ratingValue) || null,
+                        comment: r.reviewComment || "",
+                        category: r.ratingCategory || ""
+                    };
+                }
+            });
+
+            // Return as array directly — controller reads oData directly
+            // Also return as trendJSON string for backward compatibility
+            return {
+                trendJSON: JSON.stringify(slots)
+            };
+        });
+
+
+
+
         this.on('applyLeave', async (req) => {
             const { employeeId, leaveType, fromDate, toDate, days, reason, isUnpaid } = req.data;
 
             if (!employeeId) return req.error(400, 'employeeId is required.');
-            if (!leaveType)  return req.error(400, 'leaveType is required.');
-            if (!fromDate)   return req.error(400, 'fromDate is required.');
-            if (!toDate)     return req.error(400, 'toDate is required.');
-            if (!days)       return req.error(400, 'days is required.');
-            if (!reason)     return req.error(400, 'reason is required.');
+            if (!leaveType) return req.error(400, 'leaveType is required.');
+            if (!fromDate) return req.error(400, 'fromDate is required.');
+            if (!toDate) return req.error(400, 'toDate is required.');
+            if (!days) return req.error(400, 'days is required.');
+            if (!reason) return req.error(400, 'reason is required.');
 
             // Block founders from applying leave
             const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId });
@@ -236,7 +342,7 @@ class EmployeeService extends cds.ApplicationService {
                 toDate,
                 days,
                 reason,
-                status:   'Pending',
+                status: 'Pending',
                 isUnpaid: isUnpaid || false
                 // cascade is stored as a JSON string in managerRemarks temporarily
                 // OR: add cascadeSick/cascadeCasual/cascadePaid columns to the schema.
@@ -273,7 +379,7 @@ class EmployeeService extends cds.ApplicationService {
                         try {
                             await mailer.sendMail({
                                 from: process.env.SMTP_FROM || 'no-reply@timesheet.local',
-                                to:   manager.email,
+                                to: manager.email,
                                 subject,
                                 text: body
                             });
@@ -481,156 +587,110 @@ class EmployeeService extends cds.ApplicationService {
             };
         });
 
-        this.on('getAttendance', async (req) => {
-            const now = new Date();
-            const monthNames = [
-                'January', 'February', 'March', 'April', 'May', 'June',
-                'July', 'August', 'September', 'October', 'November', 'December'
-            ];
-
-            // ── MOCK DATA (replace with real query when backend is ready) ────────
-            // To hook up real data, query an Attendance entity here and calculate
-            // presentCount / absentCount from actual records.
-            const presentCount = 22;
-            const absentCount = 0;
-            const workingDays = presentCount + absentCount || 1;
-            const attendancePct = Math.round((presentCount / workingDays) * 100);
-            // ─────────────────────────────────────────────────────────────────────
-
-            return {
-                attendancePercentage: attendancePct,
-                presentCount: presentCount,
-                absentCount: absentCount,
-                monthLabel: monthNames[now.getMonth()]
-            };
-        });
 
         // ── Dashboard: Performance Rating ─────────────────────────────────────────
         // Fetches the most-recent PerformanceRating row for the logged-in employee.
-        this.on('getPerformanceRating', async (req) => {
-            const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id || '';
+this.on('getPerformanceRating', async (req) => {
+    const user  = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+               || user.id || '';
 
-            const emp = await SELECT.one
-                .from(EMPLOYEE)
-                .columns('employeeId')
-                .where({ email: email });
+    const emp = await SELECT.one.from(EMPLOYEE)
+        .columns('employeeId')
+        .where({ email });
 
-            if (!emp) {
-                return {
-                    ratingValue: 0,
-                    ratingCategory: 'N/A',
-                    reviewMonth: 0,
-                    reviewYear: 0,
-                    reviewComment: ''
-                };
-            }
+    if (!emp) {
+        return {
+            ratingValue:    0,
+            ratingCategory: 'N/A',
+            reviewMonth:    0,
+            reviewYear:     0,
+            reviewComment:  ''
+        };
+    }
 
-            // Most recent rating = highest year + month combination
-            const ratings = await SELECT
-                .from(PERFORMANCE_RATING)
-                .where({ employee_employeeId: emp.employeeId })
-                .orderBy({ reviewYear: 'desc', reviewMonth: 'desc' })
-                .limit(1);
+    const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
 
-            if (!ratings || ratings.length === 0) {
-                return {
-                    ratingValue: 0,
-                    ratingCategory: 'No Rating Yet',
-                    reviewMonth: 0,
-                    reviewYear: 0,
-                    reviewComment: ''
-                };
-            }
+    // Get the most recent rating — highest year then month
+    const ratings = await SELECT.from(PERF)
+        .where({ employee_employeeId: emp.employeeId })
+        .orderBy('reviewYear desc', 'reviewMonth desc')
+        .limit(1);
 
-            const latest = ratings[0];
+    if (!ratings || ratings.length === 0) {
+        return {
+            ratingValue:    0,
+            ratingCategory: 'N/A',
+            reviewMonth:    0,
+            reviewYear:     0,
+            reviewComment:  ''
+        };
+    }
 
-            // Derive category from value (business rule)
-            const deriveCategory = (val) => {
-                if (val >= 4.5) return 'Excellent';
-                if (val >= 3.5) return 'Good';
-                if (val >= 2.5) return 'Average';
-                return 'Needs Improvement';
-            };
+    const r        = ratings[0];
+    const val      = parseFloat(r.ratingValue) || 0;
+    const category = val >= 4.5 ? 'Excellent'
+                   : val >= 3.5 ? 'Good'
+                   : val >= 2.5 ? 'Average'
+                   : val >  0   ? 'Needs Improvement'
+                   : 'N/A';
 
-            const category = latest.ratingCategory || deriveCategory(latest.ratingValue || 0);
-
-            // Notify only once per rating — check if a notification already exists for this ratingId
-            if (latest && latest.ratingId) {
-                const exists = await SELECT.one.from(NOTIFICATION)
-                    .where({ employee_employeeId: emp.employeeId, referenceId: latest.ratingId });
-                if (!exists) {
-                    await createNotification(
-                        emp.employeeId,
-                        'PERFORMANCE_RATED',
-                        'Performance Review Published',
-                        `Your rating for ${latest.reviewMonth}/${latest.reviewYear} is ${latest.ratingValue}/5 — ${category}.`,
-                        latest.ratingId
-                    );
-                }
-            }
-
-            return {
-                ratingValue: parseFloat((latest.ratingValue || 0).toFixed(1)),
-                ratingCategory: category,
-                reviewMonth: latest.reviewMonth || 0,
-                reviewYear: latest.reviewYear || 0,
-                reviewComment: latest.reviewComment || ''
-            };
-        });
+    return {
+        ratingValue:    val,
+        ratingCategory: category,
+        reviewMonth:    r.reviewMonth  || 0,
+        reviewYear:     r.reviewYear   || 0,
+        reviewComment:  r.reviewComment || ''
+    };
+});
 
         // ── Dashboard: Performance Trend ──────────────────────────────────────────
         // Returns all monthly ratings for the current (or requested) year,
         // sorted Jan→Dec, so the frontend can draw a line chart.
-        this.on('getPerformanceTrend', async (req) => {
-            const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id || '';
+this.on('getPerformanceTrend', async (req) => {
+    const user  = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+               || user.id || '';
+    const year  = req.data.year || new Date().getFullYear();
 
-            const requestedYear = req.data && req.data.year
-                ? parseInt(req.data.year, 10)
-                : new Date().getFullYear();
+    const emp = await SELECT.one.from(EMPLOYEE)
+        .columns('employeeId')
+        .where({ email });
 
-            const emp = await SELECT.one
-                .from(EMPLOYEE)
-                .columns('employeeId')
-                .where({ email: email });
+    if (!emp) {
+        return { trendJSON: JSON.stringify(Array(12).fill(null)) };
+    }
 
-            const MONTH_NAMES = [
-                'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-            ];
+    const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
 
-            if (!emp) {
-                return { trendJSON: JSON.stringify([]) };
-            }
+    const ratings = await SELECT.from(PERF)
+        .where({
+            employee_employeeId: emp.employeeId,
+            reviewYear:          year
+        })
+        .orderBy('reviewMonth asc');
 
-            const ratings = await SELECT
-                .from(PERFORMANCE_RATING)
-                .where({
-                    employee_employeeId: emp.employeeId,
-                    reviewYear: requestedYear
-                })
-                .orderBy({ reviewMonth: 'asc' });
+    // Build 12-slot array — null for months with no rating
+    const MONTH_NAMES = [
+        'Jan','Feb','Mar','Apr','May','Jun',
+        'Jul','Aug','Sep','Oct','Nov','Dec'
+    ];
 
-            // Build month-keyed map so gaps are visible as null (not omitted)
-            const map = {};
-            (ratings || []).forEach(r => {
-                map[r.reviewMonth] = parseFloat((r.ratingValue || 0).toFixed(1));
-            });
+    const slots = Array(12).fill(null);
+    ratings.forEach(r => {
+        const idx = (r.reviewMonth || 1) - 1;
+        if (idx >= 0 && idx < 12) {
+            slots[idx] = parseFloat(r.ratingValue) || null;
+        }
+    });
 
-            const trend = [];
-            for (let m = 1; m <= 12; m++) {
-                trend.push({
-                    month: m,
-                    monthName: MONTH_NAMES[m - 1],
-                    rating: map[m] !== undefined ? map[m] : null
-                });
-            }
+    // Return as array directly — controller reads oData directly
+    // Also return as trendJSON string for backward compatibility
+    return {
+        trendJSON: JSON.stringify(slots)
+    };
+});
 
-            return { trendJSON: JSON.stringify(trend) };
-        });
 
         // ── Dashboard: Task Summary ────────────────────────────────────────────────
         // Reuses existing TaskMaster entity.  Counts tasks by status for the
@@ -727,8 +787,7 @@ class EmployeeService extends cds.ApplicationService {
         this.on('getMyTasks', async (req) => {
             const user = req.user || {};
             const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id
-                || '';
+                || user.id || '';
 
             const emp = await SELECT.one
                 .from(EMPLOYEE)
@@ -739,128 +798,170 @@ class EmployeeService extends cds.ApplicationService {
                 return {
                     totalPending: 0,
                     highPriorityCount: 0,
-                    inProgressCount: 0,
-                    notStartedCount: 0
+                    mediumPriorityCount: 0,
+                    lowPriorityCount: 0
                 };
             }
 
-            // Fetch all tasks assigned to this employee
             const tasks = await SELECT.from(TASK)
                 .where({ assignedTo_employeeId: emp.employeeId });
 
-            // Count by status and priority
             let totalPending = 0;
             let highPriorityCount = 0;
-            let inProgressCount = 0;
-            let notStartedCount = 0;
+            let mediumPriorityCount = 0;
+            let lowPriorityCount = 0;
 
             tasks.forEach(t => {
-                // Count pending tasks (not 'Completed' or 'Closed')
                 if (t.status && t.status !== 'Completed' && t.status !== 'Closed') {
                     totalPending++;
-
-                    // Count high priority items
-                    if (t.priority === 'High') {
-                        highPriorityCount++;
-                    }
-
-                    // Count by status
-                    if (t.status === 'In Progress') {
-                        inProgressCount++;
-                    } else if (t.status === 'Not Started') {
-                        notStartedCount++;
-                    }
+                    if (t.priority === 'High') highPriorityCount++;
+                    else if (t.priority === 'Medium') mediumPriorityCount++;
+                    else if (t.priority === 'Low') lowPriorityCount++;
                 }
             });
 
             return {
-                totalPending: totalPending,
-                highPriorityCount: highPriorityCount,
-                inProgressCount: inProgressCount,
-                notStartedCount: notStartedCount
+                totalPending,
+                highPriorityCount,
+                mediumPriorityCount,
+                lowPriorityCount
             };
         });
 
         // ── Mark Attendance ───────────────────────────────────────────────────
-this.on('markAttendance', async (req) => {
-    const { attendanceDate, attendanceDay, attendanceTime } = req.data;
-    const user  = req.user || {};
-    const email = (user.attr && (user.attr.email || user.attr.mail))
-               || user.id || '';
+        this.on('markAttendance', async (req) => {
+            const { attendanceDate, attendanceDay, attendanceTime } = req.data;
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
 
-    if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
+            if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
 
-    const emp = await SELECT.one.from(EMPLOYEE)
-        .columns('employeeId', 'employeeName')
-        .where({ email });
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId', 'employeeName')
+                .where({ email });
 
-    if (!emp) return req.error(404, 'Employee not found for this login.');
+            if (!emp) return req.error(404, 'Employee not found for this login.');
 
-    // Prevent duplicate marking for the same day
-    const existing = await SELECT.one.from(ATTENDANCE)
-        .where({
-            employee_employeeId: emp.employeeId,
-            attendanceDate:      attendanceDate
+            // Prevent duplicate marking for the same day
+            const existing = await SELECT.one.from(ATTENDANCE)
+                .where({
+                    employee_employeeId: emp.employeeId,
+                    attendanceDate: attendanceDate
+                });
+
+            if (existing) {
+                return req.error(409,
+                    `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`
+                );
+            }
+
+            const attendanceId = `${emp.employeeId}-${attendanceDate}`;
+
+            await INSERT.into(ATTENDANCE).entries({
+                attendanceId,
+                employee_employeeId: emp.employeeId,
+                attendanceDate,
+                attendanceDay: attendanceDay || '',
+                attendanceTime: attendanceTime || new Date().toTimeString().split(' ')[0],
+                status: 'Present'
+            });
+
+            cds.log('attend').info(
+                `Attendance marked: ${emp.employeeId} (${emp.employeeName}) ` +
+                `on ${attendanceDate} at ${attendanceTime}`
+            );
+
+            return {
+                attendanceId,
+                employeeId: emp.employeeId,
+                employeeName: emp.employeeName,
+                attendanceDate,
+                attendanceDay,
+                attendanceTime,
+                message: `Attendance recorded successfully for ${attendanceDay}, ${attendanceDate}.`
+            };
+        }),
+
+            // ── Check Today Attendance ────────────────────────────────────────────
+            this.on('getAttendance', async (req) => {
+                const user = req.user || {};
+                const email = (user.attr && (user.attr.email || user.attr.mail))
+                    || user.id || '';
+
+                const emp = await SELECT.one.from(EMPLOYEE)
+                    .columns('employeeId')
+                    .where({ email });
+
+                if (!emp) {
+                    return {
+                        attendancePercentage: 0,
+                        presentCount: 0,
+                        absentCount: 0,
+                        monthLabel: new Date().toLocaleString('default', { month: 'long' })
+                    };
+                }
+
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = now.getMonth() + 1;
+                const monthStr = String(month).padStart(2, '0');
+
+                // Fetch all attendance records for current month
+                const records = await SELECT.from(ATTENDANCE)
+                    .where(`employee_employeeId = '${emp.employeeId}'
+            AND attendanceDate LIKE '${year}-${monthStr}-%'`);
+
+                const presentCount = records.length;
+
+                // Count working days (Mon-Fri) from 1st of month up to today
+                let workingDays = 0;
+                const d = new Date(year, month - 1, 1);
+                while (d <= now && d.getMonth() === month - 1) {
+                    const day = d.getDay();
+                    if (day !== 0 && day !== 6) workingDays++;
+                    d.setDate(d.getDate() + 1);
+                }
+
+                const absentCount = Math.max(0, workingDays - presentCount);
+                const attendancePercentage = workingDays > 0
+                    ? Math.round((presentCount / workingDays) * 100)
+                    : 0;
+
+                return {
+                    attendancePercentage,
+                    presentCount,
+                    absentCount,
+                    monthLabel: now.toLocaleString('default', { month: 'long' })
+                };
+            });
+
+        this.on('getTodayAttendance', async (req) => {
+            const { attendanceDate } = req.data;
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email });
+
+            if (!emp) {
+                return { alreadyMarked: false, attendanceTime: null, attendanceDay: null };
+            }
+
+            const existing = await SELECT.one.from(ATTENDANCE)
+                .where({
+                    employee_employeeId: emp.employeeId,
+                    attendanceDate: attendanceDate
+                });
+
+            return {
+                alreadyMarked: !!existing,
+                attendanceTime: existing ? existing.attendanceTime : null,
+                attendanceDay: existing ? existing.attendanceDay : null
+            };
         });
-
-    if (existing) {
-        return req.error(409,
-            `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`
-        );
-    }
-
-    const attendanceId = `${emp.employeeId}-${attendanceDate}`;
-
-    await INSERT.into(ATTENDANCE).entries({
-        attendanceId,
-        employee_employeeId: emp.employeeId,
-        attendanceDate,
-        attendanceDay:  attendanceDay  || '',
-        attendanceTime: attendanceTime || new Date().toTimeString().split(' ')[0],
-        status:         'Present'
-    });
-
-    cds.log('attend').info(
-        `Attendance marked: ${emp.employeeId} (${emp.employeeName}) ` +
-        `on ${attendanceDate} at ${attendanceTime}`
-    );
-
-    return {
-        attendanceId,
-        employeeId:    emp.employeeId,
-        employeeName:  emp.employeeName,
-        attendanceDate,
-        attendanceDay,
-        attendanceTime,
-        message: `Attendance recorded successfully for ${attendanceDay}, ${attendanceDate}.`
-    };
-}),
-
-// ── Check Today Attendance ────────────────────────────────────────────
-this.on('getTodayAttendance', async (req) => {
-    const { attendanceDate } = req.data;
-    const user  = req.user || {};
-    const email = (user.attr && (user.attr.email || user.attr.mail))
-               || user.id || '';
-
-    const emp = await SELECT.one.from(EMPLOYEE)
-        .columns('employeeId')
-        .where({ email });
-
-    if (!emp) return { alreadyMarked: false };
-
-    const existing = await SELECT.one.from(ATTENDANCE)
-        .where({
-            employee_employeeId: emp.employeeId,
-            attendanceDate:      attendanceDate
-        });
-
-    return {
-        alreadyMarked:  !!existing,
-        attendanceTime: existing ? existing.attendanceTime : null,
-        attendanceDay:  existing ? existing.attendanceDay  : null
-    };
-});
 
         return super.init();
     }
@@ -904,6 +1005,69 @@ class ManagerService extends cds.ApplicationService {
 
             return `Timesheet '${timesheetId}' approved.`;
         });
+
+
+this.on('submitPerformanceRating', async (req) => {
+    const {
+        employeeId, ratingValue, reviewMonth,
+        reviewYear, reviewComment, ratingCategory
+    } = req.data;
+
+    if (!employeeId)  return req.error(400, 'employeeId is required.');
+    if (!ratingValue) return req.error(400, 'ratingValue is required.');
+    if (!reviewMonth) return req.error(400, 'reviewMonth is required.');
+    if (!reviewYear)  return req.error(400, 'reviewYear is required.');
+
+    const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
+
+    // Check if rating already exists for this employee/month/year
+    const existing = await SELECT.one.from(PERF)
+        .where({
+            employee_employeeId: employeeId,
+            reviewMonth:         reviewMonth,
+            reviewYear:          reviewYear
+        });
+
+    const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2,'0')}`;
+
+    if (existing) {
+        // Update existing rating
+        await UPDATE(PERF)
+            .set({
+                ratingValue:    ratingValue,
+                reviewComment:  reviewComment || '',
+                ratingCategory: ratingCategory || ''
+            })
+            .where({ ratingId: existing.ratingId });
+
+        cds.log('perf').info(
+            `Rating updated: ${employeeId} — ${reviewMonth}/${reviewYear} — ${ratingValue}`
+        );
+        return {
+            ratingId: existing.ratingId,
+            message:  `Rating updated for ${employeeId} — ${reviewMonth}/${reviewYear}`
+        };
+    }
+
+    // Insert new rating
+    await INSERT.into(PERF).entries({
+        ratingId,
+        employee_employeeId: employeeId,
+        ratingValue:         ratingValue,
+        reviewMonth:         reviewMonth,
+        reviewYear:          reviewYear,
+        reviewComment:       reviewComment  || '',
+        ratingCategory:      ratingCategory || ''
+    });
+
+    cds.log('perf').info(
+        `Rating added: ${employeeId} — ${reviewMonth}/${reviewYear} — ${ratingValue}`
+    );
+    return {
+        ratingId,
+        message: `Rating submitted for ${employeeId} — ${reviewMonth}/${reviewYear}`
+    };
+});
 
         this.on('notifyTaskAssignment', async (req) => {
             const {
@@ -1033,7 +1197,7 @@ class ManagerService extends cds.ApplicationService {
             cds.log('attach').info(`Attachment '${fileName}' (${buf.length} bytes) stored for task ${taskId}`);
             return `Attachment uploaded for task '${taskId}'.`;
         });
-        
+
         this.on('approveLeave', async (req) => {
             const { leaveId, approved, remarks } = req.data;
             if (!leaveId) return req.error(400, 'leaveId is required.');
@@ -1048,9 +1212,9 @@ class ManagerService extends cds.ApplicationService {
 
             await UPDATE(LEAVE_REQUEST)
                 .set({
-                    status:          newStatus,
-                    managerRemarks:  remarks || '',
-                    approvedOn:      new Date()
+                    status: newStatus,
+                    managerRemarks: remarks || '',
+                    approvedOn: new Date()
                 })
                 .where({ leaveId });
 
@@ -1075,7 +1239,7 @@ class ManagerService extends cds.ApplicationService {
                     try {
                         await mailer.sendMail({
                             from: process.env.SMTP_FROM || 'no-reply@timesheet.local',
-                            to:   emp.email,
+                            to: emp.email,
                             subject,
                             text: body
                         });

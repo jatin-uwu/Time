@@ -83,8 +83,11 @@ sap.ui.define([
                     selectedYear: String(today.getFullYear()),
                     months: Array(12).fill(null)
                 },
-                taskSummary: {
-                    total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0
+                myTasks: {
+                    totalPending: 0,
+                    highPriorityCount: 0,
+                    mediumPriorityCount: 0,
+                    lowPriorityCount: 0
                 },
                 leaveOverview: {
                     casual: 0, sick: 0, annual: 0, unpaid: 0, totalDays: 0, takenData: []
@@ -98,9 +101,9 @@ sap.ui.define([
                 // ADD inside the JSONModel({}) in onInit, after existing properties
                 greetingEmoji: "👋",
                 greetingHTML: "",
-                attendanceBtnLabel: "● Mark Active",
-                attendanceBtnType: "Accept",
-                attendanceBtnEnabled: true,
+                attendanceBtnLabel: "Checking...",
+                attendanceBtnType: "Default",
+                attendanceBtnEnabled: false,
                 attendanceMarked: false,
             });
 
@@ -204,6 +207,8 @@ sap.ui.define([
             this._loadUpcomingCalendar();
             this._loadRecentNotifications();
             this._checkTodayAttendance();
+            // ADD this line at the end of _onRouteMatched:
+            this._scheduleAttendanceBtnReset();
         },
 
         // ── Notification button handler ───────────────────────────────────────
@@ -219,58 +224,53 @@ sap.ui.define([
 
         // ── Mark Active / Attendance ──────────────────────────────────────────
         onMarkAttendance() {
-            const oModel = this.getOwnerComponent().getModel("");
             const now = new Date();
-
-            // Format values to send to backend
-            const dateStr = now.toISOString().split("T")[0];           // "2026-05-13"
-            const timeStr = now.toTimeString().split(" ")[0];          // "14:32:00"
-            const dayStr = now.toLocaleDateString("en-GB", { weekday: "long" }); // "Wednesday"
-
-            if (!oModel) {
-                sap.m.MessageToast.show("Service not available.");
-                return;
-            }
+            const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+            const timeStr = now.toTimeString().split(" ")[0];
+            const dayStr = now.toLocaleDateString("en-GB", { weekday: "long" });
 
             // Disable button immediately to prevent double-click
             this._oDashModel.setProperty("/attendanceBtnEnabled", false);
             this._oDashModel.setProperty("/attendanceBtnLabel", "Marking...");
 
-            oModel.callFunction("/markAttendance", {
-                method: "POST",
-                urlParameters: {
-                    attendanceDate: dateStr,
-                    attendanceDay: dayStr,
-                    attendanceTime: timeStr
-                },
-                success: (oData) => {
+            this._callAction("markAttendance", {
+                attendanceDate: dateStr,
+                attendanceDay: dayStr,
+                attendanceTime: timeStr
+            })
+                .then(() => {
                     this._oDashModel.setProperty("/attendanceBtnLabel", "✓ Active");
                     this._oDashModel.setProperty("/attendanceBtnType", "Success");
                     this._oDashModel.setProperty("/attendanceBtnEnabled", false);
                     this._oDashModel.setProperty("/attendanceMarked", true);
 
-                    // Also update the attendance mock so the card reflects today
-                    this._oDashModel.setProperty("/attendance/presentCount",
-                        (this._oDashModel.getProperty("/attendance/presentCount") || 0) + 1);
+                    // Reload attendance card from backend so % and counts are fresh
+                    this._loadAttendance();
                     this._refreshDash();
 
                     sap.m.MessageToast.show(
                         `Attendance marked for ${dayStr}, ${dateStr} at ${timeStr}`
                     );
-                },
-                error: (oErr) => {
+
+                    // Reschedule 11 PM reset
+                    this._scheduleAttendanceBtnReset();
+                })
+                .catch(oErr => {
                     // Re-enable so user can retry
                     this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
                     this._oDashModel.setProperty("/attendanceBtnType", "Accept");
                     this._oDashModel.setProperty("/attendanceBtnEnabled", true);
 
-                    const sMsg = (oErr.responseJSON && oErr.responseJSON.error &&
-                        oErr.responseJSON.error.message) || "Failed to mark attendance.";
-                    sap.m.MessageBox.error(sMsg);
-                }
-            });
+                    sap.m.MessageBox.error(oErr?.message || "Failed to mark attendance.");
+                });
         },
 
+
+        onExit() {
+            if (this._attendanceResetTimer) {
+                clearTimeout(this._attendanceResetTimer);
+            }
+        },
         // ─────────────────────────────────────────────────────────────────────
         // Week navigation (unchanged)
         // ─────────────────────────────────────────────────────────────────────
@@ -419,7 +419,7 @@ sap.ui.define([
         // ─────────────────────────────────────────────────────────────────────
         // Loaders — existing 3 (unchanged logic, now call _refreshDash)
         // ─────────────────────────────────────────────────────────────────────
-        _loadWorkAnniversary() {
+        _loadWorkAnniversary() {  //completed
             this._callAction("getWorkAnniversary")
                 .then(result => {
                     const years = result.yearsCompleted || 0;
@@ -465,22 +465,22 @@ sap.ui.define([
             }).finally(() => this._refreshDash());
         },
 
-_loadMyTasks() {
-    this._callAction("getMyTasks")
-        .then(oData => {
-            this._oDashModel.setProperty("/myTasks", {
-                totalPending:      oData.totalPending      || 0,
-                highPriorityCount: oData.highPriorityCount || 0,
-                inProgressCount:   oData.inProgressCount   || 0,
-                notStartedCount:   oData.notStartedCount   || 0
-            });
-        })
-        .catch(() => {
-            this._oDashModel.setProperty("/myTasks",
-                { totalPending: 0, highPriorityCount: 0, inProgressCount: 0, notStartedCount: 0 });
-        })
-        .finally(() => this._refreshDash());
-},
+        _loadMyTasks() {   //completed
+            this._callAction("getMyTasks")
+                .then(oData => {
+                    this._oDashModel.setProperty("/myTasks", {
+                        totalPending: oData.totalPending || 0,
+                        highPriorityCount: oData.highPriorityCount || 0,
+                        inProgressCount: oData.inProgressCount || 0,
+                        notStartedCount: oData.notStartedCount || 0
+                    });
+                })
+                .catch(() => {
+                    this._oDashModel.setProperty("/myTasks",
+                        { totalPending: 0, highPriorityCount: 0, inProgressCount: 0, notStartedCount: 0 });
+                })
+                .finally(() => this._refreshDash());
+        },
 
         // ─────────────────────────────────────────────────────────────────────
         // Loaders — new 4
@@ -488,11 +488,8 @@ _loadMyTasks() {
 
         // Attendance: frontend-only mock (backend hook ready when needed)
         _loadAttendance() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) { this._setAttendanceMock(); return; }
-            oModel.callFunction("/getAttendance", {
-                method: "POST",
-                success: (oData) => {
+            this._callAction("getAttendance")
+                .then(oData => {
                     this._oDashModel.setProperty("/attendance", {
                         attendancePercentage: oData.attendancePercentage || 0,
                         presentCount: oData.presentCount || 0,
@@ -500,85 +497,143 @@ _loadMyTasks() {
                         monthLabel: oData.monthLabel || "Month"
                     });
                     this._refreshDash();
-                },
-                error: () => { this._setAttendanceMock(); }
-            });
+                })
+                .catch(() => {
+                    this._setAttendanceMock();
+                });
         },
-        _setAttendanceMock() {
-            const MNAMES = ["January", "February", "March", "April", "May", "June",
-                "July", "August", "September", "October", "November", "December"];
-            this._oDashModel.setProperty("/attendance", {
-                attendancePercentage: 100,
-                presentCount: 22,
-                absentCount: 0,
-                monthLabel: MNAMES[new Date().getMonth()]
-            });
-            this._refreshDash();
-        },
+        //performance trend 
 
-        // Performance Rating
-        _loadPerformanceRating() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getPerformanceRating", {
-                method: "POST",
-                success: (oData) => {
-                    this._oDashModel.setProperty("/performanceRating", {
-                        ratingValue: parseFloat(oData.ratingValue || 0),
-                        ratingCategory: oData.ratingCategory || "N/A"
-                    });
-                    this._refreshDash();
-                },
-                error: () => {
-                    this._oDashModel.setProperty("/performanceRating",
-                        { ratingValue: 0, ratingCategory: "N/A" });
-                    this._refreshDash();
+_loadPerformanceTrend(iYear) {
+    const year = iYear || parseInt(
+        this._oDashModel.getProperty("/performanceTrend/selectedYear")
+        || new Date().getFullYear(), 10);
+
+    this._callAction("getPerformanceTrend", { year: year })
+        .then(oData => {
+            let months = Array(12).fill(null);
+            try {
+                let raw = [];
+                if (Array.isArray(oData)) {
+                    raw = oData;
+                } else if (oData.trendJSON) {
+                    raw = JSON.parse(oData.trendJSON);
+                } else if (Array.isArray(oData.months)) {
+                    raw = oData.months;
                 }
+
+                // ── NEW: normalise — each slot may be a number OR an object ──
+                months = raw.map(slot => {
+                    if (slot === null || slot === undefined) return null;
+                    if (typeof slot === "number") return slot;
+                    if (typeof slot === "object" && slot.rating !== undefined) {
+                        return parseFloat(slot.rating);
+                    }
+                    return null;
+                });
+
+            } catch (e) {
+                months = Array(12).fill(null);
+            }
+            this._oDashModel.setProperty("/performanceTrend/months", months);
+        })
+        .catch(() => {
+            this._oDashModel.setProperty("/performanceTrend/months",
+                Array(12).fill(null));
+        })
+        .finally(() => this._refreshDash());
+},
+        // Performance Rating
+
+_loadPerformanceRating() {
+    this._callAction("getPerformanceRating")
+        .then(oData => {
+            const val = parseFloat(oData.ratingValue || 0);
+            this._oDashModel.setProperty("/performanceRating", {
+                ratingValue:    val,
+                ratingCategory: oData.ratingCategory || "N/A",
+                reviewMonth:    oData.reviewMonth    || 0,
+                reviewYear:     oData.reviewYear     || 0,
+                reviewComment:  oData.reviewComment  || ""
             });
-        },
+        })
+        .catch(() => {
+            this._oDashModel.setProperty("/performanceRating",
+                { ratingValue: 0, ratingCategory: "N/A" });
+        })
+        .finally(() => this._refreshDash());
+},
 
         _checkTodayAttendance() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
+            const now = new Date();
+            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
-            const today = new Date().toISOString().split("T")[0];
-
-            oModel.callFunction("/getTodayAttendance", {
-                method: "POST",
-                urlParameters: { attendanceDate: today },
-                success: (oData) => {
+            this._callAction("getTodayAttendance", { attendanceDate: today })
+                .then(oData => {
                     if (oData && oData.alreadyMarked) {
+                        // Already marked — show green active
                         this._oDashModel.setProperty("/attendanceBtnLabel", "✓ Active");
                         this._oDashModel.setProperty("/attendanceBtnType", "Success");
                         this._oDashModel.setProperty("/attendanceBtnEnabled", false);
                         this._oDashModel.setProperty("/attendanceMarked", true);
+                    } else {
+                        // Not yet marked — show enabled Mark Active
+                        this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
+                        this._oDashModel.setProperty("/attendanceBtnType", "Accept");
+                        this._oDashModel.setProperty("/attendanceBtnEnabled", true);
+                        this._oDashModel.setProperty("/attendanceMarked", false);
                     }
-                },
-                error: () => { /* silently ignore — button stays enabled */ }
-            });
+                })
+                .catch(() => {
+                    // On error — enable button so user can still try
+                    this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
+                    this._oDashModel.setProperty("/attendanceBtnType", "Accept");
+                    this._oDashModel.setProperty("/attendanceBtnEnabled", true);
+                });
+
+
         },
 
-        // Performance Trend
-        _loadPerformanceTrend(iYear) {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            const year = iYear || parseInt(
-                this._oDashModel.getProperty("/performanceTrend/selectedYear") || new Date().getFullYear(), 10);
-            oModel.callFunction("/getPerformanceTrend", {
-                method: "POST",
-                urlParameters: { year: year },
-                success: (oData) => {
-                    let months = [];
-                    try { months = JSON.parse(oData.trendJSON || "[]"); } catch (e) { months = []; }
-                    this._oDashModel.setProperty("/performanceTrend/months", months);
-                    this._refreshDash();
-                },
-                error: () => {
-                    this._oDashModel.setProperty("/performanceTrend/months", Array(12).fill(null));
-                    this._refreshDash();
-                }
-            });
+        _scheduleAttendanceBtnReset() {
+            const now = new Date();
+            const resetHour = 23;  // 11 PM
+            const resetMinute = 0;
+
+            // Calculate ms until next 11 PM
+            let resetTime = new Date(
+                now.getFullYear(),
+                now.getMonth(),
+                now.getDate(),
+                resetHour,
+                resetMinute,
+                0
+            );
+
+            // If already past 11 PM today, schedule for tomorrow 11 PM
+            if (now >= resetTime) {
+                resetTime.setDate(resetTime.getDate() + 1);
+            }
+
+            const msUntilReset = resetTime.getTime() - now.getTime();
+
+            // Clear any existing timer
+            if (this._attendanceResetTimer) {
+                clearTimeout(this._attendanceResetTimer);
+            }
+
+            this._attendanceResetTimer = setTimeout(() => {
+                // Reset button to "Mark Active"
+                this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
+                this._oDashModel.setProperty("/attendanceBtnType", "Accept");
+                this._oDashModel.setProperty("/attendanceBtnEnabled", true);
+                this._oDashModel.setProperty("/attendanceMarked", false);
+
+                // Schedule again for next day
+                this._scheduleAttendanceBtnReset();
+
+            }, msUntilReset);
         },
+
 
         // Year selector change
         onTrendYearChange(oEvent) {
@@ -589,11 +644,8 @@ _loadMyTasks() {
 
         // Task Summary (reuses existing TaskMaster backend)
         _loadTaskSummary() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getTaskSummary", {
-                method: "POST",
-                success: (oData) => {
+            this._callAction("getTaskSummary")
+                .then(oData => {
                     this._oDashModel.setProperty("/taskSummary", {
                         total: oData.total || 0,
                         notStarted: oData.notStarted || 0,
@@ -601,14 +653,14 @@ _loadMyTasks() {
                         inReview: oData.inReview || 0,
                         completed: oData.completed || 0
                     });
-                    this._refreshDash();
-                },
-                error: () => {
+                })
+                .catch(() => {
                     this._oDashModel.setProperty("/taskSummary",
                         { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 });
-                    this._refreshDash();
-                }
-            });
+                })
+                .finally(() => this._refreshDash());
+
+
         },
 
         // ── Leave Overview ────────────────────────────────────────────────────────
@@ -793,27 +845,39 @@ _loadMyTasks() {
             const tasks = o.tasks || {};
             const tPending = tasks.totalPending !== undefined ? tasks.totalPending : 0;
             const tHigh = tasks.highPriorityCount !== undefined ? tasks.highPriorityCount : 0;
-            const tInProg = tasks.inProgressCount !== undefined ? tasks.inProgressCount : 0;
-            const tNotSt = tasks.notStartedCount !== undefined ? tasks.notStartedCount : 0;
+            const tMedium = tasks.mediumPriorityCount !== undefined ? tasks.mediumPriorityCount : 0;
+            const tLow = tasks.lowPriorityCount !== undefined ? tasks.lowPriorityCount : 0;
 
             const sTasksCard = card(`
-                ${cardHeader("My Tasks",
+    ${cardHeader("My Tasks",
                 iconCircle("#fffbeb", "#f59e0b",
                     '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>'))}
-                ${bigNum(tPending, "#111827")}
-                ${subLabel("Tasks Pending")}
-                ${tHigh > 0
-                    ? `<div style="font-size:0.82rem;font-weight:600;color:#dc2626;margin-bottom:8px;">${tHigh} High Priority</div>`
-                    : `<div style="font-size:0.82rem;color:#9ca3af;margin-bottom:8px;">No high priority tasks</div>`}
-                <div style="font-size:0.78rem;color:#6b7280;display:flex;flex-direction:column;gap:4px;">
-                    <div style="display:flex;justify-content:space-between;">
-                        <span>In Progress</span><b style="color:#3b82f6;">${tInProg}</b>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;">
-                        <span>Not Started</span><b style="color:#6b7280;">${tNotSt}</b>
-                    </div>
-                </div>
-            `);
+    ${bigNum(tPending, "#111827")}
+    ${subLabel("Tasks Pending")}
+    <div style="font-size:0.78rem;display:flex;flex-direction:column;gap:6px;margin-top:4px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:6px;">
+                <span style="width:8px;height:8px;border-radius:50%;background:#dc2626;flex-shrink:0;"></span>
+                <span style="color:#6b7280;">High Priority</span>
+            </div>
+            <b style="color:#dc2626;">${tHigh}</b>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:6px;">
+                <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span>
+                <span style="color:#6b7280;">Medium Priority</span>
+            </div>
+            <b style="color:#f59e0b;">${tMedium}</b>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:6px;">
+                <span style="width:8px;height:8px;border-radius:50%;background:#16a34a;flex-shrink:0;"></span>
+                <span style="color:#6b7280;">Low Priority</span>
+            </div>
+            <b style="color:#16a34a;">${tLow}</b>
+        </div>
+    </div>
+`);
 
             // ── 4. Attendance ────────────────────────────────────────────────
             const attend = o.attend || {};
@@ -995,9 +1059,12 @@ _loadMyTasks() {
                 tXLabels += `<text x="${xOf(i)}" y="${H - 4}" text-anchor="middle" font-size="9" fill="#9ca3af" font-family="sans-serif">${mn}</text>`;
             });
 
-            const tPoints = trendMonths
-                .map((v, i) => v !== null ? { x: xOf(i), y: yOf(v) } : null)
-                .filter(Boolean);
+const tPoints = trendMonths
+    .map((v, i) => {
+        const num = parseFloat(v);
+        return (!isNaN(num) && num > 0) ? { x: xOf(i), y: yOf(num) } : null;
+    })
+    .filter(Boolean);
 
             let tPath = "", tArea = "", tDots = "";
             if (tPoints.length > 1) {

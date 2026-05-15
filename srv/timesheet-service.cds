@@ -1,4 +1,4 @@
-using { ccentrik.employee.timesheet.schema as db } from '../db/data-model';
+using {ccentrik.employee.timesheet.schema as db} from '../db/data-model';
 
 // // ── Employee Service ──────────────────────────────────────────────────────────
 // service EmployeeService @(path:'/employee') {
@@ -40,42 +40,70 @@ using { ccentrik.employee.timesheet.schema as db } from '../db/data-model';
 // }
 
 // ── Employee Service ─────────────────────────────────────────────────────────
-service EmployeeService @(path:'/employee') {
+service EmployeeService @(path: '/employee') {
 
-    entity MyTimesheets @(requires: ['Employee','Manager']) as projection on db.timesheet.TimesheetHeader;
-    entity MyEntries    @(requires: ['Employee','Manager']) as projection on db.timesheet.TimesheetEntry;
-    entity MyTasks      @(requires: ['Employee','Manager']) as projection on db.timesheet.TaskMaster;
-    entity TaskUpdates  @(requires: ['Employee','Manager']) as projection on db.timesheet.TaskUpdate;
-    entity Employees    @(requires: ['Employee','Manager']) as projection on db.timesheet.EmployeeMaster;
-    entity PerformanceRatings as projection on db.timesheet.PerformanceRating; 
+    entity MyTimesheets @(requires: [
+        'Employee',
+        'Manager'
+    ])                        as projection on db.timesheet.TimesheetHeader;
+
+    entity MyEntries @(requires: [
+        'Employee',
+        'Manager'
+    ])                        as projection on db.timesheet.TimesheetEntry;
+
+    entity MyTasks @(requires: [
+        'Employee',
+        'Manager'
+    ])                        as projection on db.timesheet.TaskMaster;
+
+    entity TaskUpdates @(requires: [
+        'Employee',
+        'Manager'
+    ])                        as projection on db.timesheet.TaskUpdate;
+
+    entity Employees @(requires: [
+        'Employee',
+        'Manager'
+    ])                        as projection on db.timesheet.EmployeeMaster;
+
+    entity PerformanceRatings as projection on db.timesheet.PerformanceRating;
 
     // ── Leave ────────────────────────────────────────────────────────
-    @(requires: ['Employee','Manager','HR'])
-    entity LeaveRequests as projection on db.timesheet.LeaveRequest;
+    @(requires: [
+        'Employee',
+        'Manager',
+        'HR'
+    ])
+    entity LeaveRequests      as projection on db.timesheet.LeaveRequest;
 
-    @(requires: ['Employee','Manager','HR'])
-    action applyLeave(
-        employeeId : String,
-        leaveType  : String,
-        fromDate   : Date,
-        toDate     : Date,
-        days       : Integer,
-        reason     : String,
-        isUnpaid   : Boolean
-    )  returns {
+    @(requires: [
+        'Employee',
+        'Manager',
+        'HR'
+    ])
+    action   applyLeave(employeeId: String,
+                        leaveType: String,
+                        fromDate: Date,
+                        toDate: Date,
+                        days: Integer,
+                        reason: String,
+                        isUnpaid: Boolean)                                 returns {
         leaveId  : String;
         status   : String;
         isUnpaid : Boolean;
     };
 
     @(requires: 'authenticated-user')
-    action submitTimesheet(timesheetId : String(15)) returns String;
+    action   submitTimesheet(timesheetId: String(15))                      returns String;
 
     @(requires: 'authenticated-user')
-    action getUserRole() returns { role: String };
+    action   getUserRole()                                                 returns {
+        role : String
+    };
 
     @(requires: 'authenticated-user')
-    action getCurrentUser() returns {
+    action   getCurrentUser()                                              returns {
         email        : String(255);
         role         : String;
         employeeId   : String(10);
@@ -87,8 +115,11 @@ service EmployeeService @(path:'/employee') {
         isActive     : Boolean;
     };
 
-    @(requires: ['Employee','Manager'])
-    action consumeTaskAttachment(taskId : String(20)) returns {
+    @(requires: [
+        'Employee',
+        'Manager'
+    ])
+    action   consumeTaskAttachment(taskId: String(20))                     returns {
         fileName   : String(255);
         mimeType   : String(100);
         dataBase64 : LargeString;
@@ -96,17 +127,23 @@ service EmployeeService @(path:'/employee') {
 
     // Dashboard action: Get work anniversary info for the logged-in employee.
     // Returns years completed, joining date, and a message.
-    @(requires: ['Employee','Manager'])
-    action getWorkAnniversary() returns {
-        yearsCompleted : Decimal(5,2);
+    @(requires: [
+        'Employee',
+        'Manager'
+    ])
+    action   getWorkAnniversary()                                          returns {
+        yearsCompleted : Decimal(5, 2);
         joiningDate    : Date;
         message        : String(255);
     };
 
     // Dashboard action: Get leave balance for the logged-in employee.
     // Returns casual, sick, annual leave counts and total.
-    @(requires: ['Employee','Manager'])
-    action getLeaveBalance() returns {
+    @(requires: [
+        'Employee',
+        'Manager'
+    ])
+    action   getLeaveBalance()                                             returns {
         casualLeave : Integer;
         sickLeave   : Integer;
         annualLeave : Integer;
@@ -115,18 +152,20 @@ service EmployeeService @(path:'/employee') {
 
     // Dashboard action: Get my tasks summary for the logged-in employee.
     // Returns count of pending tasks and high priority tasks.
-    @(requires: ['Employee','Manager'])
-    action getMyTasks() returns {
+    @(requires: [
+        'Employee',
+        'Manager'
+    ])
+    action   getMyTasks()                                                  returns {
         totalPending      : Integer;
         highPriorityCount : Integer;
-        inProgressCount   : Integer;
-        notStartedCount   : Integer;
+        mediumPriorityCount : Integer;
+        lowPriorityCount    : Integer;
     };
-       action markAttendance(
-        attendanceDate : String,
-        attendanceDay  : String,
-        attendanceTime : String
-    ) returns {
+
+    action   markAttendance(attendanceDate: String,
+                            attendanceDay: String,
+                            attendanceTime: String)                        returns {
         attendanceId   : String;
         employeeId     : String;
         employeeName   : String;
@@ -136,80 +175,84 @@ service EmployeeService @(path:'/employee') {
         message        : String;
     };
 
-    action getTodayAttendance(
-        attendanceDate : String
-    ) returns {
+    action   getTodayAttendance(attendanceDate: String)                    returns {
         alreadyMarked  : Boolean;
         attendanceTime : String;
         attendanceDay  : String;
     };
 
-     entity AttendanceRecord as projection on db.timesheet.AttendanceRecord;
+
+    entity AttendanceRecord   as projection on db.timesheet.AttendanceRecord;
 
     // Attendance card  (frontend-only for now; backend returns mock/stub data)
-function getAttendance() returns {
-    attendancePercentage : Integer;
-    presentCount         : Integer;
-    absentCount          : Integer;
-    monthLabel           : String;
-};
+    action   getAttendance()                                               
+    returns {
+        attendancePercentage : Integer;
+        presentCount         : Integer;
+        absentCount          : Integer;
+        monthLabel           : String;
+    };
 
-// Performance Rating card
-function getPerformanceRating() returns {
-    ratingValue      : Decimal(3,1);
-    ratingCategory   : String(30);
-    reviewMonth      : Integer;
-    reviewYear       : Integer;
-    reviewComment    : String(500);
-};
+    // Performance Rating card
+    action getPerformanceRating()                                        
+    returns {
+        ratingValue    : Decimal(3, 1);
+        ratingCategory : String(30);
+        reviewMonth    : Integer;
+        reviewYear     : Integer;
+        reviewComment  : String(500);
+    };
 
-// Performance Trend graph  (returns JSON array as a String for flexibility)
-function getPerformanceTrend(year : Integer) returns {
-    trendJSON : String;   // JSON array: [{month,monthName,rating}, ...]
-};
+    // Performance Trend graph  (returns JSON array as a String for flexibility)
+    action getPerformanceTrend(year: Integer)                            
+    returns {
+        trendJSON : String; // JSON array: [{month,monthName,rating}, ...]
+    };
 
-// Task Summary donut chart  (reuses existing TaskMaster entity)
-function getTaskSummary() returns {
-    total       : Integer;
-    notStarted  : Integer;
-    inProgress  : Integer;
-    inReview    : Integer;
-    completed   : Integer;
-};
+    // Task Summary donut chart  (reuses existing TaskMaster entity)
+    action getTaskSummary()                                              returns {
+        total      : Integer;
+        notStarted : Integer;
+        inProgress : Integer;
+        inReview   : Integer;
+        completed  : Integer;
+    };
 
-// Recent Notifications (last 5 for logged-in employee)
-function getRecentNotifications() returns array of {
-    notificationId : String(30);
-    type           : String(30);
-    title          : String(100);
-    message        : String(500);
-    isRead         : Boolean;
-    referenceId    : String(30);
-    notifiedAt     : String;   // ISO timestamp string
-};
+    // Recent Notifications (last 5 for logged-in employee)
+    action getRecentNotifications()                                      returns array of {
+        notificationId : String(30);
+        type           : String(30);
+        title          : String(100);
+        message        : String(500);
+        isRead         : Boolean;
+        referenceId    : String(30);
+        notifiedAt     : String; // ISO timestamp string
+    };
 
-// Upcoming Calendar events from Google Calendar
-function getUpcomingCalendar() returns {
-    eventsJSON : String;   // JSON array of {id, title, start, end, timeLabel, dateLabel, isToday}
-};
+    // Upcoming Calendar events from Google Calendar
+    action getUpcomingCalendar()                                         returns {
+        eventsJSON : String; // JSON array of {id, title, start, end, timeLabel, dateLabel, isToday}
+    };
 
-// My Leave Overview — yearly taken vs balance
-function getLeaveOverview(year : Integer) returns {
-    casual       : Integer;   // balance remaining
-    sick         : Integer;
-    annual       : Integer;
-    unpaid       : Integer;
-    totalDays    : Integer;
-    takenJSON    : String;    // [{type,label,taken,balance,color}]
-};
+    // My Leave Overview — yearly taken vs balance
+    action getLeaveOverview(year: Integer)                               returns {
+        casual    : Integer; // balance remaining
+        sick      : Integer;
+        annual    : Integer;
+        unpaid    : Integer;
+        totalDays : Integer;
+        takenJSON : String; // [{type,label,taken,balance,color}]
+    };
 
 }
 
 // ── Manager Service ──────────────────────────────────────────────────────────
-service ManagerService @(path:'/manager') @(requires: 'Manager') {
+service ManagerService @(path: '/manager')@(requires: 'Manager') {
 
     entity PendingApprovals as projection on db.timesheet.TimesheetHeader
-        where status = 'Submitted';
+                               where
+                                   status = 'Submitted';
+
     entity ApprovalEntries  as projection on db.timesheet.TimesheetEntry;
     entity Employees        as projection on db.timesheet.EmployeeMaster;
     entity Tasks            as projection on db.timesheet.TaskMaster;
@@ -218,86 +261,92 @@ service ManagerService @(path:'/manager') @(requires: 'Manager') {
     // ── Leave approval ───────────────────────────────────────────────
     entity LeaveRequests    as projection on db.timesheet.LeaveRequest;
 
-    action approveLeave(
-        leaveId  : String,
-        approved : Boolean,
-        remarks  : String
-    ) returns {
+    action approveLeave(leaveId: String,
+                        approved: Boolean,
+                        remarks: String)                                   returns {
         leaveId : String;
         status  : String;
     };
 
-    action approveTimesheet(timesheetId : String(15), remarks : String(255)) returns String;
-    action rejectTimesheet (timesheetId : String(15), remarks : String(255)) returns String;
+    action approveTimesheet(timesheetId: String(15), remarks: String(255)) returns String;
+    action rejectTimesheet(timesheetId: String(15), remarks: String(255))  returns String;
 
-    action notifyTaskAssignment(
-        taskId          : String(20),
-        taskName        : String(100),
-        taskDescription : String(2000),
-        priority        : String(20),
-        dueDate         : String(20),
-        assigneeId      : String(10)
-    ) returns {
+    action notifyTaskAssignment(taskId: String(20),
+                                taskName: String(100),
+                                taskDescription: String(2000),
+                                priority: String(20),
+                                dueDate: String(20),
+                                assigneeId: String(10))                    returns {
         sent      : Boolean;
         recipient : String;
         subject   : String;
         message   : String;
     };
 
-    action uploadTaskAttachment(
-        taskId     : String(20),
-        fileName   : String(255),
-        mimeType   : String(100),
-        dataBase64 : LargeString
-    ) returns String;
+    action uploadTaskAttachment(taskId: String(20),
+                                fileName: String(255),
+                                mimeType: String(100),
+                                dataBase64: LargeString)                   returns String;
+
+
+action submitPerformanceRating(
+    employeeId    : String,
+    ratingValue   : Decimal(3,1),
+    reviewMonth   : Integer,
+    reviewYear    : Integer,
+    reviewComment : String,
+    ratingCategory: String
+) returns {
+    ratingId : String;
+    message  : String;
+};
+
 }
 
+
+
 // ── HR Service ───────────────────────────────────────────────────────────────
-service HRService @(path:'/hr') @(requires: 'HR') {
+service HRService @(path: '/hr')@(requires: 'HR') {
 
     @odata.draft.enabled
-    entity Employees as projection on db.timesheet.EmployeeMaster;
+    entity Employees     as projection on db.timesheet.EmployeeMaster;
 
-    entity Documents as projection on db.timesheet.EmployeeDocument;
+    entity Documents     as projection on db.timesheet.EmployeeDocument;
 
     // ── Leave visibility for HR ──────────────────────────────────────
     entity LeaveRequests as projection on db.timesheet.LeaveRequest;
 
-    action nextEmployeeId() returns String;
+    action nextEmployeeId()                                                returns String;
 
-    action addEmployee(
-        employeeName      : String(100),
-        designation       : String(50),
-        email             : String(100),
-        address           : String(255),
-        mobileNumber      : String(15),
-        managerEmployeeId : String(10),
-        dateOfBirth       : Date,
-        gender            : String(10),
-        department        : String(50),
-        joiningDate       : Date,
-        employmentType    : String(20),
-        aadhaarNumber     : String(20),
-        panNumber         : String(15),
-        emergencyContact  : String(15),
-        bloodGroup        : String(5),
-        bankAccountNumber : String(30),
-        bankName          : String(60),
-        bankIfsc          : String(15)
-    ) returns {
+    action addEmployee(employeeName: String(100),
+                       designation: String(50),
+                       email: String(100),
+                       address: String(255),
+                       mobileNumber: String(15),
+                       managerEmployeeId: String(10),
+                       dateOfBirth: Date,
+                       gender: String(10),
+                       department: String(50),
+                       joiningDate: Date,
+                       employmentType: String(20),
+                       aadhaarNumber: String(20),
+                       panNumber: String(15),
+                       emergencyContact: String(15),
+                       bloodGroup: String(5),
+                       bankAccountNumber: String(30),
+                       bankName: String(60),
+                       bankIfsc: String(15))                               returns {
         employeeId : String(10);
     };
 
-    action uploadEmployeeDocument(
-        employeeId   : String(10),
-        documentType : String(40),
-        fileName     : String(255),
-        mimeType     : String(100),
-        description  : String(255),
-        dataBase64   : LargeString
-    ) returns String;
+    action uploadEmployeeDocument(employeeId: String(10),
+                                  documentType: String(40),
+                                  fileName: String(255),
+                                  mimeType: String(100),
+                                  description: String(255),
+                                  dataBase64: LargeString)                 returns String;
 
-    action getEmployeeDocument(documentId : String(20)) returns {
+    action getEmployeeDocument(documentId: String(20))                     returns {
         fileName   : String(255);
         mimeType   : String(100);
         dataBase64 : LargeString;
