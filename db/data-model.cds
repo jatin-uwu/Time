@@ -144,7 +144,10 @@ entity LeaveRequest : managed {
     approvedBy         : Association to EmployeeMaster;
     approvedOn         : Timestamp;
 }
+<<<<<<< HEAD
 
+=======
+>>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
 entity LeaveBalance : managed {
     key balanceId      : String(20);
     employee           : Association to EmployeeMaster;

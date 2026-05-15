@@ -83,8 +83,11 @@ sap.ui.define([
                     selectedYear: String(today.getFullYear()),
                     months: Array(12).fill(null)
                 },
-                taskSummary: {
-                    total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0
+                myTasks: {
+                    totalPending: 0,
+                    highPriorityCount: 0,
+                    mediumPriorityCount: 0,
+                    lowPriorityCount: 0
                 },
                 leaveOverview: {
                     casual: 0, sick: 0, annual: 0, unpaid: 0, totalDays: 0, takenData: []
@@ -98,9 +101,9 @@ sap.ui.define([
                 // ADD inside the JSONModel({}) in onInit, after existing properties
                 greetingEmoji: "👋",
                 greetingHTML: "",
-                attendanceBtnLabel: "● Mark Active",
-                attendanceBtnType: "Accept",
-                attendanceBtnEnabled: true,
+                attendanceBtnLabel: "Checking...",
+                attendanceBtnType: "Default",
+                attendanceBtnEnabled: false,
                 attendanceMarked: false,
             });
 
@@ -119,21 +122,21 @@ sap.ui.define([
         // ─────────────────────────────────────────────────────────────────────
         // Greeting
         // ─────────────────────────────────────────────────────────────────────
-_loadGreeting() {
-    const oComp = this.getOwnerComponent();
-    if (!oComp) return;
+        _loadGreeting() {
+            const oComp = this.getOwnerComponent();
+            if (!oComp) return;
 
-    const hour      = new Date().getHours();
-    const timeGreet = hour < 12 ? "Good Morning"
-                    : hour < 17 ? "Good Afternoon"
-                    :             "Good Evening";
-    const emoji     = hour < 12 ? "☀️" : hour < 17 ? "👋" : "🌙";
+            const hour = new Date().getHours();
+            const timeGreet = hour < 12 ? "Good Morning"
+                : hour < 17 ? "Good Afternoon"
+                    : "Good Evening";
+            // const emoji     = hour < 12 ? "☀️" : hour < 17 ? "👋" : "🌙";
 
-    const buildHTML = (name) => {
-        const namePart = name
-            ? `, <span style="color:black;font-style:italic;">${name}!</span>`
-            : `!`;
-        return `
+            const buildHTML = (name) => {
+                const namePart = name
+                    ? `, <span style="color:black;font-style:italic;">${name}!</span>`
+                    : `!`;
+                return `
             <div>
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
                     <span style="
@@ -144,7 +147,7 @@ _loadGreeting() {
                         font-family: 'Segoe UI', Arial, sans-serif;
                         line-height: 1.1;
                     ">${timeGreet}${namePart}</span>
-                    <span style="font-size:1.6rem;line-height:1;">${emoji}</span>
+        
                 </div>
                 <div style="
                     font-size: 1.05rem;
@@ -153,32 +156,32 @@ _loadGreeting() {
                     margin: 0;
                 ">Here's what's happening with you today.</div>
             </div>`;
-    };
+            };
 
-    // Set immediately — never blank
-    this._oDashModel.setProperty("/greetingHTML", buildHTML(""));
+            // Set immediately — never blank
+            this._oDashModel.setProperty("/greetingHTML", buildHTML(""));
 
-    const setName = (name) => {
-        if (name) this._oDashModel.setProperty("/greetingHTML", buildHTML(name));
-    };
+            const setName = (name) => {
+                if (name) this._oDashModel.setProperty("/greetingHTML", buildHTML(name));
+            };
 
-    if (oComp.getCurrentUser) {
-        oComp.getCurrentUser().then(u => {
-            if (u && u.employeeName) { setName(u.employeeName); return; }
+            if (oComp.getCurrentUser) {
+                oComp.getCurrentUser().then(u => {
+                    if (u && u.employeeName) { setName(u.employeeName); return; }
+                    if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
+                        oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
+                            if (emp && emp.employeeName) setName(emp.employeeName);
+                        });
+                    }
+                });
+                return;
+            }
             if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
                 oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
                     if (emp && emp.employeeName) setName(emp.employeeName);
                 });
             }
-        });
-        return;
-    }
-    if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
-        oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
-            if (emp && emp.employeeName) setName(emp.employeeName);
-        });
-    }
-},
+        },
 
         // ─────────────────────────────────────────────────────────────────────
         // Route match — kick off all loaders
@@ -204,6 +207,8 @@ _loadGreeting() {
             this._loadUpcomingCalendar();
             this._loadRecentNotifications();
             this._checkTodayAttendance();
+            // ADD this line at the end of _onRouteMatched:
+            this._scheduleAttendanceBtnReset();
         },
 
         // ── Notification button handler ───────────────────────────────────────
@@ -219,58 +224,53 @@ _loadGreeting() {
 
         // ── Mark Active / Attendance ──────────────────────────────────────────
         onMarkAttendance() {
-            const oModel = this.getOwnerComponent().getModel("");
             const now = new Date();
-
-            // Format values to send to backend
-            const dateStr = now.toISOString().split("T")[0];           // "2026-05-13"
-            const timeStr = now.toTimeString().split(" ")[0];          // "14:32:00"
-            const dayStr = now.toLocaleDateString("en-GB", { weekday: "long" }); // "Wednesday"
-
-            if (!oModel) {
-                sap.m.MessageToast.show("Service not available.");
-                return;
-            }
+            const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+            const timeStr = now.toTimeString().split(" ")[0];
+            const dayStr = now.toLocaleDateString("en-GB", { weekday: "long" });
 
             // Disable button immediately to prevent double-click
             this._oDashModel.setProperty("/attendanceBtnEnabled", false);
             this._oDashModel.setProperty("/attendanceBtnLabel", "Marking...");
 
-            oModel.callFunction("/markAttendance", {
-                method: "POST",
-                urlParameters: {
-                    attendanceDate: dateStr,
-                    attendanceDay: dayStr,
-                    attendanceTime: timeStr
-                },
-                success: (oData) => {
+            this._callAction("markAttendance", {
+                attendanceDate: dateStr,
+                attendanceDay: dayStr,
+                attendanceTime: timeStr
+            })
+                .then(() => {
                     this._oDashModel.setProperty("/attendanceBtnLabel", "✓ Active");
                     this._oDashModel.setProperty("/attendanceBtnType", "Success");
                     this._oDashModel.setProperty("/attendanceBtnEnabled", false);
                     this._oDashModel.setProperty("/attendanceMarked", true);
 
-                    // Also update the attendance mock so the card reflects today
-                    this._oDashModel.setProperty("/attendance/presentCount",
-                        (this._oDashModel.getProperty("/attendance/presentCount") || 0) + 1);
+                    // Reload attendance card from backend so % and counts are fresh
+                    this._loadAttendance();
                     this._refreshDash();
 
                     sap.m.MessageToast.show(
                         `Attendance marked for ${dayStr}, ${dateStr} at ${timeStr}`
                     );
-                },
-                error: (oErr) => {
+
+                    // Reschedule 11 PM reset
+                    this._scheduleAttendanceBtnReset();
+                })
+                .catch(oErr => {
                     // Re-enable so user can retry
                     this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
                     this._oDashModel.setProperty("/attendanceBtnType", "Accept");
                     this._oDashModel.setProperty("/attendanceBtnEnabled", true);
 
-                    const sMsg = (oErr.responseJSON && oErr.responseJSON.error &&
-                        oErr.responseJSON.error.message) || "Failed to mark attendance.";
-                    sap.m.MessageBox.error(sMsg);
-                }
-            });
+                    sap.m.MessageBox.error(oErr?.message || "Failed to mark attendance.");
+                });
         },
 
+
+        onExit() {
+            if (this._attendanceResetTimer) {
+                clearTimeout(this._attendanceResetTimer);
+            }
+        },
         // ─────────────────────────────────────────────────────────────────────
         // Week navigation (unchanged)
         // ─────────────────────────────────────────────────────────────────────
@@ -363,83 +363,123 @@ _loadGreeting() {
         },
 
         // ─────────────────────────────────────────────────────────────────────
+        // _callAction — OData V4 wrapper replacing callFunction (which is V2 only)
+        // Usage: this._callAction("actionName", { param1: val1 })
+        //          .then(result => { ... })
+        //          .catch(() => { ... });
+        // ─────────────────────────────────────────────────────────────────────
+        _callAction(sActionName, mParams) {
+            if (!this.getOwnerComponent()) {
+                return Promise.reject(new Error("No component"));
+            }
+
+            return new Promise((resolve, reject) => {
+                fetch("/employee/" + sActionName, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    },
+                    body: JSON.stringify(mParams || {}),
+                    credentials: "include"
+                })
+                    .then(async (res) => {
+                        try {
+                            if (res.status === 204) {
+                                resolve({});
+                                return;
+                            }
+
+                            const text = await res.text();
+
+                            if (!res.ok) {
+                                reject(new Error(text || res.statusText));
+                                return;
+                            }
+
+                            if (!text || text.trim() === "") {
+                                resolve({});
+                                return;
+                            }
+
+                            const data = JSON.parse(text);
+                            const cleaned = Object.fromEntries(
+                                Object.entries(data).filter(([k]) => !k.startsWith("@"))
+                            );
+                            resolve(cleaned.value !== undefined ? cleaned.value : cleaned);
+
+                        } catch (e) {
+                            reject(e);
+                        }
+                    })
+                    .catch(reject);
+            });
+        },
+
+        // ─────────────────────────────────────────────────────────────────────
         // Loaders — existing 3 (unchanged logic, now call _refreshDash)
         // ─────────────────────────────────────────────────────────────────────
-        _loadWorkAnniversary() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getWorkAnniversary", {
-                method: "POST",
-                success: (oData) => {
-                    const years = oData.yearsCompleted || 0;
-                    let yearsLabel;
-                    if (years >= 1) {
-                        yearsLabel = parseFloat(years.toFixed(1)) + " Years";
-                    } else {
-                        const months = Math.floor(years * 12);
-                        yearsLabel = months > 0 ? months + " Months" : "< 1 Month";
-                    }
+        _loadWorkAnniversary() {  //completed
+            this._callAction("getWorkAnniversary")
+                .then(result => {
+                    const years = result.yearsCompleted || 0;
+                    const yearsLabel = years >= 1
+                        ? parseFloat(years.toFixed(1)) + " Years"
+                        : (Math.floor(years * 12) > 0
+                            ? Math.floor(years * 12) + " Months"
+                            : "< 1 Month");
+
                     this._oDashModel.setProperty("/workAnniversary", {
                         yearsCompleted: years,
-                        joiningDate: oData.joiningDate || null,
-                        message: oData.message || "Welcome!",
+                        joiningDate: result.joiningDate || null,
+                        message: result.message || "Welcome!",
                         yearsLabel: yearsLabel
                     });
-                    this._refreshDash();
-                },
-                error: () => {
-                    this._oDashModel.setProperty("/workAnniversary",
-                        { yearsCompleted: 0, joiningDate: null, message: "Welcome!", yearsLabel: "—" });
-                    this._refreshDash();
-                }
-            });
+                })
+                .catch((e) => {
+                    console.error("getWorkAnniversary failed:", e);
+                    this._oDashModel.setProperty("/workAnniversary", {
+                        yearsCompleted: 0,
+                        joiningDate: null,
+                        message: "Welcome!",
+                        yearsLabel: "—"
+                    });
+                })
+                .finally(() => this._refreshDash());
         },
 
         _loadLeaveBalance() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getLeaveBalance", {
-                method: "POST",
-                success: (oData) => {
-                    const casual = oData.casualLeave || 0;
-                    const sick = oData.sickLeave || 0;
-                    const annual = oData.annualLeave || 0;
-                    const total = casual + sick + annual;
-                    this._oDashModel.setProperty("/leaveBalance", {
-                        casualLeave: casual, sickLeave: sick, annualLeave: annual,
-                        total: total,
-                        usedPct: Math.min(100, Math.round((total / 30) * 100))
-                    });
-                    this._refreshDash();
-                },
-                error: () => {
-                    this._oDashModel.setProperty("/leaveBalance",
-                        { casualLeave: 0, sickLeave: 0, annualLeave: 0, total: 0, usedPct: 0 });
-                    this._refreshDash();
-                }
-            });
+            this._callAction("getLeaveBalance").then(oData => {
+                const casual = oData.casualLeave || 0;
+                const sick = oData.sickLeave || 0;
+                const annual = oData.annualLeave || 0;
+                const total = casual + sick + annual;
+                this._oDashModel.setProperty("/leaveBalance", {
+                    casualLeave: casual, sickLeave: sick, annualLeave: annual,
+                    total,
+                    usedPct: Math.min(100, Math.round((total / 30) * 100))
+                });
+            }).catch(() => {
+                this._oDashModel.setProperty("/leaveBalance",
+                    { casualLeave: 0, sickLeave: 0, annualLeave: 0, total: 0, usedPct: 0 });
+            }).finally(() => this._refreshDash());
         },
 
-        _loadMyTasks() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getMyTasks", {
-                method: "POST",
-                success: (oData) => {
+        _loadMyTasks() {   //completed
+            this._callAction("getMyTasks")
+                .then(oData => {
                     this._oDashModel.setProperty("/myTasks", {
                         totalPending: oData.totalPending || 0,
                         highPriorityCount: oData.highPriorityCount || 0,
                         inProgressCount: oData.inProgressCount || 0,
                         notStartedCount: oData.notStartedCount || 0
                     });
-                    this._refreshDash();
-                },
-                error: () => {
+                })
+                .catch(() => {
                     this._oDashModel.setProperty("/myTasks",
                         { totalPending: 0, highPriorityCount: 0, inProgressCount: 0, notStartedCount: 0 });
-                    this._refreshDash();
-                }
-            });
+                })
+                .finally(() => this._refreshDash());
         },
 
         // ─────────────────────────────────────────────────────────────────────
@@ -448,11 +488,8 @@ _loadGreeting() {
 
         // Attendance: frontend-only mock (backend hook ready when needed)
         _loadAttendance() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) { this._setAttendanceMock(); return; }
-            oModel.callFunction("/getAttendance", {
-                method: "POST",
-                success: (oData) => {
+            this._callAction("getAttendance")
+                .then(oData => {
                     this._oDashModel.setProperty("/attendance", {
                         attendancePercentage: oData.attendancePercentage || 0,
                         presentCount: oData.presentCount || 0,
@@ -460,85 +497,143 @@ _loadGreeting() {
                         monthLabel: oData.monthLabel || "Month"
                     });
                     this._refreshDash();
-                },
-                error: () => { this._setAttendanceMock(); }
-            });
+                })
+                .catch(() => {
+                    this._setAttendanceMock();
+                });
         },
-        _setAttendanceMock() {
-            const MNAMES = ["January", "February", "March", "April", "May", "June",
-                "July", "August", "September", "October", "November", "December"];
-            this._oDashModel.setProperty("/attendance", {
-                attendancePercentage: 100,
-                presentCount: 22,
-                absentCount: 0,
-                monthLabel: MNAMES[new Date().getMonth()]
-            });
-            this._refreshDash();
-        },
+        //performance trend 
 
+        _loadPerformanceTrend(iYear) {
+            const year = iYear || parseInt(
+                this._oDashModel.getProperty("/performanceTrend/selectedYear")
+                || new Date().getFullYear(), 10);
+
+            this._callAction("getPerformanceTrend", { year: year })
+                .then(oData => {
+                    let months = Array(12).fill(null);
+                    try {
+                        let raw = [];
+                        if (Array.isArray(oData)) {
+                            raw = oData;
+                        } else if (oData.trendJSON) {
+                            raw = JSON.parse(oData.trendJSON);
+                        } else if (Array.isArray(oData.months)) {
+                            raw = oData.months;
+                        }
+
+                        // ── NEW: normalise — each slot may be a number OR an object ──
+                        months = raw.map(slot => {
+                            if (slot === null || slot === undefined) return null;
+                            if (typeof slot === "number") return slot;
+                            if (typeof slot === "object" && slot.rating !== undefined) {
+                                return parseFloat(slot.rating);
+                            }
+                            return null;
+                        });
+
+                    } catch (e) {
+                        months = Array(12).fill(null);
+                    }
+                    this._oDashModel.setProperty("/performanceTrend/months", months);
+                })
+                .catch(() => {
+                    this._oDashModel.setProperty("/performanceTrend/months",
+                        Array(12).fill(null));
+                })
+                .finally(() => this._refreshDash());
+        },
         // Performance Rating
+
         _loadPerformanceRating() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getPerformanceRating", {
-                method: "POST",
-                success: (oData) => {
+            this._callAction("getPerformanceRating")
+                .then(oData => {
+                    const val = parseFloat(oData.ratingValue || 0);
                     this._oDashModel.setProperty("/performanceRating", {
-                        ratingValue: parseFloat(oData.ratingValue || 0),
-                        ratingCategory: oData.ratingCategory || "N/A"
+                        ratingValue: val,
+                        ratingCategory: oData.ratingCategory || "N/A",
+                        reviewMonth: oData.reviewMonth || 0,
+                        reviewYear: oData.reviewYear || 0,
+                        reviewComment: oData.reviewComment || ""
                     });
-                    this._refreshDash();
-                },
-                error: () => {
+                })
+                .catch(() => {
                     this._oDashModel.setProperty("/performanceRating",
                         { ratingValue: 0, ratingCategory: "N/A" });
-                    this._refreshDash();
-                }
-            });
+                })
+                .finally(() => this._refreshDash());
         },
 
         _checkTodayAttendance() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
+            const now = new Date();
+            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
-            const today = new Date().toISOString().split("T")[0];
-
-            oModel.callFunction("/getTodayAttendance", {
-                method: "POST",
-                urlParameters: { attendanceDate: today },
-                success: (oData) => {
+            this._callAction("getTodayAttendance", { attendanceDate: today })
+                .then(oData => {
                     if (oData && oData.alreadyMarked) {
+                        // Already marked — show green active
                         this._oDashModel.setProperty("/attendanceBtnLabel", "✓ Active");
                         this._oDashModel.setProperty("/attendanceBtnType", "Success");
                         this._oDashModel.setProperty("/attendanceBtnEnabled", false);
                         this._oDashModel.setProperty("/attendanceMarked", true);
+                    } else {
+                        // Not yet marked — show enabled Mark Active
+                        this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
+                        this._oDashModel.setProperty("/attendanceBtnType", "Accept");
+                        this._oDashModel.setProperty("/attendanceBtnEnabled", true);
+                        this._oDashModel.setProperty("/attendanceMarked", false);
                     }
-                },
-                error: () => { /* silently ignore — button stays enabled */ }
-            });
+                })
+                .catch(() => {
+                    // On error — enable button so user can still try
+                    this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
+                    this._oDashModel.setProperty("/attendanceBtnType", "Accept");
+                    this._oDashModel.setProperty("/attendanceBtnEnabled", true);
+                });
+
+
         },
 
-        // Performance Trend
-        _loadPerformanceTrend(iYear) {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            const year = iYear || parseInt(
-                this._oDashModel.getProperty("/performanceTrend/selectedYear") || new Date().getFullYear(), 10);
-            oModel.callFunction("/getPerformanceTrend", {
-                method: "POST",
-                urlParameters: { year: year },
-                success: (oData) => {
-                    let months = [];
-                    try { months = JSON.parse(oData.trendJSON || "[]"); } catch (e) { months = []; }
-                    this._oDashModel.setProperty("/performanceTrend/months", months);
-                    this._refreshDash();
-                },
-                error: () => {
-                    this._oDashModel.setProperty("/performanceTrend/months", Array(12).fill(null));
-                    this._refreshDash();
-                }
-            });
+        _scheduleAttendanceBtnReset() {
+            const now = new Date();
+            const resetHour = 23;  // 11 PM
+            const resetMinute = 0;
+
+            // Calculate ms until next 11 PM
+            let resetTime = new Date(
+                now.getFullYear(),
+                now.getMonth(),
+                now.getDate(),
+                resetHour,
+                resetMinute,
+                0
+            );
+
+            // If already past 11 PM today, schedule for tomorrow 11 PM
+            if (now >= resetTime) {
+                resetTime.setDate(resetTime.getDate() + 1);
+            }
+
+            const msUntilReset = resetTime.getTime() - now.getTime();
+
+            // Clear any existing timer
+            if (this._attendanceResetTimer) {
+                clearTimeout(this._attendanceResetTimer);
+            }
+
+            this._attendanceResetTimer = setTimeout(() => {
+                // Reset button to "Mark Active"
+                this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
+                this._oDashModel.setProperty("/attendanceBtnType", "Accept");
+                this._oDashModel.setProperty("/attendanceBtnEnabled", true);
+                this._oDashModel.setProperty("/attendanceMarked", false);
+
+                // Schedule again for next day
+                this._scheduleAttendanceBtnReset();
+
+            }, msUntilReset);
         },
+
 
         // Year selector change
         onTrendYearChange(oEvent) {
@@ -549,11 +644,8 @@ _loadGreeting() {
 
         // Task Summary (reuses existing TaskMaster backend)
         _loadTaskSummary() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getTaskSummary", {
-                method: "POST",
-                success: (oData) => {
+            this._callAction("getTaskSummary")
+                .then(oData => {
                     this._oDashModel.setProperty("/taskSummary", {
                         total: oData.total || 0,
                         notStarted: oData.notStarted || 0,
@@ -561,14 +653,14 @@ _loadGreeting() {
                         inReview: oData.inReview || 0,
                         completed: oData.completed || 0
                     });
-                    this._refreshDash();
-                },
-                error: () => {
+                })
+                .catch(() => {
                     this._oDashModel.setProperty("/taskSummary",
                         { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 });
-                    this._refreshDash();
-                }
-            });
+                })
+                .finally(() => this._refreshDash());
+
+
         },
 
         // ── Leave Overview ────────────────────────────────────────────────────────
@@ -600,44 +692,49 @@ _loadGreeting() {
             });
         },
 
-        // ── Upcoming Calendar ─────────────────────────────────────────────────────
-        _loadUpcomingCalendar() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getUpcomingCalendar", {
-                method: "POST",
-                success: (oData) => {
-                    let events = [];
-                    try { events = JSON.parse(oData.eventsJSON || "[]"); } catch (e) { /**/ }
-                    this._oDashModel.setProperty("/upcomingCalendar/events", events);
-                    this._refreshDash();
-                },
-                error: () => {
-                    this._oDashModel.setProperty("/upcomingCalendar/events", []);
-                    this._refreshDash();
+// ── Upcoming Calendar ─────────────────────────────────────────────────────
+_loadUpcomingCalendar() {
+    this._callAction("getUpcomingCalendar", {})
+        .then(oData => {
+            let events = [];
+            try {
+                if (Array.isArray(oData)) {
+                    events = oData;
+                } else if (oData.eventsJSON) {
+                    events = JSON.parse(oData.eventsJSON);
+                } else if (Array.isArray(oData.value)) {
+                    events = oData.value;
                 }
-            });
-        },
+            } catch (e) {
+                events = [];
+            }
+            this._oDashModel.setProperty("/upcomingCalendar/events", events);
+        })
+        .catch(() => {
+            this._oDashModel.setProperty("/upcomingCalendar/events", []);
+        })
+        .finally(() => this._refreshDash());
+},
 
-        // ── Recent Notifications ──────────────────────────────────────────────────
-        _loadRecentNotifications() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getRecentNotifications", {
-                method: "POST",
-                success: (oData) => {
-                    // CAP returns array directly for "returns array of"
-                    const items = Array.isArray(oData) ? oData
-                        : Array.isArray(oData?.value) ? oData.value : [];
-                    this._oDashModel.setProperty("/recentNotifications/items", items);
-                    this._refreshDash();
-                },
-                error: () => {
-                    this._oDashModel.setProperty("/recentNotifications/items", []);
-                    this._refreshDash();
-                }
-            });
-        },
+// ── Recent Notifications ──────────────────────────────────────────────────
+_loadRecentNotifications() {
+    this._callAction("getRecentNotifications", {})
+        .then(oData => {
+            let items = [];
+            if (Array.isArray(oData)) {
+                items = oData;
+            } else if (Array.isArray(oData?.value)) {
+                items = oData.value;
+            } else if (oData.itemsJSON) {
+                try { items = JSON.parse(oData.itemsJSON); } catch (e) { items = []; }
+            }
+            this._oDashModel.setProperty("/recentNotifications/items", items);
+        })
+        .catch(() => {
+            this._oDashModel.setProperty("/recentNotifications/items", []);
+        })
+        .finally(() => this._refreshDash());
+},
 
         // ─────────────────────────────────────────────────────────────────────
         // _refreshDash — reads ALL model data, rebuilds the full HTML grid
@@ -753,27 +850,39 @@ _loadGreeting() {
             const tasks = o.tasks || {};
             const tPending = tasks.totalPending !== undefined ? tasks.totalPending : 0;
             const tHigh = tasks.highPriorityCount !== undefined ? tasks.highPriorityCount : 0;
-            const tInProg = tasks.inProgressCount !== undefined ? tasks.inProgressCount : 0;
-            const tNotSt = tasks.notStartedCount !== undefined ? tasks.notStartedCount : 0;
+            const tMedium = tasks.mediumPriorityCount !== undefined ? tasks.mediumPriorityCount : 0;
+            const tLow = tasks.lowPriorityCount !== undefined ? tasks.lowPriorityCount : 0;
 
             const sTasksCard = card(`
-                ${cardHeader("My Tasks",
+    ${cardHeader("My Tasks",
                 iconCircle("#fffbeb", "#f59e0b",
                     '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>'))}
-                ${bigNum(tPending, "#111827")}
-                ${subLabel("Tasks Pending")}
-                ${tHigh > 0
-                    ? `<div style="font-size:0.82rem;font-weight:600;color:#dc2626;margin-bottom:8px;">${tHigh} High Priority</div>`
-                    : `<div style="font-size:0.82rem;color:#9ca3af;margin-bottom:8px;">No high priority tasks</div>`}
-                <div style="font-size:0.78rem;color:#6b7280;display:flex;flex-direction:column;gap:4px;">
-                    <div style="display:flex;justify-content:space-between;">
-                        <span>In Progress</span><b style="color:#3b82f6;">${tInProg}</b>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;">
-                        <span>Not Started</span><b style="color:#6b7280;">${tNotSt}</b>
-                    </div>
-                </div>
-            `);
+    ${bigNum(tPending, "#111827")}
+    ${subLabel("Tasks Pending")}
+    <div style="font-size:0.78rem;display:flex;flex-direction:column;gap:6px;margin-top:4px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:6px;">
+                <span style="width:8px;height:8px;border-radius:50%;background:#dc2626;flex-shrink:0;"></span>
+                <span style="color:#6b7280;">High Priority</span>
+            </div>
+            <b style="color:#dc2626;">${tHigh}</b>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:6px;">
+                <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span>
+                <span style="color:#6b7280;">Medium Priority</span>
+            </div>
+            <b style="color:#f59e0b;">${tMedium}</b>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:6px;">
+                <span style="width:8px;height:8px;border-radius:50%;background:#16a34a;flex-shrink:0;"></span>
+                <span style="color:#6b7280;">Low Priority</span>
+            </div>
+            <b style="color:#16a34a;">${tLow}</b>
+        </div>
+    </div>
+`);
 
             // ── 4. Attendance ────────────────────────────────────────────────
             const attend = o.attend || {};
@@ -859,48 +968,6 @@ _loadGreeting() {
                     o.rejected > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#dc2626" stroke-width="14" stroke-dasharray="${dR} ${circ}" stroke-dashoffset="${oR}" transform="rotate(-90 ${cx} ${cy})"/>` : ""
                 ].join("");
 
-            const sRow2 = `
-                <div style="display:flex;flex-direction:row;gap:1rem;width:100%;box-sizing:border-box;">
-
-                    <div style="flex:1;background:#fff;border-radius:12px;
-                                box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;min-height:260px;">
-                        <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
-                            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Total Timesheets</div>
-                            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">All time submissions</div>
-                        </div>
-                        <div style="display:flex;align-items:center;padding:14px 18px 20px;gap:18px;">
-                            <svg width="130" height="130" viewBox="0 0 140 140">
-                                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f3f4f6" stroke-width="14"/>
-                                ${segs}
-                                <text x="${cx}" y="${cy - 5}" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${iTotal}</text>
-                                <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="11" fill="#9ca3af">submitted</text>
-                            </svg>
-                            <div style="display:flex;flex-direction:column;gap:10px;">
-                                <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#16a34a;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Approved</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.approved}</b></div>
-                                <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Pending</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.pending}</b></div>
-                                <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#dc2626;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Rejected</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.rejected}</b></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style="flex:1;background:#fff;border-radius:12px;
-                                box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;min-height:260px;">
-                        <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
-                            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Week Completion</div>
-                            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">${o.label}</div>
-                            <div style="font-size:2.4rem;font-weight:700;color:#111827;line-height:1.2;margin-top:6px;">
-                                ${o.pct} <span style="font-size:0.95rem;font-weight:400;color:#6b7280;">%</span>
-                            </div>
-                        </div>
-                        <div style="padding:14px 18px 20px;display:flex;flex-direction:column;gap:10px;">
-                            <div style="width:100%;height:14px;background:#e5e7eb;border-radius:7px;overflow:hidden;">
-                                <div style="width:${o.pct}%;height:100%;background:#3b82f6;border-radius:7px;transition:width 0.4s;"></div>
-                            </div>
-                            <span style="font-size:0.78rem;color:#6b7280;">${o.hint}</span>
-                        </div>
-                    </div>
-
-                </div>`;
 
             // ── Row 3: Bar chart ─────────────────────────────────────────────
             const sRow3 = `
@@ -956,7 +1023,10 @@ _loadGreeting() {
             });
 
             const tPoints = trendMonths
-                .map((v, i) => v !== null ? { x: xOf(i), y: yOf(v) } : null)
+                .map((v, i) => {
+                    const num = parseFloat(v);
+                    return (!isNaN(num) && num > 0) ? { x: xOf(i), y: yOf(num) } : null;
+                })
                 .filter(Boolean);
 
             let tPath = "", tArea = "", tDots = "";
@@ -1090,26 +1160,66 @@ _loadGreeting() {
         </div>
 
         <!-- Total Timesheets pie -->
-        <div style="background:#fff;border-radius:12px;flex:1;
-                    box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
-            <div style="padding:12px 16px 6px;border-bottom:1px solid #f3f4f6;">
-                <div style="font-size:0.95rem;font-weight:600;color:#111827;">Total Timesheets</div>
-                <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">All time submissions</div>
-            </div>
-            <div style="display:flex;align-items:center;padding:12px 16px 16px;gap:16px;">
-                <svg width="110" height="110" viewBox="0 0 140 140">
-                    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f3f4f6" stroke-width="14"/>
-                    ${segs}
-                    <text x="${cx}" y="${cy - 5}" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${iTotal}</text>
-                    <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="11" fill="#9ca3af">submitted</text>
-                </svg>
-                <div style="display:flex;flex-direction:column;gap:8px;">
-                    <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#16a34a;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Approved</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.approved}</b></div>
-                    <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Pending</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.pending}</b></div>
-                    <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#dc2626;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Rejected</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.rejected}</b></div>
+<div style="background:#fff;border-radius:12px;flex:1;
+            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;
+            box-sizing:border-box;display:flex;flex-direction:column;">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div>
+            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Total Timesheets</div>
+            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">All time submissions</div>
+        </div>
+    </div>
+
+    <!-- Donut + Legend -->
+    <div style="display:flex;align-items:center;gap:24px;flex:1;">
+
+        <!-- Donut -->
+        <div style="display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <svg width="160" height="160" viewBox="0 0 140 140" style="display:block;">
+                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f3f4f6" stroke-width="14"/>
+                ${segs}
+                <text x="${cx}" y="${cy - 8}" text-anchor="middle" font-size="22"
+                      font-weight="700" fill="#111827">${iTotal}</text>
+                <text x="${cx}" y="${cy + 12}" text-anchor="middle" font-size="9"
+                      fill="#9ca3af" font-family="sans-serif">submitted</text>
+            </svg>
+        </div>
+
+        <!-- Legend -->
+        <div style="flex:1;display:flex;flex-direction:column;justify-content:space-between;height:140px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:8px 0;border-bottom:1px solid #f3f4f6;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="width:11px;height:11px;border-radius:50%;
+                                 background:#16a34a;flex-shrink:0;"></span>
+                    <span style="font-size:0.85rem;color:#374151;">Approved</span>
                 </div>
+                <b style="font-size:0.85rem;color:#111827;">${o.approved}</b>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:8px 0;border-bottom:1px solid #f3f4f6;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="width:11px;height:11px;border-radius:50%;
+                                 background:#f59e0b;flex-shrink:0;"></span>
+                    <span style="font-size:0.85rem;color:#374151;">Pending</span>
+                </div>
+                <b style="font-size:0.85rem;color:#111827;">${o.pending}</b>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:8px 0;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="width:11px;height:11px;border-radius:50%;
+                                 background:#dc2626;flex-shrink:0;"></span>
+                    <span style="font-size:0.85rem;color:#374151;">Rejected</span>
+                </div>
+                <b style="font-size:0.85rem;color:#111827;">${o.rejected}</b>
             </div>
         </div>
+
+    </div>
+</div>
 
     </div>`;
 
@@ -1330,63 +1440,236 @@ _loadGreeting() {
     </div>`;
 
             const sRow5 = `
-    <div style="display:flex;flex-direction:row;gap:1rem;
-                width:100%;box-sizing:border-box;">
-        ${sLeaveOverview}
-        ${sCalendar}
-        ${sNotifications}
-    </div>`;
+<div style="display:flex;flex-direction:row;gap:1rem;
+            width:100%;box-sizing:border-box;">
+    ${sCalendar}
+    ${sNotifications}
+</div>`;
+
+            // ── Row 2: Bar Chart (left) | Week Completion + Leave Overview (right) ──
+            // Auto-compute current week Mon–Fri label
+            const now = new Date();
+            const dow = now.getDay();                     // 0=Sun,1=Mon,...6=Sat
+            const diff = dow === 0 ? -6 : 1 - dow;        // shift back to Monday
+            const mon = new Date(now); mon.setDate(now.getDate() + diff);
+            const fri = new Date(mon); fri.setDate(mon.getDate() + 4);
+            const _fmt = (d) => d.getDate() + " " +
+                ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+            const autoWeekLabel = `${_fmt(mon)} – ${_fmt(fri)}`;
+            const sRow2 = `
+<div style="display:flex;flex-direction:row;gap:1rem;width:100%;box-sizing:border-box;">
+
+    <!-- Left: Daily Hours Bar Chart -->
+    <div style="flex:1.4;background:#fff;border-radius:12px;
+                box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
+        <div style="padding:14px 18px 10px;border-bottom:1px solid #f3f4f6;">
+            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Daily Hours Breakdown</div>
+            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">${autoWeekLabel}</div>
+        </div>
+        <div style="padding:4px 0 0;overflow:hidden;">${o.barHTML}</div>
+    </div>
+
+    <!-- Right: Week Completion on top + My Leave Overview below -->
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1rem;">
+
+        <!-- Week Completion -->
+        <div style="background:#fff;border-radius:12px;
+                    box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
+            <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
+                <div style="font-size:0.95rem;font-weight:600;color:#111827;">Week Completion</div>
+                <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">${o.label}</div>
+                <div style="font-size:2.2rem;font-weight:700;color:#111827;line-height:1.2;margin-top:6px;">
+                    ${o.pct} <span style="font-size:0.9rem;font-weight:400;color:#6b7280;">%</span>
+                </div>
+            </div>
+            <div style="padding:12px 18px 16px;display:flex;flex-direction:column;gap:8px;">
+                <div style="width:100%;height:12px;background:#e5e7eb;border-radius:6px;overflow:hidden;">
+                    <div style="width:${o.pct}%;height:100%;background:#3b82f6;border-radius:6px;transition:width 0.4s;"></div>
+                </div>
+                <span style="font-size:0.78rem;color:#6b7280;">${o.hint}</span>
+            </div>
+        </div>
+
+        <!-- My Leave Overview -->
+        <!-- My Leave Overview -->
+<div style="background:#fff;border-radius:12px;flex:1;
+            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;
+            box-sizing:border-box;display:flex;flex-direction:column;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <span style="font-size:0.95rem;font-weight:600;color:#111827;">My Leave Overview</span>
+        <span style="font-size:0.75rem;color:#9ca3af;background:#f3f4f6;
+                     padding:3px 10px;border-radius:12px;">This Year</span>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+    <svg width="160" height="160" viewBox="0 0 140 140" style="display:block;">
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#f3f4f6" stroke-width="14"/>
+
+        <!-- Casual Leave 5/23 -->
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#16a34a" stroke-width="14"
+            stroke-dasharray="${((5/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
+            stroke-dashoffset="0"
+            transform="rotate(-90 70 70)"/>
+
+        <!-- Sick Leave 5/23 -->
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#3b82f6" stroke-width="14"
+            stroke-dasharray="${((5/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
+            stroke-dashoffset="${(-(5/23)*2*Math.PI*54).toFixed(2)}"
+            transform="rotate(-90 70 70)"/>
+
+        <!-- Paid Leave 11/23 -->
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#f59e0b" stroke-width="14"
+            stroke-dasharray="${((11/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
+            stroke-dashoffset="${(-((5+5)/23)*2*Math.PI*54).toFixed(2)}"
+            transform="rotate(-90 70 70)"/>
+
+        <!-- Paternity Leave 2/23 -->
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#8b5cf6" stroke-width="14"
+            stroke-dasharray="${((2/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
+            stroke-dashoffset="${(-((5+5+11)/23)*2*Math.PI*54).toFixed(2)}"
+            transform="rotate(-90 70 70)"/>
+
+        <text x="70" y="64" text-anchor="middle" font-size="20"
+              font-weight="700" fill="#111827">21</text>
+        <text x="70" y="80" text-anchor="middle" font-size="9"
+              fill="#9ca3af" font-family="sans-serif">Total Days</text>
+    </svg>
+
+        <!-- Legend -->
+<!-- Legend -->
+<div style="flex:1;min-width:120px;display:flex;flex-direction:column;justify-content:space-between;gap:0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:10px 0;border-bottom:1px solid #f3f4f6;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:10px;height:10px;border-radius:50%;
+                         background:#16a34a;flex-shrink:0;"></span>
+            <span style="font-size:0.82rem;color:#374151;">Casual Leave</span>
+        </div>
+        <span style="font-size:0.82rem;font-weight:700;color:#111827;">5 Days</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:10px 0;border-bottom:1px solid #f3f4f6;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:10px;height:10px;border-radius:50%;
+                         background:#3b82f6;flex-shrink:0;"></span>
+            <span style="font-size:0.82rem;color:#374151;">Sick Leave</span>
+        </div>
+        <span style="font-size:0.82rem;font-weight:700;color:#111827;">5 Days</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:10px 0;border-bottom:1px solid #f3f4f6;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:10px;height:10px;border-radius:50%;
+                         background:#f59e0b;flex-shrink:0;"></span>
+            <span style="font-size:0.82rem;color:#374151;">Paid Leave</span>
+        </div>
+        <span style="font-size:0.82rem;font-weight:700;color:#111827;">11 Days</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:10px 0;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:10px;height:10px;border-radius:50%;
+                         background:#8b5cf6;flex-shrink:0;"></span>
+            <span style="font-size:0.82rem;color:#374151;">Paternity Leave</span>
+        </div>
+        <span style="font-size:0.82rem;font-weight:700;color:#111827;">2 Days</span>
+    </div>
+</div>
+
+    </div>
+
+    <!-- Maternity info line -->
+    <div style="margin-top:14px;padding:10px 14px;background:#eff6ff;
+                border-radius:8px;border-left:3px solid #4281e7;
+                display:flex;align-items:center;gap:10px;">
+        <svg width="50" height="50" viewBox="0 0 24 24" fill="none"
+             stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span style="font-size:0.95rem;color:#1d4ed8;line-height:1.4;">
+            <b>Maternity Leave:</b> 180 days 
+        </span>
+    </div>
+
+</div>
+
+    </div>
+
+</div>`;
+
 
             // ── Final: wrap all rows in outer column ─────────────────────────
             return `
-                <div style="padding:1.5rem;box-sizing:border-box;width:100%;
-                            display:flex;flex-direction:column;gap:1.5rem;">
-                    ${sRow1}
-                    ${sRow4}
-                    ${sRow2}
-                    ${sRow3}
-                    ${sRow5}
-                    
-                </div>`;
+    <div style="padding:1.5rem;box-sizing:border-box;width:100%;
+                display:flex;flex-direction:column;gap:1.5rem;">
+        ${sRow1}
+        ${sRow4}
+        ${sRow2}
+        ${sRow5}
+    </div>`;
         },
 
         // ─────────────────────────────────────────────────────────────────────
-        // Bar chart (unchanged)
+        // Bar chart for timesheet hours in the current week 
         // ─────────────────────────────────────────────────────────────────────
-        _buildBarChart(weekDays) {
-            const MAX_H = 12, X_STEP = 100, BAR_W = 56;
-            const CHART_W = X_STEP * 5, MAX_BAR = 60, TOP_PAD = 20;
-            const BASE_Y = MAX_BAR + TOP_PAD, VIEW_H = BASE_Y + 24;
+_buildBarChart(weekDays) {
+    const MAX_H   = 14;
+    const X_STEP  = 100, BAR_W = 60;
+    const CHART_W = X_STEP * 5;
+    const MAX_BAR = 160;   // tall enough to show clear height differences
+    const TOP_PAD = 20;
+    const BASE_Y  = MAX_BAR + TOP_PAD;
+    const VIEW_H  = BASE_Y + 30;
 
-            let bars = "";
-            weekDays.slice(0, 5).forEach((day, i) => {
-                const x = i * X_STEP + (X_STEP - BAR_W) / 2;
-                const barH = day.hours > 0 ? Math.max(6, (day.hours / MAX_H) * MAX_BAR) : 6;
-                const y = BASE_Y - barH;
-                const col = day.hours >= MAX_H ? "#16a34a" : day.hours > 0 ? "#3b82f6" : "#e5e7eb";
-                const cxB = x + BAR_W / 2;
-                bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}" rx="6" fill="${col}"/>`;
-                bars += `<text x="${cxB}" y="${BASE_Y + 16}" text-anchor="middle" font-size="11" fill="#6b7280" font-family="sans-serif">${day.name}</text>`;
-                if (day.hours > 0) {
-                    const lbl = day.hoursLabel.replace(" hrs", "h");
-                    const lblY = barH > 20 ? y + 16 : y - 5;
-                    const lblC = barH > 20 ? "#fff" : "#374151";
-                    bars += `<text x="${cxB}" y="${lblY}" text-anchor="middle" font-size="10" fill="${lblC}" font-weight="600" font-family="sans-serif">${lbl}</text>`;
-                }
-            });
+    // Find actual max hours this week so bars scale relative to each other
+    const weekMax = Math.max(...weekDays.slice(0, 5).map(d => d.hours || 0), 1);
 
-            let grid = "";
-            [3, 6, 9, 12].forEach(hrs => {
-                const gy = BASE_Y - (hrs / MAX_H) * MAX_BAR;
-                grid += `<line x1="0" y1="${gy}" x2="${CHART_W}" y2="${gy}" stroke="#f3f4f6" stroke-width="1"/>`;
-                grid += `<text x="${CHART_W + 4}" y="${gy + 3}" font-size="9" fill="#d1d5db" font-family="sans-serif">${hrs}h</text>`;
-            });
+    let bars = "";
+    weekDays.slice(0, 5).forEach((day, i) => {
+        const x = i * X_STEP + (X_STEP - BAR_W) / 2;
 
-            return `<div style="padding:0 14px 14px;width:100%;box-sizing:border-box;margin-top:10px;">
-                        <svg viewBox="0 0 ${CHART_W + 30} ${VIEW_H}" width="100%"
-                             style="overflow:visible;display:block;">${grid}${bars}</svg>
-                    </div>`;
+        // Scale bar height relative to the tallest bar this week
+        // minimum 12px just so empty days show a stub
+        const barH = day.hours > 0
+            ? Math.max(12, (day.hours / weekMax) * MAX_BAR)
+            : 12;
+
+        const y   = BASE_Y - barH;
+        const col = day.hours > 0 ? "#3b82f6" : "#e5e7eb";
+        const cxB = x + BAR_W / 2;
+
+        // Bar
+        bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}"
+                       rx="8" fill="${col}"/>`;
+
+        // Day label below
+        bars += `<text x="${cxB}" y="${BASE_Y + 20}" text-anchor="middle"
+                       font-size="11" fill="#6b7280"
+                       font-family="sans-serif">${day.name}</text>`;
+
+        // Hour label — inside bar if tall enough, above bar if short
+        if (day.hours > 0) {
+            const lbl  = (day.hoursLabel || "").replace(" hrs", "h");
+            const inside = barH >= 28;
+            const lblY   = inside ? y + barH / 2 + 5 : y - 6;
+            const lblCol = inside ? "#fff" : "#374151";
+            bars += `<text x="${cxB}" y="${lblY}" text-anchor="middle"
+                           font-size="11" fill="${lblCol}" font-weight="700"
+                           font-family="sans-serif">${lbl}</text>`;
         }
+    });
+
+    return `
+        <div style="padding:0 18px 14px;width:100%;box-sizing:border-box;margin-top:8px;">
+            <svg viewBox="0 0 ${CHART_W} ${VIEW_H}" width="100%"
+                 style="overflow:visible;display:block;">
+                ${bars}
+            </svg>
+        </div>`;
+},
 
     });
 });

@@ -20,7 +20,7 @@ sap.ui.define([
         if (!sName) return "JD";
         const parts = sName.trim().split(/\s+/);
         const first = parts[0] && parts[0][0] ? parts[0][0].toUpperCase() : "";
-        const last  = parts.length > 1 && parts[parts.length - 1][0]
+        const last = parts.length > 1 && parts[parts.length - 1][0]
             ? parts[parts.length - 1][0].toUpperCase() : "";
         return (first + last) || (first || "JD");
     }
@@ -32,17 +32,17 @@ sap.ui.define([
             // Allow ?role=manager / ?role=employee in the URL, or a saved
             // value in localStorage (set via the avatar menu) to bypass auth
             // when running with mocked users.
-            const sUrlRole  = new URLSearchParams(window.location.search).get("role");
+            const sUrlRole = new URLSearchParams(window.location.search).get("role");
             const sSaveRole = (() => { try { return localStorage.getItem("tsRole") || ""; } catch (e) { return ""; } })();
             const sInitRole = (sUrlRole || sSaveRole || "employee").toLowerCase();
-            if (sUrlRole) { try { localStorage.setItem("tsRole", sUrlRole); } catch (e) {} }
+            if (sUrlRole) { try { localStorage.setItem("tsRole", sUrlRole); } catch (e) { } }
 
             this._oAppModel = new JSONModel({
-                unreadCount:    0,
-                userRole:      ["manager", "employee", "hr"].includes(sInitRole) ? sInitRole : "employee",
-                userName:       "",
-                userInitials:   "JD",
-                userProfile:    null
+                unreadCount: 0,
+                userRole: ["manager", "employee", "hr"].includes(sInitRole) ? sInitRole : "employee",
+                userName: "",
+                userInitials: "JD",
+                userProfile: null
             });
             this.getView().setModel(this._oAppModel, "appView");
 
@@ -58,8 +58,8 @@ sap.ui.define([
             if (oComp.getCurrentUser) {
                 oComp.getCurrentUser().then(u => {
                     if (bExplicit) return;
-                     const sRole = u && (u.role || (u.value && u.value.role));
-                     if (sRole) this._oAppModel.setProperty("/userRole", sRole.toLowerCase());
+                    const sRole = u && (u.role || (u.value && u.value.role));
+                    if (sRole) this._oAppModel.setProperty("/userRole", sRole.toLowerCase());
                 })
             }
 
@@ -231,18 +231,18 @@ sap.ui.define([
             const sRouteName = oEvent.getParameter("name");
 
             const oRouteToList = {
-                dashboard:        "mainNavList",
-                timesheet:        "mainNavList",
+                dashboard: "mainNavList",
+                timesheet: "mainNavList",
                 "task-description": "mainNavList",
                 "apply-leave": "mainNavList",
-                history:          "mainNavList",
-                manager:          "mainNavList",
+                history: "mainNavList",
+                manager: "mainNavList",
                 "task-assignment": "mainNavList",
-                "task-status":    "mainNavList",
-                notifications:    "mainNavList",
-                "add-employee":     "mainNavList",
-                "all-employees":    "mainNavList",
-                "leave-approvals": "mainNavList"                
+                "task-status": "mainNavList",
+                notifications: "mainNavList",
+                "add-employee": "mainNavList",
+                "all-employees": "mainNavList",
+                "leave-approvals": "mainNavList"
             };
 
             ["mainNavList", "managerNavList", "accountNavList"].forEach(sId => {
@@ -250,7 +250,7 @@ sap.ui.define([
                 if (!oList) return;
                 oList.getItems().forEach(oItem => {
                     const isActive = oItem.data("target") === sRouteName &&
-                                     oRouteToList[sRouteName] === sId;
+                        oRouteToList[sRouteName] === sId;
                     oItem.toggleStyleClass("tsNavItemActive", isActive);
 
                     if (!oItem.getDomRef()) return;
@@ -290,9 +290,9 @@ sap.ui.define([
             if (!oNotifModel) return;
             const items = oNotifModel.getProperty("/items") || [];
             const sCurrentId = oComp.getCurrentEmployeeId();
-            const sRole      = (oComp._oCurrentUser && oComp._oCurrentUser.role)
-                            || this._oAppModel.getProperty("/userRole")
-                            || "employee";
+            const sRole = (oComp._oCurrentUser && oComp._oCurrentUser.role)
+                || this._oAppModel.getProperty("/userRole")
+                || "employee";
             const mine = items.filter(n => {
                 if (n.recipientEmployeeId) return n.recipientEmployeeId === sCurrentId;
                 return sRole !== "manager";
@@ -323,7 +323,7 @@ sap.ui.define([
 
         onLogout() {
             MessageBox.confirm("Sign out of Timesheet?", {
-                title:   "Logout",
+                title: "Logout",
                 actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
                 emphasizedAction: MessageBox.Action.OK,
                 onClose: (sAction) => {
@@ -338,13 +338,13 @@ sap.ui.define([
             //    UI5 in-memory models, app-scoped JSONModels, OData caches.
             try {
                 const oComp = this.getOwnerComponent();
-                ["history","locked","notifications","tasks","taskUpdates"].forEach(name => {
+                ["history", "locked", "notifications", "tasks", "taskUpdates"].forEach(name => {
                     const m = oComp.getModel(name);
                     if (m && m.setData) m.setData({});
                 });
                 // Drop the cached JWT-resolved user so a re-login is mandatory.
-                oComp._oCurrentUser  = null;
-                oComp._pCurrentUser  = null;
+                oComp._oCurrentUser = null;
+                oComp._pCurrentUser = null;
                 oComp._employeeCache = {};
             } catch (e) { /* non-blocking */ }
 
@@ -352,8 +352,8 @@ sap.ui.define([
             //    sessionStorage too so cached UI5 preload chunks rebuild
             //    cleanly for the next user (otherwise a different person
             //    on a shared machine inherits the previous theme/density).
-            try { localStorage.clear();   } catch (e) {}
-            try { sessionStorage.clear(); } catch (e) {}
+            try { localStorage.clear(); } catch (e) { }
+            try { sessionStorage.clear(); } catch (e) { }
 
             // 3) Hand off to the approuter. /logout is what we configured
             //    in xs-app.json.logoutEndpoint — the approuter:
@@ -380,16 +380,16 @@ sap.ui.define([
 
             const useEmp = (emp) => {
                 if (!emp) return;
-                this._oAppModel.setProperty("/userName",     emp.employeeName || "");
+                this._oAppModel.setProperty("/userName", emp.employeeName || "");
                 this._oAppModel.setProperty("/userInitials", buildInitials(emp.employeeName));
-                this._oAppModel.setProperty("/userProfile",  {
-                    employeeId:   emp.employeeId,
+                this._oAppModel.setProperty("/userProfile", {
+                    employeeId: emp.employeeId,
                     employeeName: emp.employeeName,
-                    designation:  emp.designation  || "—",
-                    email:        emp.email        || "—",
-                    address:      emp.address      || "—",
+                    designation: emp.designation || "—",
+                    email: emp.email || "—",
+                    address: emp.address || "—",
                     mobileNumber: emp.mobileNumber || "—",
-                    isActive:     emp.isActive !== false
+                    isActive: emp.isActive !== false
                 });
             };
 
@@ -414,6 +414,10 @@ sap.ui.define([
             }
         },
 
+        onNavPerfRating() {
+            this.getOwnerComponent().getRouter().navTo("performance-rating");
+        },
+
         onProfilePress(oEvent) {
             const oSource = oEvent && oEvent.getSource && oEvent.getSource();
             const oProfile = this._oAppModel.getProperty("/userProfile");
@@ -429,16 +433,16 @@ sap.ui.define([
             const sId = oComp.getCurrentEmployeeId();
             oComp.getEmployeeById(sId).then(emp => {
                 if (!emp) { MessageToast.show("Profile unavailable."); return; }
-                this._oAppModel.setProperty("/userName",     emp.employeeName || "");
+                this._oAppModel.setProperty("/userName", emp.employeeName || "");
                 this._oAppModel.setProperty("/userInitials", buildInitials(emp.employeeName));
                 const oFresh = {
-                    employeeId:   emp.employeeId,
+                    employeeId: emp.employeeId,
                     employeeName: emp.employeeName,
-                    designation:  emp.designation || "—",
-                    email:        emp.email       || "—",
-                    address:      emp.address     || "—",
-                    mobileNumber: emp.mobileNumber|| "—",
-                    isActive:     emp.isActive
+                    designation: emp.designation || "—",
+                    email: emp.email || "—",
+                    address: emp.address || "—",
+                    mobileNumber: emp.mobileNumber || "—",
+                    isActive: emp.isActive
                 };
                 this._oAppModel.setProperty("/userProfile", oFresh);
                 this._openProfilePopover(oFresh, oSource);
@@ -475,7 +479,7 @@ sap.ui.define([
                 alignItems: "Center",
                 items: [
                     new Avatar({
-                        initials:    sInitials,
+                        initials: sInitials,
                         displaySize: "L",
                         backgroundColor: "Accent6"
                     }),
@@ -494,10 +498,10 @@ sap.ui.define([
 
             const oBody = new VBox({
                 items: [
-                    fieldRow("Email",    oProfile.email,       "email"),
-                    fieldRow("Mobile",   oProfile.mobileNumber,"call"),
-                    fieldRow("Address",  oProfile.address,     "addresses"),
-                    fieldRow("Status",   oProfile.isActive === false ? "Inactive" : "Active", "status-positive")
+                    fieldRow("Email", oProfile.email, "email"),
+                    fieldRow("Mobile", oProfile.mobileNumber, "call"),
+                    fieldRow("Address", oProfile.address, "addresses"),
+                    fieldRow("Status", oProfile.isActive === false ? "Inactive" : "Active", "status-positive")
                 ]
             }).addStyleClass("tsProfileBody sapUiSmallMarginTop");
 
@@ -512,11 +516,11 @@ sap.ui.define([
             }).addStyleClass("tsProfileLogoutButton sapUiMediumMarginTop");
 
             this._oProfilePopover = new ResponsivePopover({
-                title:       "My Profile",
-                placement:   "Bottom",         // sits directly below the avatar
-                contentWidth:  "360px",
-                modal:       false,            // dashboard stays interactive behind it
-                showHeader:  true,
+                title: "My Profile",
+                placement: "Bottom",         // sits directly below the avatar
+                contentWidth: "360px",
+                modal: false,            // dashboard stays interactive behind it
+                showHeader: true,
                 showCloseButton: true,
                 content: [
                     new VBox({ items: [oHeader, oBody, oLogoutButton] })
