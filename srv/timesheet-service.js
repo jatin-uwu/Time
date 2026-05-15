@@ -209,8 +209,6 @@ class EmployeeService extends cds.ApplicationService {
             return result;
         });
 
-<<<<<<< HEAD
-=======
         this.on('getPerformanceRating', async (req) => {
             const user = req.user || {};
             const email = (user.attr && (user.attr.email || user.attr.mail))
@@ -317,7 +315,6 @@ class EmployeeService extends cds.ApplicationService {
 
 
 
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
         this.on('applyLeave', async (req) => {
             const { employeeId, leaveType, fromDate, toDate, days, reason, isUnpaid } = req.data;
 
@@ -886,12 +883,7 @@ this.on('getPerformanceTrend', async (req) => {
         }),
 
             // ── Check Today Attendance ────────────────────────────────────────────
-<<<<<<< HEAD
-            this.on('getTodayAttendance', async (req) => {
-                const { attendanceDate } = req.data;
-=======
             this.on('getAttendance', async (req) => {
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
                 const user = req.user || {};
                 const email = (user.attr && (user.attr.email || user.attr.mail))
                     || user.id || '';
@@ -900,109 +892,6 @@ this.on('getPerformanceTrend', async (req) => {
                     .columns('employeeId')
                     .where({ email });
 
-<<<<<<< HEAD
-                if (!emp) return { alreadyMarked: false };
-
-                const existing = await SELECT.one.from(ATTENDANCE)
-                    .where({
-                        employee_employeeId: emp.employeeId,
-                        attendanceDate: attendanceDate
-                    });
-
-                return {
-                    alreadyMarked: !!existing,
-                    attendanceTime: existing ? existing.attendanceTime : null,
-                    attendanceDay: existing ? existing.attendanceDay : null
-                };
-            });
-
-        this.before('READ', 'MyTasks', async (req) => {
-            const user = req.user;
-
-            // Managers see all tasks — no filter applied
-            if (user.is('Manager')) return;
-
-            // Resolve email — works for both mocked auth and XSUAA JWT
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id
-                || '';
-
-            if (!email) return;
-
-            // Lookup employee by email — same logic as getCurrentUser()
-            // Works identically in dev (mocked) and prod (XSUAA) because
-            // both ultimately resolve to the same email address
-            const emp = await SELECT.one
-                .from(EMPLOYEE)
-                .where({ email });
-
-            if (!emp) return;
-
-            // Filter at DB level — employee only sees their own tasks
-            req.query.where({ assignedTo_employeeId: emp.employeeId });
-        });
-
-        // ── Filter MyNotifications to only show the logged-in employee's ──
-        // Works with mocked auth (email via attr) and XSUAA (email from JWT)
-        this.before('READ', 'MyNotifications', async (req) => {
-            const user  = req.user;
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id || '';
-            if (!email) return;
- 
-            const emp = await SELECT.one.from(EMPLOYEE).where({ email });
-            if (!emp) return;
- 
-            req.query.where({ employee_employeeId: emp.employeeId });
-        });
- 
-        // ── Filter MyTasks to only show the logged-in employee's tasks ───
-        // Managers see all; employees only see their own.
-        this.before('READ', 'MyTasks', async (req) => {
-            const user = req.user;
-            if (user.is('Manager')) return; // managers see all
- 
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id || '';
-            if (!email) return;
- 
-            const emp = await SELECT.one.from(EMPLOYEE).where({ email });
-            if (!emp) return;
- 
-            req.query.where({ assignedTo_employeeId: emp.employeeId });
-        });
- 
-        // ── createTaskNotification action ────────────────────────────────
-        // Called by the manager's TaskAssignment controller after a task
-        // is created. Inserts a Notification row for the assigned employee.
-        // The manager calls /employee/createTaskNotification (not /manager)
-        // so it uses the EMPLOYEE const already defined in this file.
-        this.on('createTaskNotification', async (req) => {
-            const { employeeId, type, title, message, referenceId } = req.data;
-            if (!employeeId) return req.error(400, 'employeeId is required.');
- 
-            const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId });
-            if (!emp) return req.error(404, `Employee '${employeeId}' not found.`);
- 
-            await createNotification(employeeId, type, title, message, referenceId);
-            return true;
-        });
- 
-        // ── markNotificationsRead action ─────────────────────────────────
-        // Marks one or more notifications as read for the logged-in employee.
-        this.on('markNotificationsRead', async (req) => {
-            const { notificationIds } = req.data;
-            if (!notificationIds || !notificationIds.length) return true;
- 
-            for (const nid of notificationIds) {
-                await UPDATE(NOTIFICATION)
-                    .set({ isRead: true })
-                    .where({ notificationId: nid });
-            }
-            return true;
-        });
-
-=======
                 if (!emp) {
                     return {
                         attendancePercentage: 0,
@@ -1073,7 +962,6 @@ this.on('getPerformanceTrend', async (req) => {
             };
         });
 
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
         return super.init();
     }
 }

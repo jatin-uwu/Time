@@ -3,28 +3,6 @@ using {ccentrik.employee.timesheet.schema as db} from '../db/data-model';
 // ── Employee Service ─────────────────────────────────────────────────────────
 service EmployeeService @(path: '/employee') {
 
-<<<<<<< HEAD
-    entity MyTimesheets @(requires: ['Employee','Manager']) as projection on db.timesheet.TimesheetHeader;
-    entity MyEntries    @(requires: ['Employee','Manager']) as projection on db.timesheet.TimesheetEntry;
-    entity MyTasks      @(requires: ['Employee','Manager']) as projection on db.timesheet.TaskMaster;
-    entity TaskUpdates  @(requires: ['Employee','Manager']) as projection on db.timesheet.TaskUpdate;
-    entity Employees    @(requires: ['Employee','Manager']) as projection on db.timesheet.EmployeeMaster;
-    entity PerformanceRatings as projection on db.timesheet.PerformanceRating;
-
-    // ── Notifications (employee sees own notifications) ──────────────────
-    @(requires: ['Employee','Manager','HR'])
-    entity MyNotifications as projection on db.timesheet.Notification;
-
-    @(requires: ['Employee','Manager'])
-    action createTaskNotification(
-        employeeId  : String,
-        type        : String,
-        title       : String,
-        message     : String,
-        referenceId : String
-    ) returns Boolean;
-
-=======
     entity MyTimesheets @(requires: [
         'Employee',
         'Manager'
@@ -51,7 +29,6 @@ service EmployeeService @(path: '/employee') {
     ])                        as projection on db.timesheet.EmployeeMaster;
 
     entity PerformanceRatings as projection on db.timesheet.PerformanceRating;
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
 
     // ── Leave ────────────────────────────────────────────────────────
     @(requires: [
@@ -109,14 +86,6 @@ service EmployeeService @(path: '/employee') {
         dataBase64 : LargeString;
     };
 
-<<<<<<< HEAD
-    @(requires: ['Employee','Manager'])
-    action markNotificationsRead(notificationIds : array of String) returns Boolean;
-
-    @(requires: ['Employee','Manager'])
-    action getWorkAnniversary() returns {
-        yearsCompleted : Decimal(5,2);
-=======
     // Dashboard action: Get work anniversary info for the logged-in employee.
     // Returns years completed, joining date, and a message.
     @(requires: [
@@ -125,15 +94,10 @@ service EmployeeService @(path: '/employee') {
     ])
     action   getWorkAnniversary()                                          returns {
         yearsCompleted : Decimal(5, 2);
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
         joiningDate    : Date;
         message        : String(255);
     };
 
-<<<<<<< HEAD
-    @(requires: ['Employee','Manager'])
-    action getLeaveBalance() returns {
-=======
     // Dashboard action: Get leave balance for the logged-in employee.
     // Returns casual, sick, annual leave counts and total.
     @(requires: [
@@ -141,17 +105,12 @@ service EmployeeService @(path: '/employee') {
         'Manager'
     ])
     action   getLeaveBalance()                                             returns {
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
         casualLeave : Integer;
         sickLeave   : Integer;
         annualLeave : Integer;
         total       : Integer;
     };
 
-<<<<<<< HEAD
-    @(requires: ['Employee','Manager'])
-    action getMyTasks() returns {
-=======
     // Dashboard action: Get my tasks summary for the logged-in employee.
     // Returns count of pending tasks and high priority tasks.
     @(requires: [
@@ -159,16 +118,12 @@ service EmployeeService @(path: '/employee') {
         'Manager'
     ])
     action   getMyTasks()                                                  returns {
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
         totalPending      : Integer;
         highPriorityCount : Integer;
         mediumPriorityCount : Integer;
         lowPriorityCount    : Integer;
     };
 
-<<<<<<< HEAD
-    function getAttendance() returns {
-=======
     action   markAttendance(attendanceDate: String,
                             attendanceDay: String,
                             attendanceTime: String)                        returns {
@@ -193,36 +148,12 @@ service EmployeeService @(path: '/employee') {
     // Attendance card  (frontend-only for now; backend returns mock/stub data)
     action   getAttendance()                                               
     returns {
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
         attendancePercentage : Integer;
         presentCount         : Integer;
         absentCount          : Integer;
         monthLabel           : String;
     };
 
-<<<<<<< HEAD
-    function getPerformanceRating() returns {
-        ratingValue      : Decimal(3,1);
-        ratingCategory   : String(30);
-        reviewMonth      : Integer;
-        reviewYear       : Integer;
-        reviewComment    : String(500);
-    };
-
-    function getPerformanceTrend(year : Integer) returns {
-        trendJSON : String;
-    };
-
-    function getTaskSummary() returns {
-        total       : Integer;
-        notStarted  : Integer;
-        inProgress  : Integer;
-        inReview    : Integer;
-        completed   : Integer;
-    };
-
-    function getRecentNotifications() returns array of {
-=======
     // Performance Rating card
     action getPerformanceRating()                                        
     returns {
@@ -250,20 +181,12 @@ service EmployeeService @(path: '/employee') {
 
     // Recent Notifications (last 5 for logged-in employee)
     action getRecentNotifications()                                      returns array of {
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
         notificationId : String(30);
         type           : String(30);
         title          : String(100);
         message        : String(500);
         isRead         : Boolean;
         referenceId    : String(30);
-<<<<<<< HEAD
-        notifiedAt     : String;
-    };
-
-    function getUpcomingCalendar() returns {
-        eventsJSON : String;
-=======
         notifiedAt     : String; // ISO timestamp string
     };
 
@@ -280,30 +203,14 @@ service EmployeeService @(path: '/employee') {
         unpaid    : Integer;
         totalDays : Integer;
         takenJSON : String; // [{type,label,taken,balance,color}]
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
     };
 
-    function getLeaveOverview(year : Integer) returns {
-        casual       : Integer;
-        sick         : Integer;
-        annual       : Integer;
-        unpaid       : Integer;
-        totalDays    : Integer;
-        takenJSON    : String;
-    };
 }
 
 // ── Manager Service ──────────────────────────────────────────────────────────
 service ManagerService @(path: '/manager')@(requires: 'Manager') {
 
-<<<<<<< HEAD
     entity PendingApprovals as projection on db.timesheet.TimesheetHeader where status = 'Pending';
-=======
-    entity PendingApprovals as projection on db.timesheet.TimesheetHeader
-                               where
-                                   status = 'Submitted';
-
->>>>>>> 25e6900692685e40653f2b1e2479f3e02cc9aee6
     entity ApprovalEntries  as projection on db.timesheet.TimesheetEntry;
     entity Employees        as projection on db.timesheet.EmployeeMaster;
     entity Tasks            as projection on db.timesheet.TaskMaster;
