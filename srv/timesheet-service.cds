@@ -1,44 +1,5 @@
 using { ccentrik.employee.timesheet.schema as db } from '../db/data-model';
 
-// // ── Employee Service ──────────────────────────────────────────────────────────
-// service EmployeeService @(path:'/employee') {
-
-//     @(requires: 'Employee')
-//     entity MyTimesheets as projection on db.timesheet.TimesheetHeader;
-
-//     @(requires: 'Employee')
-//     entity MyEntries    as projection on db.timesheet.TimesheetEntry;
-
-//     @(requires: 'Employee')
-//     entity MyTasks      as projection on db.timesheet.TaskMaster;
-
-//     @(requires: 'Employee')
-//     action submitTimesheet(timesheetId : String(15)) returns String;
-
-//     @(requires: 'Employee')
-//     action getUserRole() returns { role: String };
-// }
-
-// // ── Manager Service ───────────────────────────────────────────────────────────
-// service ManagerService @(path:'/manager') {
-
-//     @(requires: 'Manager')
-//     entity PendingApprovals as projection on db.timesheet.TimesheetHeader
-//         where status = 'Submitted';
-
-//     @(requires: 'Manager')
-//     entity ApprovalEntries  as projection on db.timesheet.TimesheetEntry;
-
-//     @(requires: 'Manager')
-//     entity Employees        as projection on db.timesheet.EmployeeMaster;
-
-//     @(requires: 'Manager')
-//     action approveTimesheet(timesheetId : String(15), remarks : String(255)) returns String;
-
-//     @(requires: 'Manager')
-//     action rejectTimesheet (timesheetId : String(15), remarks : String(255)) returns String;
-// }
-
 // ── Employee Service ─────────────────────────────────────────────────────────
 service EmployeeService @(path:'/employee') {
 
@@ -47,7 +8,21 @@ service EmployeeService @(path:'/employee') {
     entity MyTasks      @(requires: ['Employee','Manager']) as projection on db.timesheet.TaskMaster;
     entity TaskUpdates  @(requires: ['Employee','Manager']) as projection on db.timesheet.TaskUpdate;
     entity Employees    @(requires: ['Employee','Manager']) as projection on db.timesheet.EmployeeMaster;
-    entity PerformanceRatings as projection on db.timesheet.PerformanceRating; 
+    entity PerformanceRatings as projection on db.timesheet.PerformanceRating;
+
+    // ── Notifications (employee sees own notifications) ──────────────────
+    @(requires: ['Employee','Manager','HR'])
+    entity MyNotifications as projection on db.timesheet.Notification;
+
+    @(requires: ['Employee','Manager'])
+    action createTaskNotification(
+        employeeId  : String,
+        type        : String,
+        title       : String,
+        message     : String,
+        referenceId : String
+    ) returns Boolean;
+
 
     // ── Leave ────────────────────────────────────────────────────────
     @(requires: ['Employee','Manager','HR'])
@@ -94,8 +69,9 @@ service EmployeeService @(path:'/employee') {
         dataBase64 : LargeString;
     };
 
-    // Dashboard action: Get work anniversary info for the logged-in employee.
-    // Returns years completed, joining date, and a message.
+    @(requires: ['Employee','Manager'])
+    action markNotificationsRead(notificationIds : array of String) returns Boolean;
+
     @(requires: ['Employee','Manager'])
     action getWorkAnniversary() returns {
         yearsCompleted : Decimal(5,2);
@@ -103,8 +79,6 @@ service EmployeeService @(path:'/employee') {
         message        : String(255);
     };
 
-    // Dashboard action: Get leave balance for the logged-in employee.
-    // Returns casual, sick, annual leave counts and total.
     @(requires: ['Employee','Manager'])
     action getLeaveBalance() returns {
         casualLeave : Integer;
@@ -113,8 +87,6 @@ service EmployeeService @(path:'/employee') {
         total       : Integer;
     };
 
-    // Dashboard action: Get my tasks summary for the logged-in employee.
-    // Returns count of pending tasks and high priority tasks.
     @(requires: ['Employee','Manager'])
     action getMyTasks() returns {
         totalPending      : Integer;
@@ -123,76 +95,66 @@ service EmployeeService @(path:'/employee') {
         notStartedCount   : Integer;
     };
 
-    // Attendance card  (frontend-only for now; backend returns mock/stub data)
-function getAttendance() returns {
-    attendancePercentage : Integer;
-    presentCount         : Integer;
-    absentCount          : Integer;
-    monthLabel           : String;
-};
+    function getAttendance() returns {
+        attendancePercentage : Integer;
+        presentCount         : Integer;
+        absentCount          : Integer;
+        monthLabel           : String;
+    };
 
-// Performance Rating card
-function getPerformanceRating() returns {
-    ratingValue      : Decimal(3,1);
-    ratingCategory   : String(30);
-    reviewMonth      : Integer;
-    reviewYear       : Integer;
-    reviewComment    : String(500);
-};
+    function getPerformanceRating() returns {
+        ratingValue      : Decimal(3,1);
+        ratingCategory   : String(30);
+        reviewMonth      : Integer;
+        reviewYear       : Integer;
+        reviewComment    : String(500);
+    };
 
-// Performance Trend graph  (returns JSON array as a String for flexibility)
-function getPerformanceTrend(year : Integer) returns {
-    trendJSON : String;   // JSON array: [{month,monthName,rating}, ...]
-};
+    function getPerformanceTrend(year : Integer) returns {
+        trendJSON : String;
+    };
 
-// Task Summary donut chart  (reuses existing TaskMaster entity)
-function getTaskSummary() returns {
-    total       : Integer;
-    notStarted  : Integer;
-    inProgress  : Integer;
-    inReview    : Integer;
-    completed   : Integer;
-};
+    function getTaskSummary() returns {
+        total       : Integer;
+        notStarted  : Integer;
+        inProgress  : Integer;
+        inReview    : Integer;
+        completed   : Integer;
+    };
 
-// Recent Notifications (last 5 for logged-in employee)
-function getRecentNotifications() returns array of {
-    notificationId : String(30);
-    type           : String(30);
-    title          : String(100);
-    message        : String(500);
-    isRead         : Boolean;
-    referenceId    : String(30);
-    notifiedAt     : String;   // ISO timestamp string
-};
+    function getRecentNotifications() returns array of {
+        notificationId : String(30);
+        type           : String(30);
+        title          : String(100);
+        message        : String(500);
+        isRead         : Boolean;
+        referenceId    : String(30);
+        notifiedAt     : String;
+    };
 
-// Upcoming Calendar events from Google Calendar
-function getUpcomingCalendar() returns {
-    eventsJSON : String;   // JSON array of {id, title, start, end, timeLabel, dateLabel, isToday}
-};
+    function getUpcomingCalendar() returns {
+        eventsJSON : String;
+    };
 
-// My Leave Overview — yearly taken vs balance
-function getLeaveOverview(year : Integer) returns {
-    casual       : Integer;   // balance remaining
-    sick         : Integer;
-    annual       : Integer;
-    unpaid       : Integer;
-    totalDays    : Integer;
-    takenJSON    : String;    // [{type,label,taken,balance,color}]
-};
-
+    function getLeaveOverview(year : Integer) returns {
+        casual       : Integer;
+        sick         : Integer;
+        annual       : Integer;
+        unpaid       : Integer;
+        totalDays    : Integer;
+        takenJSON    : String;
+    };
 }
 
 // ── Manager Service ──────────────────────────────────────────────────────────
 service ManagerService @(path:'/manager') @(requires: 'Manager') {
 
-    entity PendingApprovals as projection on db.timesheet.TimesheetHeader
-        where status = 'Submitted';
+    entity PendingApprovals as projection on db.timesheet.TimesheetHeader where status = 'Pending';
     entity ApprovalEntries  as projection on db.timesheet.TimesheetEntry;
     entity Employees        as projection on db.timesheet.EmployeeMaster;
     entity Tasks            as projection on db.timesheet.TaskMaster;
     entity TaskUpdates      as projection on db.timesheet.TaskUpdate;
 
-    // ── Leave approval ───────────────────────────────────────────────
     entity LeaveRequests    as projection on db.timesheet.LeaveRequest;
 
     action approveLeave(
@@ -237,7 +199,6 @@ service HRService @(path:'/hr') @(requires: 'HR') {
 
     entity Documents as projection on db.timesheet.EmployeeDocument;
 
-    // ── Leave visibility for HR ──────────────────────────────────────
     entity LeaveRequests as projection on db.timesheet.LeaveRequest;
 
     action nextEmployeeId() returns String;

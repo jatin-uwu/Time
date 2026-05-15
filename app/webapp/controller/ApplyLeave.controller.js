@@ -17,8 +17,6 @@ sap.ui.define([
         Paternity: 2
     };
 
-    // Cascade order for Sick leave: Sick → Casual → Paid → Unpaid
-    // For other types there is no cascade — they just go unpaid when exhausted.
     const CASCADE_ORDER = ["Sick", "Casual", "Paid"];
 
     const EMPTY_FORM = () => ({
@@ -28,7 +26,7 @@ sap.ui.define([
         days:      0,
         reason:    "",
         isUnpaid:  false,
-        cascade:   null   // will hold { sick:n, casual:n, paid:n, unpaid:n } when relevant
+        cascade:   null
     });
 
     return Controller.extend("timesheet.app.controller.ApplyLeave", {
@@ -92,22 +90,74 @@ sap.ui.define([
                 });
         },
 
+        // ── BUG FIX 1: Cascade balance computation ────────────────────────
+        // Previously, cascade was only stored locally (optimistic record) and
+        // lost after OData reload. Now we compute cascade directly from the
+        // raw record fields (leaveType, days, isUnpaid) so it works even when
+        // cascade is not persisted on the backend record.
         _computeBalance(history) {
+            // Track total days used per type (only from non-Rejected leaves)
             const used = { Casual: 0, Sick: 0, Paid: 0, Maternity: 0, Paternity: 0 };
 
             history
                 .filter(r => r.status !== "Rejected")
                 .forEach(r => {
-                    // For cascade leaves the individual type buckets are stored
-                    // on the record so we can deduct exactly the right amounts.
+                    const days = r.days || 0;
+                    if (!days) return;
+
                     if (r.cascade) {
-                        ["Sick","Casual","Paid"].forEach(t => {
-                            if (r.cascade[t.toLowerCase()] && used[t] !== undefined) {
-                                used[t] += r.cascade[t.toLowerCase()];
+                        // ── Local optimistic record: cascade object is present ──
+                        // Deduct exactly what the cascade breakdown says.
+                        ["Sick", "Casual", "Paid"].forEach(t => {
+                            const key = t.toLowerCase();
+                            if (r.cascade[key] && used[t] !== undefined) {
+                                used[t] += r.cascade[key];
                             }
                         });
-                    } else if (!r.isUnpaid && used[r.leaveType] !== undefined) {
-                        used[r.leaveType] += (r.days || 0);
+
+                    } else if (r.leaveType === "Sick") {
+                        // ── Backend record for a Sick leave (no cascade object) ──
+                        // Re-derive the cascade breakdown from current MAX_BALANCE
+                        // because the backend doesn't store per-bucket splits.
+                        // We simulate the same waterfall: Sick → Casual → Paid → Unpaid.
+                        //
+                        // IMPORTANT: We use the already-accumulated `used` values up
+                        // to this point so earlier leaves are respected in order.
+                        // Records are processed in chronological order (oldest first).
+                        let remaining = days;
+
+                        // Sick bucket
+                        const sickAvail   = Math.max(0, MAX_BALANCE.Sick    - used.Sick);
+                        const fromSick    = Math.min(remaining, sickAvail);
+                        used.Sick        += fromSick;
+                        remaining        -= fromSick;
+
+                        // Casual bucket (cascade)
+                        if (remaining > 0) {
+                            const casualAvail = Math.max(0, MAX_BALANCE.Casual - used.Casual);
+                            const fromCasual  = Math.min(remaining, casualAvail);
+                            used.Casual      += fromCasual;
+                            remaining        -= fromCasual;
+                        }
+
+                        // Paid bucket (cascade)
+                        if (remaining > 0) {
+                            const paidAvail = Math.max(0, MAX_BALANCE.Paid - used.Paid);
+                            const fromPaid  = Math.min(remaining, paidAvail);
+                            used.Paid      += fromPaid;
+                            remaining      -= fromPaid;
+                        }
+                        // remaining > 0 here means Unpaid — no bucket to deduct
+
+                    } else {
+                        // ── All other leave types ──
+                        if (!r.isUnpaid && used[r.leaveType] !== undefined) {
+                            used[r.leaveType] += days;
+                        } else if (r.isUnpaid && used[r.leaveType] !== undefined) {
+                            // Partially unpaid: only deduct the portion that fits in balance
+                            const avail = Math.max(0, MAX_BALANCE[r.leaveType] - used[r.leaveType]);
+                            used[r.leaveType] += Math.min(days, avail);
+                        }
                     }
                 });
 
@@ -147,9 +197,6 @@ sap.ui.define([
         },
 
         // ── Core cascade calculation ──────────────────────────────────────
-        // For Sick leave: deduct from Sick first, then Casual, then Paid,
-        // then mark remainder as Unpaid.
-        // For all other leave types: deduct from that type only; excess → Unpaid.
         _recalcCascade(leaveType, days) {
             if (!leaveType || !days) return;
 
@@ -159,33 +206,28 @@ sap.ui.define([
                 let remaining = days;
                 const cascade = { sick: 0, casual: 0, paid: 0, unpaid: 0 };
 
-                // 1. Deduct from Sick
                 const fromSick = Math.min(remaining, bal.sick);
                 cascade.sick    = fromSick;
                 remaining      -= fromSick;
 
-                // 2. Deduct from Casual
                 if (remaining > 0) {
                     const fromCasual = Math.min(remaining, bal.casual);
                     cascade.casual   = fromCasual;
                     remaining       -= fromCasual;
                 }
 
-                // 3. Deduct from Paid
                 if (remaining > 0) {
                     const fromPaid = Math.min(remaining, bal.paid);
                     cascade.paid   = fromPaid;
                     remaining     -= fromPaid;
                 }
 
-                // 4. Anything left → Unpaid
                 cascade.unpaid = remaining;
 
                 this._oLeaveModel.setProperty("/form/cascade",  cascade);
                 this._oLeaveModel.setProperty("/form/isUnpaid", cascade.unpaid > 0);
 
             } else {
-                // Non-sick types: simple deduction
                 const balKey   = leaveType.toLowerCase();
                 const balAmt   = bal[balKey] || 0;
                 const isUnpaid = days > balAmt;
@@ -195,7 +237,6 @@ sap.ui.define([
             }
         },
 
-        // Build a human-readable summary of the cascade for the confirm dialog
         _buildCascadeSummary(cascade, days) {
             const lines = [];
             if (cascade.sick   > 0) lines.push(`• ${cascade.sick} day(s) from Sick Leave balance`);
@@ -205,7 +246,6 @@ sap.ui.define([
             return `You are applying for ${days} day(s) of Sick Leave.\nHere is how the days will be deducted:\n\n${lines.join("\n")}\n\nDo you want to proceed?`;
         },
 
-        // Count Mon–Fri working days between two dates inclusive
         _countWorkingDays(from, to) {
             let count = 0;
             const cur = new Date(from);
@@ -215,6 +255,23 @@ sap.ui.define([
                 cur.setDate(cur.getDate() + 1);
             }
             return count;
+        },
+
+        // ── BUG FIX 2: Date overlap check ────────────────────────────────
+        // Checks whether the requested [fromDate, toDate] overlaps with any
+        // existing non-Rejected leave in history.
+        _getOverlappingLeave(fromDate, toDate) {
+            const history = this._oLeaveModel.getProperty("/history") || [];
+            const newFrom = new Date(fromDate).getTime();
+            const newTo   = new Date(toDate).getTime();
+
+            return history.find(r => {
+                if (r.status === "Rejected") return false;
+                const rFrom = new Date(r.fromDate).getTime();
+                const rTo   = new Date(r.toDate).getTime();
+                // Two ranges overlap if: start1 <= end2 AND start2 <= end1
+                return newFrom <= rTo && rFrom <= newTo;
+            }) || null;
         },
 
         // ── Validate ──────────────────────────────────────────────────────
@@ -251,6 +308,25 @@ sap.ui.define([
                 setErr("dpTo", "To Date must be after From Date");
             }
 
+            // ── Overlap validation ────────────────────────────────────────
+            if (f.fromDate && f.toDate && new Date(f.toDate) >= new Date(f.fromDate)) {
+                const overlap = this._getOverlappingLeave(f.fromDate, f.toDate);
+                if (overlap) {
+                    const fromStr = overlap.fromDate
+                        ? new Date(overlap.fromDate).toLocaleDateString()
+                        : overlap.fromDate;
+                    const toStr = overlap.toDate
+                        ? new Date(overlap.toDate).toLocaleDateString()
+                        : overlap.toDate;
+                    setErr("dpFrom",
+                        `You already have a ${overlap.leaveType} leave (${overlap.status}) ` +
+                        `from ${fromStr} to ${toStr}. ` +
+                        `Overlapping dates are not allowed.`
+                    );
+                    setErr("dpTo", "Overlapping with an existing leave request");
+                }
+            }
+
             if (!f.reason || !f.reason.trim()) {
                 setErr("taReason", "Reason is required");
             } else { clr("taReason"); }
@@ -279,7 +355,6 @@ sap.ui.define([
                 return;
             }
 
-            // Block Founders from applying leave
             oComp.getEmployeeById(sEmpId).then(emp => {
                 if (emp && emp.designation && emp.designation.toLowerCase() === "founder") {
                     MessageBox.warning("Founders are not eligible to apply for leave.");
@@ -293,7 +368,6 @@ sap.ui.define([
         _confirmAndSubmit(sEmpId) {
             const f = this._oLeaveModel.getProperty("/form");
 
-            // If Sick leave with cascade across multiple buckets → confirm first
             if (f.leaveType === "Sick" && f.cascade) {
                 const cascade = f.cascade;
                 const needsMoreThanSick = (cascade.casual + cascade.paid + cascade.unpaid) > 0;
@@ -314,8 +388,6 @@ sap.ui.define([
                 }
             }
 
-            // For all other cases (non-sick, or sick with sufficient sick balance)
-            // just warn if going unpaid and proceed
             if (f.isUnpaid) {
                 const bal     = this._oLeaveModel.getProperty("/balance");
                 const balKey  = f.leaveType.toLowerCase();
@@ -387,10 +459,8 @@ sap.ui.define([
                         msg = `Leave request submitted.\nNote: ${unpaid} day(s) will be Unpaid Leave due to insufficient balance.`;
                     }
 
-                    // ── Persist cascade onto the history record so balance
-                    //    recalculation deducts Casual/Paid correctly ──────────────
-                    // We optimistically push a local history entry with the cascade
-                    // so _computeBalance works even before the OData reload finishes.
+                    // Optimistic local history record WITH cascade object
+                    // so _computeBalance works before the OData reload finishes.
                     const history = this._oLeaveModel.getProperty("/history") || [];
                     const localRecord = {
                         leaveType: f.leaveType,
@@ -400,7 +470,6 @@ sap.ui.define([
                         reason:    f.reason.trim(),
                         status:    "Pending",
                         isUnpaid:  isUnpaid,
-                        // Store the full cascade so _computeBalance can split the buckets
                         cascade: (f.leaveType === "Sick" && f.cascade)
                             ? {
                                 sick:   f.cascade.sick   || 0,
@@ -412,13 +481,13 @@ sap.ui.define([
                     };
                     history.unshift(localRecord);
                     this._oLeaveModel.setProperty("/history", history);
-                    this._computeBalance(history);   // recompute immediately
+                    this._computeBalance(history);
 
                     MessageBox.success(msg, {
                         title:   "Submitted",
                         onClose: () => {
                             this.onReset();
-                            this._loadHistory();     // then sync with backend
+                            this._loadHistory();
                         }
                     });
                 })

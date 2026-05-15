@@ -71,8 +71,9 @@
                                         displayFormat="dd MMM yyyy" />
                         </VBox>
 
+                        <!-- Due Date is now mandatory -->
                         <VBox>
-                            <Label text="Due Date" />
+                            <Label text="Due Date" required="true" />
                             <DatePicker id="dpDue"
                                         value="{taView>/form/dueDate}"
                                         valueFormat="yyyy-MM-dd"
@@ -120,6 +121,7 @@
                                 type="Emphasized"
                                 icon="sap-icon://accept"
                                 press=".onAssignTask"
+                                busy="{taView>/busy}"
                                 class="sapUiSmallMarginBegin" />
                     </HBox>
 

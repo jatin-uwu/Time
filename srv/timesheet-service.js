@@ -3,15 +3,11 @@ const cds = require('@sap/cds');
 const HEADER = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetHeader';
 const ENTRY = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetEntry';
 const EMPLOYEE = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeMaster';
-<<<<<<< HEAD
-const TASK     = 'ccentrik.employee.timesheet.schema.timesheet.TaskMaster';
 const LEAVE_REQUEST = 'ccentrik.employee.timesheet.schema.timesheet.LeaveRequest';
-=======
 const TASK = 'ccentrik.employee.timesheet.schema.timesheet.TaskMaster';
 const PERFORMANCE_RATING = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
 const NOTIFICATION = 'ccentrik.employee.timesheet.schema.timesheet.Notification';
 const ATTENDANCE = 'ccentrik.employee.timesheet.schema.timesheet.AttendanceRecord';
->>>>>>> 17f43d825c7224e6d8b2001a6c164bb59a5ece07
 
 const PRIORITY_PREFIX = {
     'High': '[HIGH PRIORITY]',
@@ -146,7 +142,7 @@ class EmployeeService extends cds.ApplicationService {
             }
 
             await UPDATE(HEADER)
-                .set({ status: 'Submitted', submittedOn: new Date() })
+                .set({ status: 'Pending',  submittedOn: new Date() })
                 .where({ timesheetId });
 
             await UPDATE(ENTRY)
@@ -213,16 +209,15 @@ class EmployeeService extends cds.ApplicationService {
             return result;
         });
 
-<<<<<<< HEAD
         this.on('applyLeave', async (req) => {
             const { employeeId, leaveType, fromDate, toDate, days, reason, isUnpaid } = req.data;
 
             if (!employeeId) return req.error(400, 'employeeId is required.');
-            if (!leaveType)  return req.error(400, 'leaveType is required.');
-            if (!fromDate)   return req.error(400, 'fromDate is required.');
-            if (!toDate)     return req.error(400, 'toDate is required.');
-            if (!days)       return req.error(400, 'days is required.');
-            if (!reason)     return req.error(400, 'reason is required.');
+            if (!leaveType) return req.error(400, 'leaveType is required.');
+            if (!fromDate) return req.error(400, 'fromDate is required.');
+            if (!toDate) return req.error(400, 'toDate is required.');
+            if (!days) return req.error(400, 'days is required.');
+            if (!reason) return req.error(400, 'reason is required.');
 
             // Block founders from applying leave
             const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId });
@@ -241,7 +236,7 @@ class EmployeeService extends cds.ApplicationService {
                 toDate,
                 days,
                 reason,
-                status:   'Pending',
+                status: 'Pending',
                 isUnpaid: isUnpaid || false
                 // cascade is stored as a JSON string in managerRemarks temporarily
                 // OR: add cascadeSick/cascadeCasual/cascadePaid columns to the schema.
@@ -278,7 +273,7 @@ class EmployeeService extends cds.ApplicationService {
                         try {
                             await mailer.sendMail({
                                 from: process.env.SMTP_FROM || 'no-reply@timesheet.local',
-                                to:   manager.email,
+                                to: manager.email,
                                 subject,
                                 text: body
                             });
@@ -294,7 +289,6 @@ class EmployeeService extends cds.ApplicationService {
             return { leaveId, status: 'Pending', isUnpaid: isUnpaid || false };
         });
 
-=======
         // ── Dashboard: Recent Notifications ───────────────────────────────────────
         this.on('getRecentNotifications', async (req) => {
             const user = req.user || {};
@@ -439,7 +433,6 @@ class EmployeeService extends cds.ApplicationService {
 
             return { casual, sick, annual, unpaid, totalDays, takenJSON: JSON.stringify(takenData) };
         });
-
 
         // ── Dashboard: Work Anniversary ────────────────────────────────
         // Calculate years completed since joining date for the logged-in employee.
@@ -788,87 +781,172 @@ class EmployeeService extends cds.ApplicationService {
         });
 
         // ── Mark Attendance ───────────────────────────────────────────────────
-this.on('markAttendance', async (req) => {
-    const { attendanceDate, attendanceDay, attendanceTime } = req.data;
-    const user  = req.user || {};
-    const email = (user.attr && (user.attr.email || user.attr.mail))
-               || user.id || '';
+        this.on('markAttendance', async (req) => {
+            const { attendanceDate, attendanceDay, attendanceTime } = req.data;
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
 
-    if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
+            if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
 
-    const emp = await SELECT.one.from(EMPLOYEE)
-        .columns('employeeId', 'employeeName')
-        .where({ email });
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId', 'employeeName')
+                .where({ email });
 
-    if (!emp) return req.error(404, 'Employee not found for this login.');
+            if (!emp) return req.error(404, 'Employee not found for this login.');
 
-    // Prevent duplicate marking for the same day
-    const existing = await SELECT.one.from(ATTENDANCE)
-        .where({
-            employee_employeeId: emp.employeeId,
-            attendanceDate:      attendanceDate
+            // Prevent duplicate marking for the same day
+            const existing = await SELECT.one.from(ATTENDANCE)
+                .where({
+                    employee_employeeId: emp.employeeId,
+                    attendanceDate: attendanceDate
+                });
+
+            if (existing) {
+                return req.error(409,
+                    `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`
+                );
+            }
+
+            const attendanceId = `${emp.employeeId}-${attendanceDate}`;
+
+            await INSERT.into(ATTENDANCE).entries({
+                attendanceId,
+                employee_employeeId: emp.employeeId,
+                attendanceDate,
+                attendanceDay: attendanceDay || '',
+                attendanceTime: attendanceTime || new Date().toTimeString().split(' ')[0],
+                status: 'Present'
+            });
+
+            cds.log('attend').info(
+                `Attendance marked: ${emp.employeeId} (${emp.employeeName}) ` +
+                `on ${attendanceDate} at ${attendanceTime}`
+            );
+
+            return {
+                attendanceId,
+                employeeId: emp.employeeId,
+                employeeName: emp.employeeName,
+                attendanceDate,
+                attendanceDay,
+                attendanceTime,
+                message: `Attendance recorded successfully for ${attendanceDay}, ${attendanceDate}.`
+            };
+        }),
+
+            // ── Check Today Attendance ────────────────────────────────────────────
+            this.on('getTodayAttendance', async (req) => {
+                const { attendanceDate } = req.data;
+                const user = req.user || {};
+                const email = (user.attr && (user.attr.email || user.attr.mail))
+                    || user.id || '';
+
+                const emp = await SELECT.one.from(EMPLOYEE)
+                    .columns('employeeId')
+                    .where({ email });
+
+                if (!emp) return { alreadyMarked: false };
+
+                const existing = await SELECT.one.from(ATTENDANCE)
+                    .where({
+                        employee_employeeId: emp.employeeId,
+                        attendanceDate: attendanceDate
+                    });
+
+                return {
+                    alreadyMarked: !!existing,
+                    attendanceTime: existing ? existing.attendanceTime : null,
+                    attendanceDay: existing ? existing.attendanceDay : null
+                };
+            });
+
+        this.before('READ', 'MyTasks', async (req) => {
+            const user = req.user;
+
+            // Managers see all tasks — no filter applied
+            if (user.is('Manager')) return;
+
+            // Resolve email — works for both mocked auth and XSUAA JWT
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id
+                || '';
+
+            if (!email) return;
+
+            // Lookup employee by email — same logic as getCurrentUser()
+            // Works identically in dev (mocked) and prod (XSUAA) because
+            // both ultimately resolve to the same email address
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .where({ email });
+
+            if (!emp) return;
+
+            // Filter at DB level — employee only sees their own tasks
+            req.query.where({ assignedTo_employeeId: emp.employeeId });
         });
 
-    if (existing) {
-        return req.error(409,
-            `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`
-        );
-    }
-
-    const attendanceId = `${emp.employeeId}-${attendanceDate}`;
-
-    await INSERT.into(ATTENDANCE).entries({
-        attendanceId,
-        employee_employeeId: emp.employeeId,
-        attendanceDate,
-        attendanceDay:  attendanceDay  || '',
-        attendanceTime: attendanceTime || new Date().toTimeString().split(' ')[0],
-        status:         'Present'
-    });
-
-    cds.log('attend').info(
-        `Attendance marked: ${emp.employeeId} (${emp.employeeName}) ` +
-        `on ${attendanceDate} at ${attendanceTime}`
-    );
-
-    return {
-        attendanceId,
-        employeeId:    emp.employeeId,
-        employeeName:  emp.employeeName,
-        attendanceDate,
-        attendanceDay,
-        attendanceTime,
-        message: `Attendance recorded successfully for ${attendanceDay}, ${attendanceDate}.`
-    };
-}),
-
-// ── Check Today Attendance ────────────────────────────────────────────
-this.on('getTodayAttendance', async (req) => {
-    const { attendanceDate } = req.data;
-    const user  = req.user || {};
-    const email = (user.attr && (user.attr.email || user.attr.mail))
-               || user.id || '';
-
-    const emp = await SELECT.one.from(EMPLOYEE)
-        .columns('employeeId')
-        .where({ email });
-
-    if (!emp) return { alreadyMarked: false };
-
-    const existing = await SELECT.one.from(ATTENDANCE)
-        .where({
-            employee_employeeId: emp.employeeId,
-            attendanceDate:      attendanceDate
+        // ── Filter MyNotifications to only show the logged-in employee's ──
+        // Works with mocked auth (email via attr) and XSUAA (email from JWT)
+        this.before('READ', 'MyNotifications', async (req) => {
+            const user  = req.user;
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+            if (!email) return;
+ 
+            const emp = await SELECT.one.from(EMPLOYEE).where({ email });
+            if (!emp) return;
+ 
+            req.query.where({ employee_employeeId: emp.employeeId });
+        });
+ 
+        // ── Filter MyTasks to only show the logged-in employee's tasks ───
+        // Managers see all; employees only see their own.
+        this.before('READ', 'MyTasks', async (req) => {
+            const user = req.user;
+            if (user.is('Manager')) return; // managers see all
+ 
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+            if (!email) return;
+ 
+            const emp = await SELECT.one.from(EMPLOYEE).where({ email });
+            if (!emp) return;
+ 
+            req.query.where({ assignedTo_employeeId: emp.employeeId });
+        });
+ 
+        // ── createTaskNotification action ────────────────────────────────
+        // Called by the manager's TaskAssignment controller after a task
+        // is created. Inserts a Notification row for the assigned employee.
+        // The manager calls /employee/createTaskNotification (not /manager)
+        // so it uses the EMPLOYEE const already defined in this file.
+        this.on('createTaskNotification', async (req) => {
+            const { employeeId, type, title, message, referenceId } = req.data;
+            if (!employeeId) return req.error(400, 'employeeId is required.');
+ 
+            const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId });
+            if (!emp) return req.error(404, `Employee '${employeeId}' not found.`);
+ 
+            await createNotification(employeeId, type, title, message, referenceId);
+            return true;
+        });
+ 
+        // ── markNotificationsRead action ─────────────────────────────────
+        // Marks one or more notifications as read for the logged-in employee.
+        this.on('markNotificationsRead', async (req) => {
+            const { notificationIds } = req.data;
+            if (!notificationIds || !notificationIds.length) return true;
+ 
+            for (const nid of notificationIds) {
+                await UPDATE(NOTIFICATION)
+                    .set({ isRead: true })
+                    .where({ notificationId: nid });
+            }
+            return true;
         });
 
-    return {
-        alreadyMarked:  !!existing,
-        attendanceTime: existing ? existing.attendanceTime : null,
-        attendanceDay:  existing ? existing.attendanceDay  : null
-    };
-});
-
->>>>>>> 17f43d825c7224e6d8b2001a6c164bb59a5ece07
         return super.init();
     }
 }
@@ -884,10 +962,10 @@ class ManagerService extends cds.ApplicationService {
                 return req.error(404, `Timesheet '${timesheetId}' not found.`);
             }
 
-            if (header.status !== 'Submitted') {
+            if (header.status !== 'Pending') {
                 return req.error(400,
                     `Cannot approve — current status is '${header.status}'. ` +
-                    `Only 'Submitted' timesheets can be approved.`
+                    `Only 'Pending' timesheets can be approved.`
                 );
             }
 
@@ -981,10 +1059,10 @@ class ManagerService extends cds.ApplicationService {
                 return req.error(404, `Timesheet '${timesheetId}' not found.`);
             }
 
-            if (header.status !== 'Submitted') {
+            if (header.status !== 'Pending') {
                 return req.error(400,
                     `Cannot reject — current status is '${header.status}'. ` +
-                    `Only 'Submitted' timesheets can be rejected.`
+                    `Only 'Pending' timesheets can be rejected.`
                 );
             }
 
@@ -1040,7 +1118,7 @@ class ManagerService extends cds.ApplicationService {
             cds.log('attach').info(`Attachment '${fileName}' (${buf.length} bytes) stored for task ${taskId}`);
             return `Attachment uploaded for task '${taskId}'.`;
         });
-        
+
         this.on('approveLeave', async (req) => {
             const { leaveId, approved, remarks } = req.data;
             if (!leaveId) return req.error(400, 'leaveId is required.');
@@ -1055,9 +1133,9 @@ class ManagerService extends cds.ApplicationService {
 
             await UPDATE(LEAVE_REQUEST)
                 .set({
-                    status:          newStatus,
-                    managerRemarks:  remarks || '',
-                    approvedOn:      new Date()
+                    status: newStatus,
+                    managerRemarks: remarks || '',
+                    approvedOn: new Date()
                 })
                 .where({ leaveId });
 
@@ -1082,7 +1160,7 @@ class ManagerService extends cds.ApplicationService {
                     try {
                         await mailer.sendMail({
                             from: process.env.SMTP_FROM || 'no-reply@timesheet.local',
-                            to:   emp.email,
+                            to: emp.email,
                             subject,
                             text: body
                         });

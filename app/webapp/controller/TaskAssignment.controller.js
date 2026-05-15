@@ -52,10 +52,6 @@ sap.ui.define([
         },
 
         // ── Data loading ────────────────────────────────────────────────
-        // Employees come from /Employees on EmployeeService. Falls back
-        // gracefully (empty list) if the OData call fails — local-only
-        // mode still works because the dropdown will simply show "no
-        // options" until the next route hit.
         _loadEmployees() {
             const oModel = this.getOwnerComponent().getModel();
             if (!oModel) {
@@ -76,10 +72,6 @@ sap.ui.define([
                 });
         },
 
-        // Tasks: localStorage is the source of truth (so the UI works even
-        // when the backend OData entity is unwritable). We *also* try to
-        // merge in any remote tasks from ManagerService/Tasks or
-        // EmployeeService/MyTasks for consistency.
         _loadTasks() {
             const oComponent  = this.getOwnerComponent();
             const oTasksModel = oComponent.getModel("tasks");
@@ -197,46 +189,43 @@ sap.ui.define([
             if (!form.priority) {
                 MessageToast.show("Please choose a priority."); return;
             }
+            // ── Due date is now mandatory ───────────────────────────────
+            if (!form.dueDate) {
+                const oDpDue = this.byId("dpDue");
+                if (oDpDue) {
+                    oDpDue.setValueState("Error");
+                    oDpDue.setValueStateText("Due date is required");
+                }
+                MessageToast.show("Please select a due date.");
+                return;
+            } else {
+                const oDpDue = this.byId("dpDue");
+                if (oDpDue) oDpDue.setValueState("None");
+            }
 
             const newTask = this._buildTask(form);
 
-            // 1) Persist locally so the employee's UI updates immediately.
-            //    We store everything *except* the binary; the binary travels
-            //    via /manager/uploadTaskAttachment so the file actually lives
-            //    on the server (and is shared cross-device).
             this._persistLocalTask(this._stripBinary(newTask));
 
-            // 2) Best-effort backend create (skipped silently when the
-            //    OData entity is not writable in this deployment).
             this._createOnBackend(newTask)
                 .then(() => this._uploadAttachment(newTask, form))
                 .catch(() => {
-                    // Even if create failed, try the upload — the row may
-                    // already exist (e.g. local-store). Failure is silent.
                     this._uploadAttachment(newTask, form);
                 });
 
-            // 3) Trigger the assignment email (no-op if /manager action
-            //    is not available).
             this._sendAssignmentEmail(newTask);
 
-            // 4) UI feedback.
             this._loadTasks();
             this.onResetForm();
             MessageToast.show(`Task ${newTask.taskId} assigned to ${this._employeeName(form.assignedTo)}.`);
         },
 
-        // Remove the heavy data URL before persisting locally; the
-        // metadata is enough for the UI to show "Reference document".
         _stripBinary(task) {
             const t = Object.assign({}, task);
             delete t.attachmentDataUrl;
             return t;
         },
 
-        // POSTs the file to /manager/uploadTaskAttachment. The action
-        // requires the Manager scope and stores the bytes in HANA so the
-        // assigned employee can download them on their own machine.
         _uploadAttachment(task, form) {
             if (!form || !form.attachmentDataUrl || !form.attachmentName) return;
 
@@ -254,8 +243,6 @@ sap.ui.define([
                 .then(r => r.ok ? r.json() : Promise.reject(r.status))
                 .then(() => MessageToast.show(`Attachment uploaded for ${task.taskId}.`))
                 .catch(() => {
-                    /* Local-only fallback: keep the data URL in the local
-                       task entry so the same browser can still download it. */
                     const oTasksModel = this.getOwnerComponent().getModel("tasks");
                     const items = (oTasksModel.getProperty("/items") || []).slice();
                     const idx = items.findIndex(t => t.taskId === task.taskId);
@@ -337,7 +324,6 @@ sap.ui.define([
                     if (!result) return;
                     const m = (result.message || "").match(/https?:\/\/\S+/);
                     if (m) {
-                        // eslint-disable-next-line no-console
                         console.log("%c[Email preview]", "color:#2563eb;font-weight:bold;", m[0]);
                     }
                     if (result.sent) {
