@@ -504,65 +504,65 @@ sap.ui.define([
         },
         //performance trend 
 
-_loadPerformanceTrend(iYear) {
-    const year = iYear || parseInt(
-        this._oDashModel.getProperty("/performanceTrend/selectedYear")
-        || new Date().getFullYear(), 10);
+        _loadPerformanceTrend(iYear) {
+            const year = iYear || parseInt(
+                this._oDashModel.getProperty("/performanceTrend/selectedYear")
+                || new Date().getFullYear(), 10);
 
-    this._callAction("getPerformanceTrend", { year: year })
-        .then(oData => {
-            let months = Array(12).fill(null);
-            try {
-                let raw = [];
-                if (Array.isArray(oData)) {
-                    raw = oData;
-                } else if (oData.trendJSON) {
-                    raw = JSON.parse(oData.trendJSON);
-                } else if (Array.isArray(oData.months)) {
-                    raw = oData.months;
-                }
+            this._callAction("getPerformanceTrend", { year: year })
+                .then(oData => {
+                    let months = Array(12).fill(null);
+                    try {
+                        let raw = [];
+                        if (Array.isArray(oData)) {
+                            raw = oData;
+                        } else if (oData.trendJSON) {
+                            raw = JSON.parse(oData.trendJSON);
+                        } else if (Array.isArray(oData.months)) {
+                            raw = oData.months;
+                        }
 
-                // ── NEW: normalise — each slot may be a number OR an object ──
-                months = raw.map(slot => {
-                    if (slot === null || slot === undefined) return null;
-                    if (typeof slot === "number") return slot;
-                    if (typeof slot === "object" && slot.rating !== undefined) {
-                        return parseFloat(slot.rating);
+                        // ── NEW: normalise — each slot may be a number OR an object ──
+                        months = raw.map(slot => {
+                            if (slot === null || slot === undefined) return null;
+                            if (typeof slot === "number") return slot;
+                            if (typeof slot === "object" && slot.rating !== undefined) {
+                                return parseFloat(slot.rating);
+                            }
+                            return null;
+                        });
+
+                    } catch (e) {
+                        months = Array(12).fill(null);
                     }
-                    return null;
-                });
-
-            } catch (e) {
-                months = Array(12).fill(null);
-            }
-            this._oDashModel.setProperty("/performanceTrend/months", months);
-        })
-        .catch(() => {
-            this._oDashModel.setProperty("/performanceTrend/months",
-                Array(12).fill(null));
-        })
-        .finally(() => this._refreshDash());
-},
+                    this._oDashModel.setProperty("/performanceTrend/months", months);
+                })
+                .catch(() => {
+                    this._oDashModel.setProperty("/performanceTrend/months",
+                        Array(12).fill(null));
+                })
+                .finally(() => this._refreshDash());
+        },
         // Performance Rating
 
-_loadPerformanceRating() {
-    this._callAction("getPerformanceRating")
-        .then(oData => {
-            const val = parseFloat(oData.ratingValue || 0);
-            this._oDashModel.setProperty("/performanceRating", {
-                ratingValue:    val,
-                ratingCategory: oData.ratingCategory || "N/A",
-                reviewMonth:    oData.reviewMonth    || 0,
-                reviewYear:     oData.reviewYear     || 0,
-                reviewComment:  oData.reviewComment  || ""
-            });
-        })
-        .catch(() => {
-            this._oDashModel.setProperty("/performanceRating",
-                { ratingValue: 0, ratingCategory: "N/A" });
-        })
-        .finally(() => this._refreshDash());
-},
+        _loadPerformanceRating() {
+            this._callAction("getPerformanceRating")
+                .then(oData => {
+                    const val = parseFloat(oData.ratingValue || 0);
+                    this._oDashModel.setProperty("/performanceRating", {
+                        ratingValue: val,
+                        ratingCategory: oData.ratingCategory || "N/A",
+                        reviewMonth: oData.reviewMonth || 0,
+                        reviewYear: oData.reviewYear || 0,
+                        reviewComment: oData.reviewComment || ""
+                    });
+                })
+                .catch(() => {
+                    this._oDashModel.setProperty("/performanceRating",
+                        { ratingValue: 0, ratingCategory: "N/A" });
+                })
+                .finally(() => this._refreshDash());
+        },
 
         _checkTodayAttendance() {
             const now = new Date();
@@ -692,44 +692,49 @@ _loadPerformanceRating() {
             });
         },
 
-        // ── Upcoming Calendar ─────────────────────────────────────────────────────
-        _loadUpcomingCalendar() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getUpcomingCalendar", {
-                method: "POST",
-                success: (oData) => {
-                    let events = [];
-                    try { events = JSON.parse(oData.eventsJSON || "[]"); } catch (e) { /**/ }
-                    this._oDashModel.setProperty("/upcomingCalendar/events", events);
-                    this._refreshDash();
-                },
-                error: () => {
-                    this._oDashModel.setProperty("/upcomingCalendar/events", []);
-                    this._refreshDash();
+// ── Upcoming Calendar ─────────────────────────────────────────────────────
+_loadUpcomingCalendar() {
+    this._callAction("getUpcomingCalendar", {})
+        .then(oData => {
+            let events = [];
+            try {
+                if (Array.isArray(oData)) {
+                    events = oData;
+                } else if (oData.eventsJSON) {
+                    events = JSON.parse(oData.eventsJSON);
+                } else if (Array.isArray(oData.value)) {
+                    events = oData.value;
                 }
-            });
-        },
+            } catch (e) {
+                events = [];
+            }
+            this._oDashModel.setProperty("/upcomingCalendar/events", events);
+        })
+        .catch(() => {
+            this._oDashModel.setProperty("/upcomingCalendar/events", []);
+        })
+        .finally(() => this._refreshDash());
+},
 
-        // ── Recent Notifications ──────────────────────────────────────────────────
-        _loadRecentNotifications() {
-            const oModel = this.getOwnerComponent().getModel("");
-            if (!oModel) return;
-            oModel.callFunction("/getRecentNotifications", {
-                method: "POST",
-                success: (oData) => {
-                    // CAP returns array directly for "returns array of"
-                    const items = Array.isArray(oData) ? oData
-                        : Array.isArray(oData?.value) ? oData.value : [];
-                    this._oDashModel.setProperty("/recentNotifications/items", items);
-                    this._refreshDash();
-                },
-                error: () => {
-                    this._oDashModel.setProperty("/recentNotifications/items", []);
-                    this._refreshDash();
-                }
-            });
-        },
+// ── Recent Notifications ──────────────────────────────────────────────────
+_loadRecentNotifications() {
+    this._callAction("getRecentNotifications", {})
+        .then(oData => {
+            let items = [];
+            if (Array.isArray(oData)) {
+                items = oData;
+            } else if (Array.isArray(oData?.value)) {
+                items = oData.value;
+            } else if (oData.itemsJSON) {
+                try { items = JSON.parse(oData.itemsJSON); } catch (e) { items = []; }
+            }
+            this._oDashModel.setProperty("/recentNotifications/items", items);
+        })
+        .catch(() => {
+            this._oDashModel.setProperty("/recentNotifications/items", []);
+        })
+        .finally(() => this._refreshDash());
+},
 
         // ─────────────────────────────────────────────────────────────────────
         // _refreshDash — reads ALL model data, rebuilds the full HTML grid
@@ -963,48 +968,6 @@ _loadPerformanceRating() {
                     o.rejected > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#dc2626" stroke-width="14" stroke-dasharray="${dR} ${circ}" stroke-dashoffset="${oR}" transform="rotate(-90 ${cx} ${cy})"/>` : ""
                 ].join("");
 
-            const sRow2 = `
-                <div style="display:flex;flex-direction:row;gap:1rem;width:100%;box-sizing:border-box;">
-
-                    <div style="flex:1;background:#fff;border-radius:12px;
-                                box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;min-height:260px;">
-                        <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
-                            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Total Timesheets</div>
-                            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">All time submissions</div>
-                        </div>
-                        <div style="display:flex;align-items:center;padding:14px 18px 20px;gap:18px;">
-                            <svg width="130" height="130" viewBox="0 0 140 140">
-                                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f3f4f6" stroke-width="14"/>
-                                ${segs}
-                                <text x="${cx}" y="${cy - 5}" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${iTotal}</text>
-                                <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="11" fill="#9ca3af">submitted</text>
-                            </svg>
-                            <div style="display:flex;flex-direction:column;gap:10px;">
-                                <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#16a34a;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Approved</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.approved}</b></div>
-                                <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Pending</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.pending}</b></div>
-                                <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#dc2626;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Rejected</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.rejected}</b></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style="flex:1;background:#fff;border-radius:12px;
-                                box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;min-height:260px;">
-                        <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
-                            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Week Completion</div>
-                            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">${o.label}</div>
-                            <div style="font-size:2.4rem;font-weight:700;color:#111827;line-height:1.2;margin-top:6px;">
-                                ${o.pct} <span style="font-size:0.95rem;font-weight:400;color:#6b7280;">%</span>
-                            </div>
-                        </div>
-                        <div style="padding:14px 18px 20px;display:flex;flex-direction:column;gap:10px;">
-                            <div style="width:100%;height:14px;background:#e5e7eb;border-radius:7px;overflow:hidden;">
-                                <div style="width:${o.pct}%;height:100%;background:#3b82f6;border-radius:7px;transition:width 0.4s;"></div>
-                            </div>
-                            <span style="font-size:0.78rem;color:#6b7280;">${o.hint}</span>
-                        </div>
-                    </div>
-
-                </div>`;
 
             // ── Row 3: Bar chart ─────────────────────────────────────────────
             const sRow3 = `
@@ -1059,12 +1022,12 @@ _loadPerformanceRating() {
                 tXLabels += `<text x="${xOf(i)}" y="${H - 4}" text-anchor="middle" font-size="9" fill="#9ca3af" font-family="sans-serif">${mn}</text>`;
             });
 
-const tPoints = trendMonths
-    .map((v, i) => {
-        const num = parseFloat(v);
-        return (!isNaN(num) && num > 0) ? { x: xOf(i), y: yOf(num) } : null;
-    })
-    .filter(Boolean);
+            const tPoints = trendMonths
+                .map((v, i) => {
+                    const num = parseFloat(v);
+                    return (!isNaN(num) && num > 0) ? { x: xOf(i), y: yOf(num) } : null;
+                })
+                .filter(Boolean);
 
             let tPath = "", tArea = "", tDots = "";
             if (tPoints.length > 1) {
@@ -1197,26 +1160,66 @@ const tPoints = trendMonths
         </div>
 
         <!-- Total Timesheets pie -->
-        <div style="background:#fff;border-radius:12px;flex:1;
-                    box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
-            <div style="padding:12px 16px 6px;border-bottom:1px solid #f3f4f6;">
-                <div style="font-size:0.95rem;font-weight:600;color:#111827;">Total Timesheets</div>
-                <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">All time submissions</div>
-            </div>
-            <div style="display:flex;align-items:center;padding:12px 16px 16px;gap:16px;">
-                <svg width="110" height="110" viewBox="0 0 140 140">
-                    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f3f4f6" stroke-width="14"/>
-                    ${segs}
-                    <text x="${cx}" y="${cy - 5}" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${iTotal}</text>
-                    <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="11" fill="#9ca3af">submitted</text>
-                </svg>
-                <div style="display:flex;flex-direction:column;gap:8px;">
-                    <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#16a34a;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Approved</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.approved}</b></div>
-                    <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Pending</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.pending}</b></div>
-                    <div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#dc2626;flex-shrink:0;"></span><span style="font-size:12px;color:#374151;">Rejected</span><b style="font-size:12px;color:#111827;margin-left:4px;">${o.rejected}</b></div>
+<div style="background:#fff;border-radius:12px;flex:1;
+            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;
+            box-sizing:border-box;display:flex;flex-direction:column;">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div>
+            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Total Timesheets</div>
+            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">All time submissions</div>
+        </div>
+    </div>
+
+    <!-- Donut + Legend -->
+    <div style="display:flex;align-items:center;gap:24px;flex:1;">
+
+        <!-- Donut -->
+        <div style="display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <svg width="160" height="160" viewBox="0 0 140 140" style="display:block;">
+                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f3f4f6" stroke-width="14"/>
+                ${segs}
+                <text x="${cx}" y="${cy - 8}" text-anchor="middle" font-size="22"
+                      font-weight="700" fill="#111827">${iTotal}</text>
+                <text x="${cx}" y="${cy + 12}" text-anchor="middle" font-size="9"
+                      fill="#9ca3af" font-family="sans-serif">submitted</text>
+            </svg>
+        </div>
+
+        <!-- Legend -->
+        <div style="flex:1;display:flex;flex-direction:column;justify-content:space-between;height:140px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:8px 0;border-bottom:1px solid #f3f4f6;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="width:11px;height:11px;border-radius:50%;
+                                 background:#16a34a;flex-shrink:0;"></span>
+                    <span style="font-size:0.85rem;color:#374151;">Approved</span>
                 </div>
+                <b style="font-size:0.85rem;color:#111827;">${o.approved}</b>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:8px 0;border-bottom:1px solid #f3f4f6;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="width:11px;height:11px;border-radius:50%;
+                                 background:#f59e0b;flex-shrink:0;"></span>
+                    <span style="font-size:0.85rem;color:#374151;">Pending</span>
+                </div>
+                <b style="font-size:0.85rem;color:#111827;">${o.pending}</b>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:8px 0;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="width:11px;height:11px;border-radius:50%;
+                                 background:#dc2626;flex-shrink:0;"></span>
+                    <span style="font-size:0.85rem;color:#374151;">Rejected</span>
+                </div>
+                <b style="font-size:0.85rem;color:#111827;">${o.rejected}</b>
             </div>
         </div>
+
+    </div>
+</div>
 
     </div>`;
 
@@ -1437,64 +1440,236 @@ const tPoints = trendMonths
     </div>`;
 
             const sRow5 = `
-    <div style="display:flex;flex-direction:row;gap:1rem;
-                width:100%;box-sizing:border-box;">
-        ${sLeaveOverview}
-        ${sCalendar}
-        ${sNotifications}
-    </div>`;
+<div style="display:flex;flex-direction:row;gap:1rem;
+            width:100%;box-sizing:border-box;">
+    ${sCalendar}
+    ${sNotifications}
+</div>`;
+
+            // ── Row 2: Bar Chart (left) | Week Completion + Leave Overview (right) ──
+            // Auto-compute current week Mon–Fri label
+            const now = new Date();
+            const dow = now.getDay();                     // 0=Sun,1=Mon,...6=Sat
+            const diff = dow === 0 ? -6 : 1 - dow;        // shift back to Monday
+            const mon = new Date(now); mon.setDate(now.getDate() + diff);
+            const fri = new Date(mon); fri.setDate(mon.getDate() + 4);
+            const _fmt = (d) => d.getDate() + " " +
+                ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+            const autoWeekLabel = `${_fmt(mon)} – ${_fmt(fri)}`;
+            const sRow2 = `
+<div style="display:flex;flex-direction:row;gap:1rem;width:100%;box-sizing:border-box;">
+
+    <!-- Left: Daily Hours Bar Chart -->
+    <div style="flex:1.4;background:#fff;border-radius:12px;
+                box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
+        <div style="padding:14px 18px 10px;border-bottom:1px solid #f3f4f6;">
+            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Daily Hours Breakdown</div>
+            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">${autoWeekLabel}</div>
+        </div>
+        <div style="padding:4px 0 0;overflow:hidden;">${o.barHTML}</div>
+    </div>
+
+    <!-- Right: Week Completion on top + My Leave Overview below -->
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1rem;">
+
+        <!-- Week Completion -->
+        <div style="background:#fff;border-radius:12px;
+                    box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
+            <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
+                <div style="font-size:0.95rem;font-weight:600;color:#111827;">Week Completion</div>
+                <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">${o.label}</div>
+                <div style="font-size:2.2rem;font-weight:700;color:#111827;line-height:1.2;margin-top:6px;">
+                    ${o.pct} <span style="font-size:0.9rem;font-weight:400;color:#6b7280;">%</span>
+                </div>
+            </div>
+            <div style="padding:12px 18px 16px;display:flex;flex-direction:column;gap:8px;">
+                <div style="width:100%;height:12px;background:#e5e7eb;border-radius:6px;overflow:hidden;">
+                    <div style="width:${o.pct}%;height:100%;background:#3b82f6;border-radius:6px;transition:width 0.4s;"></div>
+                </div>
+                <span style="font-size:0.78rem;color:#6b7280;">${o.hint}</span>
+            </div>
+        </div>
+
+        <!-- My Leave Overview -->
+        <!-- My Leave Overview -->
+<div style="background:#fff;border-radius:12px;flex:1;
+            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;
+            box-sizing:border-box;display:flex;flex-direction:column;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <span style="font-size:0.95rem;font-weight:600;color:#111827;">My Leave Overview</span>
+        <span style="font-size:0.75rem;color:#9ca3af;background:#f3f4f6;
+                     padding:3px 10px;border-radius:12px;">This Year</span>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+    <svg width="160" height="160" viewBox="0 0 140 140" style="display:block;">
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#f3f4f6" stroke-width="14"/>
+
+        <!-- Casual Leave 5/23 -->
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#16a34a" stroke-width="14"
+            stroke-dasharray="${((5/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
+            stroke-dashoffset="0"
+            transform="rotate(-90 70 70)"/>
+
+        <!-- Sick Leave 5/23 -->
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#3b82f6" stroke-width="14"
+            stroke-dasharray="${((5/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
+            stroke-dashoffset="${(-(5/23)*2*Math.PI*54).toFixed(2)}"
+            transform="rotate(-90 70 70)"/>
+
+        <!-- Paid Leave 11/23 -->
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#f59e0b" stroke-width="14"
+            stroke-dasharray="${((11/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
+            stroke-dashoffset="${(-((5+5)/23)*2*Math.PI*54).toFixed(2)}"
+            transform="rotate(-90 70 70)"/>
+
+        <!-- Paternity Leave 2/23 -->
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#8b5cf6" stroke-width="14"
+            stroke-dasharray="${((2/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
+            stroke-dashoffset="${(-((5+5+11)/23)*2*Math.PI*54).toFixed(2)}"
+            transform="rotate(-90 70 70)"/>
+
+        <text x="70" y="64" text-anchor="middle" font-size="20"
+              font-weight="700" fill="#111827">21</text>
+        <text x="70" y="80" text-anchor="middle" font-size="9"
+              fill="#9ca3af" font-family="sans-serif">Total Days</text>
+    </svg>
+
+        <!-- Legend -->
+<!-- Legend -->
+<div style="flex:1;min-width:120px;display:flex;flex-direction:column;justify-content:space-between;gap:0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:10px 0;border-bottom:1px solid #f3f4f6;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:10px;height:10px;border-radius:50%;
+                         background:#16a34a;flex-shrink:0;"></span>
+            <span style="font-size:0.82rem;color:#374151;">Casual Leave</span>
+        </div>
+        <span style="font-size:0.82rem;font-weight:700;color:#111827;">5 Days</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:10px 0;border-bottom:1px solid #f3f4f6;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:10px;height:10px;border-radius:50%;
+                         background:#3b82f6;flex-shrink:0;"></span>
+            <span style="font-size:0.82rem;color:#374151;">Sick Leave</span>
+        </div>
+        <span style="font-size:0.82rem;font-weight:700;color:#111827;">5 Days</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:10px 0;border-bottom:1px solid #f3f4f6;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:10px;height:10px;border-radius:50%;
+                         background:#f59e0b;flex-shrink:0;"></span>
+            <span style="font-size:0.82rem;color:#374151;">Paid Leave</span>
+        </div>
+        <span style="font-size:0.82rem;font-weight:700;color:#111827;">11 Days</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:10px 0;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:10px;height:10px;border-radius:50%;
+                         background:#8b5cf6;flex-shrink:0;"></span>
+            <span style="font-size:0.82rem;color:#374151;">Paternity Leave</span>
+        </div>
+        <span style="font-size:0.82rem;font-weight:700;color:#111827;">2 Days</span>
+    </div>
+</div>
+
+    </div>
+
+    <!-- Maternity info line -->
+    <div style="margin-top:14px;padding:10px 14px;background:#eff6ff;
+                border-radius:8px;border-left:3px solid #4281e7;
+                display:flex;align-items:center;gap:10px;">
+        <svg width="50" height="50" viewBox="0 0 24 24" fill="none"
+             stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span style="font-size:0.95rem;color:#1d4ed8;line-height:1.4;">
+            <b>Maternity Leave:</b> 180 days 
+        </span>
+    </div>
+
+</div>
+
+    </div>
+
+</div>`;
+
 
             // ── Final: wrap all rows in outer column ─────────────────────────
             return `
-                <div style="padding:1.5rem;box-sizing:border-box;width:100%;
-                            display:flex;flex-direction:column;gap:1.5rem;">
-                    ${sRow1}
-                    ${sRow4}
-                    ${sRow2}
-                    ${sRow5}
-                    ${sRow3}
-                    
-                    
-                </div>`;
+    <div style="padding:1.5rem;box-sizing:border-box;width:100%;
+                display:flex;flex-direction:column;gap:1.5rem;">
+        ${sRow1}
+        ${sRow4}
+        ${sRow2}
+        ${sRow5}
+    </div>`;
         },
 
         // ─────────────────────────────────────────────────────────────────────
-        // Bar chart (unchanged)
+        // Bar chart for timesheet hours in the current week 
         // ─────────────────────────────────────────────────────────────────────
-        _buildBarChart(weekDays) {
-            const MAX_H = 12, X_STEP = 100, BAR_W = 56;
-            const CHART_W = X_STEP * 5, MAX_BAR = 60, TOP_PAD = 20;
-            const BASE_Y = MAX_BAR + TOP_PAD, VIEW_H = BASE_Y + 24;
+_buildBarChart(weekDays) {
+    const MAX_H   = 14;
+    const X_STEP  = 100, BAR_W = 60;
+    const CHART_W = X_STEP * 5;
+    const MAX_BAR = 160;   // tall enough to show clear height differences
+    const TOP_PAD = 20;
+    const BASE_Y  = MAX_BAR + TOP_PAD;
+    const VIEW_H  = BASE_Y + 30;
 
-            let bars = "";
-            weekDays.slice(0, 5).forEach((day, i) => {
-                const x = i * X_STEP + (X_STEP - BAR_W) / 2;
-                const barH = day.hours > 0 ? Math.max(6, (day.hours / MAX_H) * MAX_BAR) : 6;
-                const y = BASE_Y - barH;
-                const col = day.hours >= MAX_H ? "#16a34a" : day.hours > 0 ? "#3b82f6" : "#e5e7eb";
-                const cxB = x + BAR_W / 2;
-                bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}" rx="6" fill="${col}"/>`;
-                bars += `<text x="${cxB}" y="${BASE_Y + 16}" text-anchor="middle" font-size="11" fill="#6b7280" font-family="sans-serif">${day.name}</text>`;
-                if (day.hours > 0) {
-                    const lbl = day.hoursLabel.replace(" hrs", "h");
-                    const lblY = barH > 20 ? y + 16 : y - 5;
-                    const lblC = barH > 20 ? "#fff" : "#374151";
-                    bars += `<text x="${cxB}" y="${lblY}" text-anchor="middle" font-size="10" fill="${lblC}" font-weight="600" font-family="sans-serif">${lbl}</text>`;
-                }
-            });
+    // Find actual max hours this week so bars scale relative to each other
+    const weekMax = Math.max(...weekDays.slice(0, 5).map(d => d.hours || 0), 1);
 
-            let grid = "";
-            [3, 6, 9, 12].forEach(hrs => {
-                const gy = BASE_Y - (hrs / MAX_H) * MAX_BAR;
-                grid += `<line x1="0" y1="${gy}" x2="${CHART_W}" y2="${gy}" stroke="#f3f4f6" stroke-width="1"/>`;
-                grid += `<text x="${CHART_W + 4}" y="${gy + 3}" font-size="9" fill="#d1d5db" font-family="sans-serif">${hrs}h</text>`;
-            });
+    let bars = "";
+    weekDays.slice(0, 5).forEach((day, i) => {
+        const x = i * X_STEP + (X_STEP - BAR_W) / 2;
 
-            return `<div style="padding:0 14px 14px;width:100%;box-sizing:border-box;margin-top:10px;">
-                        <svg viewBox="0 0 ${CHART_W + 30} ${VIEW_H}" width="100%"
-                             style="overflow:visible;display:block;">${grid}${bars}</svg>
-                    </div>`;
+        // Scale bar height relative to the tallest bar this week
+        // minimum 12px just so empty days show a stub
+        const barH = day.hours > 0
+            ? Math.max(12, (day.hours / weekMax) * MAX_BAR)
+            : 12;
+
+        const y   = BASE_Y - barH;
+        const col = day.hours > 0 ? "#3b82f6" : "#e5e7eb";
+        const cxB = x + BAR_W / 2;
+
+        // Bar
+        bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}"
+                       rx="8" fill="${col}"/>`;
+
+        // Day label below
+        bars += `<text x="${cxB}" y="${BASE_Y + 20}" text-anchor="middle"
+                       font-size="11" fill="#6b7280"
+                       font-family="sans-serif">${day.name}</text>`;
+
+        // Hour label — inside bar if tall enough, above bar if short
+        if (day.hours > 0) {
+            const lbl  = (day.hoursLabel || "").replace(" hrs", "h");
+            const inside = barH >= 28;
+            const lblY   = inside ? y + barH / 2 + 5 : y - 6;
+            const lblCol = inside ? "#fff" : "#374151";
+            bars += `<text x="${cxB}" y="${lblY}" text-anchor="middle"
+                           font-size="11" fill="${lblCol}" font-weight="700"
+                           font-family="sans-serif">${lbl}</text>`;
         }
+    });
+
+    return `
+        <div style="padding:0 18px 14px;width:100%;box-sizing:border-box;margin-top:8px;">
+            <svg viewBox="0 0 ${CHART_W} ${VIEW_H}" width="100%"
+                 style="overflow:visible;display:block;">
+                ${bars}
+            </svg>
+        </div>`;
+},
 
     });
 });
