@@ -1204,3 +1204,14 @@ html, body { margin: 0; overflow: hidden; height: 100%; }
     border-color: #e5e7eb;
     color: #6b7280;
 }
+
+.sapMTB {
+    min-height: 72px !important;
+    height: auto !important;
+    padding: 8px 16px !important;
+    box-sizing: border-box;
+}
+
+.sapMTB .sapMTBContent {
+    align-items: center !important;
+}

@@ -692,49 +692,49 @@ sap.ui.define([
             });
         },
 
-// ── Upcoming Calendar ─────────────────────────────────────────────────────
-_loadUpcomingCalendar() {
-    this._callAction("getUpcomingCalendar", {})
-        .then(oData => {
-            let events = [];
-            try {
-                if (Array.isArray(oData)) {
-                    events = oData;
-                } else if (oData.eventsJSON) {
-                    events = JSON.parse(oData.eventsJSON);
-                } else if (Array.isArray(oData.value)) {
-                    events = oData.value;
-                }
-            } catch (e) {
-                events = [];
-            }
-            this._oDashModel.setProperty("/upcomingCalendar/events", events);
-        })
-        .catch(() => {
-            this._oDashModel.setProperty("/upcomingCalendar/events", []);
-        })
-        .finally(() => this._refreshDash());
-},
+        // ── Upcoming Calendar ─────────────────────────────────────────────────────
+        _loadUpcomingCalendar() {
+            this._callAction("getUpcomingCalendar", {})
+                .then(oData => {
+                    let events = [];
+                    try {
+                        if (Array.isArray(oData)) {
+                            events = oData;
+                        } else if (oData.eventsJSON) {
+                            events = JSON.parse(oData.eventsJSON);
+                        } else if (Array.isArray(oData.value)) {
+                            events = oData.value;
+                        }
+                    } catch (e) {
+                        events = [];
+                    }
+                    this._oDashModel.setProperty("/upcomingCalendar/events", events);
+                })
+                .catch(() => {
+                    this._oDashModel.setProperty("/upcomingCalendar/events", []);
+                })
+                .finally(() => this._refreshDash());
+        },
 
-// ── Recent Notifications ──────────────────────────────────────────────────
-_loadRecentNotifications() {
-    this._callAction("getRecentNotifications", {})
-        .then(oData => {
-            let items = [];
-            if (Array.isArray(oData)) {
-                items = oData;
-            } else if (Array.isArray(oData?.value)) {
-                items = oData.value;
-            } else if (oData.itemsJSON) {
-                try { items = JSON.parse(oData.itemsJSON); } catch (e) { items = []; }
-            }
-            this._oDashModel.setProperty("/recentNotifications/items", items);
-        })
-        .catch(() => {
-            this._oDashModel.setProperty("/recentNotifications/items", []);
-        })
-        .finally(() => this._refreshDash());
-},
+        // ── Recent Notifications ──────────────────────────────────────────────────
+        _loadRecentNotifications() {
+            this._callAction("getRecentNotifications", {})
+                .then(oData => {
+                    let items = [];
+                    if (Array.isArray(oData)) {
+                        items = oData;
+                    } else if (Array.isArray(oData?.value)) {
+                        items = oData.value;
+                    } else if (oData.itemsJSON) {
+                        try { items = JSON.parse(oData.itemsJSON); } catch (e) { items = []; }
+                    }
+                    this._oDashModel.setProperty("/recentNotifications/items", items);
+                })
+                .catch(() => {
+                    this._oDashModel.setProperty("/recentNotifications/items", []);
+                })
+                .finally(() => this._refreshDash());
+        },
 
         // ─────────────────────────────────────────────────────────────────────
         // _refreshDash — reads ALL model data, rebuilds the full HTML grid
@@ -804,6 +804,11 @@ _loadRecentNotifications() {
                     </svg>
                  </span>`;
 
+
+            
+
+
+            
             // ── 1. Work Anniversary ──────────────────────────────────────────
             const anniv = o.anniv || {};
             const yearsLabel = anniv.yearsLabel || "—";
@@ -1508,26 +1513,26 @@ _loadRecentNotifications() {
 
         <!-- Casual Leave 5/23 -->
         <circle cx="70" cy="70" r="54" fill="none" stroke="#16a34a" stroke-width="14"
-            stroke-dasharray="${((5/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
+            stroke-dasharray="${((5 / 23) * 2 * Math.PI * 54).toFixed(2)} ${(2 * Math.PI * 54).toFixed(2)}"
             stroke-dashoffset="0"
             transform="rotate(-90 70 70)"/>
 
         <!-- Sick Leave 5/23 -->
         <circle cx="70" cy="70" r="54" fill="none" stroke="#3b82f6" stroke-width="14"
-            stroke-dasharray="${((5/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
-            stroke-dashoffset="${(-(5/23)*2*Math.PI*54).toFixed(2)}"
+            stroke-dasharray="${((5 / 23) * 2 * Math.PI * 54).toFixed(2)} ${(2 * Math.PI * 54).toFixed(2)}"
+            stroke-dashoffset="${(-(5 / 23) * 2 * Math.PI * 54).toFixed(2)}"
             transform="rotate(-90 70 70)"/>
 
         <!-- Paid Leave 11/23 -->
         <circle cx="70" cy="70" r="54" fill="none" stroke="#f59e0b" stroke-width="14"
-            stroke-dasharray="${((11/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
-            stroke-dashoffset="${(-((5+5)/23)*2*Math.PI*54).toFixed(2)}"
+            stroke-dasharray="${((11 / 23) * 2 * Math.PI * 54).toFixed(2)} ${(2 * Math.PI * 54).toFixed(2)}"
+            stroke-dashoffset="${(-((5 + 5) / 23) * 2 * Math.PI * 54).toFixed(2)}"
             transform="rotate(-90 70 70)"/>
 
         <!-- Paternity Leave 2/23 -->
         <circle cx="70" cy="70" r="54" fill="none" stroke="#8b5cf6" stroke-width="14"
-            stroke-dasharray="${((2/23)*2*Math.PI*54).toFixed(2)} ${(2*Math.PI*54).toFixed(2)}"
-            stroke-dashoffset="${(-((5+5+11)/23)*2*Math.PI*54).toFixed(2)}"
+            stroke-dasharray="${((2 / 23) * 2 * Math.PI * 54).toFixed(2)} ${(2 * Math.PI * 54).toFixed(2)}"
+            stroke-dashoffset="${(-((5 + 5 + 11) / 23) * 2 * Math.PI * 54).toFixed(2)}"
             transform="rotate(-90 70 70)"/>
 
         <text x="70" y="64" text-anchor="middle" font-size="20"
@@ -1615,61 +1620,61 @@ _loadRecentNotifications() {
         // ─────────────────────────────────────────────────────────────────────
         // Bar chart for timesheet hours in the current week 
         // ─────────────────────────────────────────────────────────────────────
-_buildBarChart(weekDays) {
-    const MAX_H   = 14;
-    const X_STEP  = 100, BAR_W = 60;
-    const CHART_W = X_STEP * 5;
-    const MAX_BAR = 160;   // tall enough to show clear height differences
-    const TOP_PAD = 20;
-    const BASE_Y  = MAX_BAR + TOP_PAD;
-    const VIEW_H  = BASE_Y + 30;
+        _buildBarChart(weekDays) {
+            const MAX_H = 14;
+            const X_STEP = 100, BAR_W = 60;
+            const CHART_W = X_STEP * 5;
+            const MAX_BAR = 160;   // tall enough to show clear height differences
+            const TOP_PAD = 20;
+            const BASE_Y = MAX_BAR + TOP_PAD;
+            const VIEW_H = BASE_Y + 30;
 
-    // Find actual max hours this week so bars scale relative to each other
-    const weekMax = Math.max(...weekDays.slice(0, 5).map(d => d.hours || 0), 1);
+            // Find actual max hours this week so bars scale relative to each other
+            const weekMax = Math.max(...weekDays.slice(0, 5).map(d => d.hours || 0), 1);
 
-    let bars = "";
-    weekDays.slice(0, 5).forEach((day, i) => {
-        const x = i * X_STEP + (X_STEP - BAR_W) / 2;
+            let bars = "";
+            weekDays.slice(0, 5).forEach((day, i) => {
+                const x = i * X_STEP + (X_STEP - BAR_W) / 2;
 
-        // Scale bar height relative to the tallest bar this week
-        // minimum 12px just so empty days show a stub
-        const barH = day.hours > 0
-            ? Math.max(12, (day.hours / weekMax) * MAX_BAR)
-            : 12;
+                // Scale bar height relative to the tallest bar this week
+                // minimum 12px just so empty days show a stub
+                const barH = day.hours > 0
+                    ? Math.max(12, (day.hours / weekMax) * MAX_BAR)
+                    : 12;
 
-        const y   = BASE_Y - barH;
-        const col = day.hours > 0 ? "#3b82f6" : "#e5e7eb";
-        const cxB = x + BAR_W / 2;
+                const y = BASE_Y - barH;
+                const col = day.hours > 0 ? "#3b82f6" : "#e5e7eb";
+                const cxB = x + BAR_W / 2;
 
-        // Bar
-        bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}"
+                // Bar
+                bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}"
                        rx="8" fill="${col}"/>`;
 
-        // Day label below
-        bars += `<text x="${cxB}" y="${BASE_Y + 20}" text-anchor="middle"
+                // Day label below
+                bars += `<text x="${cxB}" y="${BASE_Y + 20}" text-anchor="middle"
                        font-size="11" fill="#6b7280"
                        font-family="sans-serif">${day.name}</text>`;
 
-        // Hour label — inside bar if tall enough, above bar if short
-        if (day.hours > 0) {
-            const lbl  = (day.hoursLabel || "").replace(" hrs", "h");
-            const inside = barH >= 28;
-            const lblY   = inside ? y + barH / 2 + 5 : y - 6;
-            const lblCol = inside ? "#fff" : "#374151";
-            bars += `<text x="${cxB}" y="${lblY}" text-anchor="middle"
+                // Hour label — inside bar if tall enough, above bar if short
+                if (day.hours > 0) {
+                    const lbl = (day.hoursLabel || "").replace(" hrs", "h");
+                    const inside = barH >= 28;
+                    const lblY = inside ? y + barH / 2 + 5 : y - 6;
+                    const lblCol = inside ? "#fff" : "#374151";
+                    bars += `<text x="${cxB}" y="${lblY}" text-anchor="middle"
                            font-size="11" fill="${lblCol}" font-weight="700"
                            font-family="sans-serif">${lbl}</text>`;
-        }
-    });
+                }
+            });
 
-    return `
+            return `
         <div style="padding:0 18px 14px;width:100%;box-sizing:border-box;margin-top:8px;">
             <svg viewBox="0 0 ${CHART_W} ${VIEW_H}" width="100%"
                  style="overflow:visible;display:block;">
                 ${bars}
             </svg>
         </div>`;
-},
+        },
 
     });
 });

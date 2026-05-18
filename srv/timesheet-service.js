@@ -422,178 +422,153 @@ class EmployeeService extends cds.ApplicationService {
         // ── Dashboard: Upcoming Calendar (Google Calendar API) ─────────────────────
         // Reads GOOGLE_CALENDAR_API_KEY + GOOGLE_CALENDAR_ID from environment.
         // Falls back to empty array if not configured — card shows "No events".
-        this.on('getUpcomingCalendar', async (req) => {
-            const apiKey = process.env.GOOGLE_CALENDAR_API_KEY;
-            const calendarId = process.env.GOOGLE_CALENDAR_ID; // usually the employee's email
+        const { fetchUpcomingMeetings } = require('./google-calendar');
 
-            if (!apiKey || !calendarId) {
-                // Not configured — return empty so frontend shows graceful empty state
+        // ── getUpcomingCalendar ───────────────────────────────────────────────────
+        this.on('getUpcomingCalendar', async (req) => {
+
+            // ── Extract email from SAP IDP JWT token ─────────────────────────────
+            const user = req.user || {};
+            const email =
+                user.attr?.email ||   // standard OIDC claim
+                user.attr?.mail ||   // Azure AD / SAP IDP
+                user.attr?.upn ||   // User Principal Name
+                user.id ||   // fallback
+                '';
+
+            cds.log('gcal').info(`Fetching Google Meet events for: ${email}`);
+
+            if (!email) {
                 return { eventsJSON: JSON.stringify([]) };
             }
 
             try {
-                const now = new Date();
-                const maxTime = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // next 7 days
-                const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events` +
-                    `?key=${apiKey}` +
-                    `&timeMin=${now.toISOString()}` +
-                    `&timeMax=${maxTime.toISOString()}` +
-                    `&singleEvents=true` +
-                    `&orderBy=startTime` +
-                    `&maxResults=5`;
-
-                // Use built-in fetch (Node 18+) or fallback to https module
-                let body;
-                if (typeof fetch !== 'undefined') {
-                    const res = await fetch(url);
-                    body = await res.json();
-                } else {
-                    const https = require('https');
-                    body = await new Promise((resolve, reject) => {
-                        https.get(url, res => {
-                            let data = '';
-                            res.on('data', chunk => data += chunk);
-                            res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } });
-                        }).on('error', reject);
-                    });
-                }
-
-                const todayStr = now.toDateString();
-                const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-                const MON_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-                const events = (body.items || []).map(ev => {
-                    const start = new Date(ev.start.dateTime || ev.start.date);
-                    const end = new Date(ev.end.dateTime || ev.end.date);
-                    const isToday = start.toDateString() === todayStr;
-                    const isTomorrow = start.toDateString() === new Date(now.getTime() + 86400000).toDateString();
-
-                    // Format: "10:00 AM – 10:30 AM"
-                    const fmt = (d) => d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-                    const timeLabel = ev.start.dateTime ? `${fmt(start)} – ${fmt(end)}` : 'All Day';
-                    const dateLabel = isToday ? 'Today'
-                        : isTomorrow ? 'Tomorrow'
-                            : `${DAY_NAMES[start.getDay()]}, ${MON_NAMES[start.getMonth()]} ${start.getDate()}`;
-
-                    return {
-                        id: ev.id,
-                        title: ev.summary || 'Untitled Event',
-                        start: start.toISOString(),
-                        end: end.toISOString(),
-                        timeLabel,
-                        dateLabel,
-                        isToday,
-                        colorId: ev.colorId || '1'
-                    };
-                });
-
+                const events = await fetchUpcomingMeetings(email);
                 return { eventsJSON: JSON.stringify(events) };
+
             } catch (e) {
-                cds.log('calendar').warn('Google Calendar fetch failed:', e.message || e);
-                return { eventsJSON: JSON.stringify([]) };
-            }
-        });
+                cds.log('gcal').error('getUpcomingCalendar failed:', e.message);
 
-        // ── Dashboard: My Leave Overview ───────────────────────────────────────────
-        // Returns remaining leave balance + how much has been taken this year.
-        // "Taken" is approximated from LeaveBalance initial allotment vs current.
-        // Your colleague's leave-request module should decrement LeaveBalance when
-        // a leave is approved — this handler just reads what's already stored.
-        this.on('getLeaveOverview', async (req) => {
-            const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
-            if (!emp) {
+                // Return helpful error so dashboard can show it
                 return {
-                    casual: 0, sick: 0, annual: 0, unpaid: 0, totalDays: 0,
-                    takenJSON: JSON.stringify([])
+                    eventsJSON: JSON.stringify([{
+                        title: 'Could not load calendar',
+                        dateLabel: 'Check server logs',
+                        timeLabel: e.message?.substring(0, 60) || 'Unknown error',
+                        meetLink: null,
+                        isError: true
+                    }])
                 };
             }
-
-            const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
-            const balance = await SELECT.one.from(LEAVE_BALANCE)
-                .where({ employee_employeeId: emp.employeeId });
-
-            // Standard annual allotments (adjust to match your HR policy)
-            const ALLOTMENT = { casual: 12, sick: 8, annual: 15, unpaid: 0 };
-
-            const casual = balance ? (balance.casualLeave || 0) : ALLOTMENT.casual;
-            const sick = balance ? (balance.sickLeave || 0) : ALLOTMENT.sick;
-            const annual = balance ? (balance.annualLeave || 0) : ALLOTMENT.annual;
-            const unpaid = 0; // extend LeaveBalance entity if you track unpaid leave
-
-            // "Taken" = allotment minus remaining balance
-            const takenCasual = Math.max(0, ALLOTMENT.casual - casual);
-            const takenSick = Math.max(0, ALLOTMENT.sick - sick);
-            const takenAnnual = Math.max(0, ALLOTMENT.annual - annual);
-
-            const totalDays = casual + sick + annual + unpaid;
-
-            const takenData = [
-                { type: 'casual', label: 'Casual Leave', taken: takenCasual, balance: casual, color: '#16a34a' },
-                { type: 'sick', label: 'Sick Leave', taken: takenSick, balance: sick, color: '#3b82f6' },
-                { type: 'annual', label: 'Annual Leave', taken: takenAnnual, balance: annual, color: '#f59e0b' },
-                { type: 'unpaid', label: 'Unpaid Leave', taken: 0, balance: 0, color: '#9ca3af' }
-            ];
-
-            return { casual, sick, annual, unpaid, totalDays, takenJSON: JSON.stringify(takenData) };
         });
 
+        return { eventsJSON: JSON.stringify(events) };
+    } catch(e) {
+        cds.log('calendar').warn('Google Calendar fetch failed:', e.message || e);
+        return { eventsJSON: JSON.stringify([]) };
+    }
+};
 
-        // ── Dashboard: Work Anniversary ────────────────────────────────
-        // Calculate years completed since joining date for the logged-in employee.
-        this.on('getWorkAnniversary', async (req) => {
-            const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id
-                || '';
+// ── Dashboard: My Leave Overview ───────────────────────────────────────────
+// Returns remaining leave balance + how much has been taken this year.
+// "Taken" is approximated from LeaveBalance initial allotment vs current.
+// Your colleague's leave-request module should decrement LeaveBalance when
+// a leave is approved — this handler just reads what's already stored.
+this.on('getLeaveOverview', async (req) => {
+    const user = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
 
-            const emp = await SELECT.one
-                .from(EMPLOYEE)
-                .columns('employeeId', 'employeeName', 'joiningDate')
-                .where({ email: email });
+    const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+    if (!emp) {
+        return {
+            casual: 0, sick: 0, annual: 0, unpaid: 0, totalDays: 0,
+            takenJSON: JSON.stringify([])
+        };
+    }
 
-            if (!emp || !emp.joiningDate) {
-                return {
-                    yearsCompleted: 0,
-                    joiningDate: null,
-                    message: 'No joining date found.'
-                };
-            }
+    const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
+    const balance = await SELECT.one.from(LEAVE_BALANCE)
+        .where({ employee_employeeId: emp.employeeId });
 
-            const joining = new Date(emp.joiningDate);
-            const today = new Date();
-            const years = today.getFullYear() - joining.getFullYear();
-            const months = today.getMonth() - joining.getMonth();
-            const days = today.getDate() - joining.getDate();
+    // Standard annual allotments (adjust to match your HR policy)
+    const ALLOTMENT = { casual: 12, sick: 8, annual: 15, unpaid: 0 };
 
-            // Calculate exact years with decimal precision
-            let yearsCompleted = years;
-            if (months < 0 || (months === 0 && days < 0)) {
-                yearsCompleted = years - 1;
-            }
-            const totalDays = (today - joining) / (1000 * 60 * 60 * 24);
-            yearsCompleted = Math.max(0, totalDays / 365.25);
+    const casual = balance ? (balance.casualLeave || 0) : ALLOTMENT.casual;
+    const sick = balance ? (balance.sickLeave || 0) : ALLOTMENT.sick;
+    const annual = balance ? (balance.annualLeave || 0) : ALLOTMENT.annual;
+    const unpaid = 0; // extend LeaveBalance entity if you track unpaid leave
 
-            const message = yearsCompleted >= 1
-                ? `Congratulations! You have completed ${Math.floor(yearsCompleted)} years with us.`
-                : `Welcome! You joined on ${joining.toLocaleDateString()}`;
+    // "Taken" = allotment minus remaining balance
+    const takenCasual = Math.max(0, ALLOTMENT.casual - casual);
+    const takenSick = Math.max(0, ALLOTMENT.sick - sick);
+    const takenAnnual = Math.max(0, ALLOTMENT.annual - annual);
 
-            return {
-                yearsCompleted: parseFloat(yearsCompleted.toFixed(2)),
-                joiningDate: emp.joiningDate,
-                message: message
-            };
-        });
+    const totalDays = casual + sick + annual + unpaid;
+
+    const takenData = [
+        { type: 'casual', label: 'Casual Leave', taken: takenCasual, balance: casual, color: '#16a34a' },
+        { type: 'sick', label: 'Sick Leave', taken: takenSick, balance: sick, color: '#3b82f6' },
+        { type: 'annual', label: 'Annual Leave', taken: takenAnnual, balance: annual, color: '#f59e0b' },
+        { type: 'unpaid', label: 'Unpaid Leave', taken: 0, balance: 0, color: '#9ca3af' }
+    ];
+
+    return { casual, sick, annual, unpaid, totalDays, takenJSON: JSON.stringify(takenData) };
+});
 
 
-        // ── Dashboard: Performance Rating ─────────────────────────────────────────
-        // Fetches the most-recent PerformanceRating row for the logged-in employee.
-this.on('getPerformanceRating', async (req) => {
-    const user  = req.user || {};
+// ── Dashboard: Work Anniversary ────────────────────────────────
+// Calculate years completed since joining date for the logged-in employee.
+this.on('getWorkAnniversary', async (req) => {
+    const user = req.user || {};
     const email = (user.attr && (user.attr.email || user.attr.mail))
-               || user.id || '';
+        || user.id
+        || '';
+
+    const emp = await SELECT.one
+        .from(EMPLOYEE)
+        .columns('employeeId', 'employeeName', 'joiningDate')
+        .where({ email: email });
+
+    if (!emp || !emp.joiningDate) {
+        return {
+            yearsCompleted: 0,
+            joiningDate: null,
+            message: 'No joining date found.'
+        };
+    }
+
+    const joining = new Date(emp.joiningDate);
+    const today = new Date();
+    const years = today.getFullYear() - joining.getFullYear();
+    const months = today.getMonth() - joining.getMonth();
+    const days = today.getDate() - joining.getDate();
+
+    // Calculate exact years with decimal precision
+    let yearsCompleted = years;
+    if (months < 0 || (months === 0 && days < 0)) {
+        yearsCompleted = years - 1;
+    }
+    const totalDays = (today - joining) / (1000 * 60 * 60 * 24);
+    yearsCompleted = Math.max(0, totalDays / 365.25);
+
+    const message = yearsCompleted >= 1
+        ? `Congratulations! You have completed ${Math.floor(yearsCompleted)} years with us.`
+        : `Welcome! You joined on ${joining.toLocaleDateString()}`;
+
+    return {
+        yearsCompleted: parseFloat(yearsCompleted.toFixed(2)),
+        joiningDate: emp.joiningDate,
+        message: message
+    };
+});
+
+
+// ── Dashboard: Performance Rating ─────────────────────────────────────────
+// Fetches the most-recent PerformanceRating row for the logged-in employee.
+this.on('getPerformanceRating', async (req) => {
+    const user = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+        || user.id || '';
 
     const emp = await SELECT.one.from(EMPLOYEE)
         .columns('employeeId')
@@ -601,11 +576,11 @@ this.on('getPerformanceRating', async (req) => {
 
     if (!emp) {
         return {
-            ratingValue:    0,
+            ratingValue: 0,
             ratingCategory: 'N/A',
-            reviewMonth:    0,
-            reviewYear:     0,
-            reviewComment:  ''
+            reviewMonth: 0,
+            reviewYear: 0,
+            reviewComment: ''
         };
     }
 
@@ -619,39 +594,39 @@ this.on('getPerformanceRating', async (req) => {
 
     if (!ratings || ratings.length === 0) {
         return {
-            ratingValue:    0,
+            ratingValue: 0,
             ratingCategory: 'N/A',
-            reviewMonth:    0,
-            reviewYear:     0,
-            reviewComment:  ''
+            reviewMonth: 0,
+            reviewYear: 0,
+            reviewComment: ''
         };
     }
 
-    const r        = ratings[0];
-    const val      = parseFloat(r.ratingValue) || 0;
+    const r = ratings[0];
+    const val = parseFloat(r.ratingValue) || 0;
     const category = val >= 4.5 ? 'Excellent'
-                   : val >= 3.5 ? 'Good'
-                   : val >= 2.5 ? 'Average'
-                   : val >  0   ? 'Needs Improvement'
-                   : 'N/A';
+        : val >= 3.5 ? 'Good'
+            : val >= 2.5 ? 'Average'
+                : val > 0 ? 'Needs Improvement'
+                    : 'N/A';
 
     return {
-        ratingValue:    val,
+        ratingValue: val,
         ratingCategory: category,
-        reviewMonth:    r.reviewMonth  || 0,
-        reviewYear:     r.reviewYear   || 0,
-        reviewComment:  r.reviewComment || ''
+        reviewMonth: r.reviewMonth || 0,
+        reviewYear: r.reviewYear || 0,
+        reviewComment: r.reviewComment || ''
     };
 });
 
-        // ── Dashboard: Performance Trend ──────────────────────────────────────────
-        // Returns all monthly ratings for the current (or requested) year,
-        // sorted Jan→Dec, so the frontend can draw a line chart.
+// ── Dashboard: Performance Trend ──────────────────────────────────────────
+// Returns all monthly ratings for the current (or requested) year,
+// sorted Jan→Dec, so the frontend can draw a line chart.
 this.on('getPerformanceTrend', async (req) => {
-    const user  = req.user || {};
+    const user = req.user || {};
     const email = (user.attr && (user.attr.email || user.attr.mail))
-               || user.id || '';
-    const year  = req.data.year || new Date().getFullYear();
+        || user.id || '';
+    const year = req.data.year || new Date().getFullYear();
 
     const emp = await SELECT.one.from(EMPLOYEE)
         .columns('employeeId')
@@ -666,14 +641,14 @@ this.on('getPerformanceTrend', async (req) => {
     const ratings = await SELECT.from(PERF)
         .where({
             employee_employeeId: emp.employeeId,
-            reviewYear:          year
+            reviewYear: year
         })
         .orderBy('reviewMonth asc');
 
     // Build 12-slot array — null for months with no rating
     const MONTH_NAMES = [
-        'Jan','Feb','Mar','Apr','May','Jun',
-        'Jul','Aug','Sep','Oct','Nov','Dec'
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
     ];
 
     const slots = Array(12).fill(null);
@@ -692,280 +667,279 @@ this.on('getPerformanceTrend', async (req) => {
 });
 
 
-        // ── Dashboard: Task Summary ────────────────────────────────────────────────
-        // Reuses existing TaskMaster entity.  Counts tasks by status for the
-        // logged-in employee.  No duplicate entity or service is created.
-        this.on('getTaskSummary', async (req) => {
-            const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id || '';
+// ── Dashboard: Task Summary ────────────────────────────────────────────────
+// Reuses existing TaskMaster entity.  Counts tasks by status for the
+// logged-in employee.  No duplicate entity or service is created.
+this.on('getTaskSummary', async (req) => {
+    const user = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+        || user.id || '';
 
-            const emp = await SELECT.one
-                .from(EMPLOYEE)
-                .columns('employeeId')
-                .where({ email: email });
+    const emp = await SELECT.one
+        .from(EMPLOYEE)
+        .columns('employeeId')
+        .where({ email: email });
 
-            if (!emp) {
-                return { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 };
-            }
+    if (!emp) {
+        return { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 };
+    }
 
-            const tasks = await SELECT
-                .from(TASK)
-                .where({ assignedTo_employeeId: emp.employeeId });
+    const tasks = await SELECT
+        .from(TASK)
+        .where({ assignedTo_employeeId: emp.employeeId });
 
-            let notStarted = 0, inProgress = 0, inReview = 0, completed = 0;
+    let notStarted = 0, inProgress = 0, inReview = 0, completed = 0;
 
-            (tasks || []).forEach(t => {
-                const s = (t.status || '').toLowerCase().replace(/\s+/g, '');
-                if (s === 'notstarted') notStarted++;
-                else if (s === 'inprogress') inProgress++;
-                else if (s === 'inreview') inReview++;
-                else if (s === 'completed') completed++;
-                // 'closed' intentionally omitted from chart — adjust if needed
-            });
+    (tasks || []).forEach(t => {
+        const s = (t.status || '').toLowerCase().replace(/\s+/g, '');
+        if (s === 'notstarted') notStarted++;
+        else if (s === 'inprogress') inProgress++;
+        else if (s === 'inreview') inReview++;
+        else if (s === 'completed') completed++;
+        // 'closed' intentionally omitted from chart — adjust if needed
+    });
 
-            return {
-                total: notStarted + inProgress + inReview + completed,
-                notStarted: notStarted,
-                inProgress: inProgress,
-                inReview: inReview,
-                completed: completed
-            };
+    return {
+        total: notStarted + inProgress + inReview + completed,
+        notStarted: notStarted,
+        inProgress: inProgress,
+        inReview: inReview,
+        completed: completed
+    };
+});
+
+// ── Dashboard: Leave Balance ───────────────────────────────────
+// Get leave balance for the logged-in employee.
+// Fetches or creates default balance data.
+this.on('getLeaveBalance', async (req) => {
+    const user = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+        || user.id
+        || '';
+
+    const emp = await SELECT.one
+        .from(EMPLOYEE)
+        .columns('employeeId')
+        .where({ email: email });
+
+    if (!emp) {
+        return {
+            casualLeave: 0,
+            sickLeave: 0,
+            annualLeave: 0,
+            total: 0
+        };
+    }
+
+    // Try to fetch the balance; if it doesn't exist, return defaults
+    const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
+    const balance = await SELECT.one
+        .from(LEAVE_BALANCE)
+        .where({ employee_employeeId: emp.employeeId });
+
+    if (balance) {
+        const total = (balance.casualLeave || 0) + (balance.sickLeave || 0) + (balance.annualLeave || 0);
+        return {
+            casualLeave: balance.casualLeave || 0,
+            sickLeave: balance.sickLeave || 0,
+            annualLeave: balance.annualLeave || 0,
+            total: total
+        };
+    }
+
+    // Return default values if no balance record exists
+    return {
+        casualLeave: 6,
+        sickLeave: 4,
+        annualLeave: 8,
+        total: 18
+    };
+});
+
+// ── Dashboard: My Tasks ────────────────────────────────────────
+// Get summary of tasks assigned to the logged-in employee.
+// Returns counts of pending and high-priority tasks.
+this.on('getMyTasks', async (req) => {
+    const user = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+        || user.id || '';
+
+    const emp = await SELECT.one
+        .from(EMPLOYEE)
+        .columns('employeeId')
+        .where({ email: email });
+
+    if (!emp) {
+        return {
+            totalPending: 0,
+            highPriorityCount: 0,
+            mediumPriorityCount: 0,
+            lowPriorityCount: 0
+        };
+    }
+
+    const tasks = await SELECT.from(TASK)
+        .where({ assignedTo_employeeId: emp.employeeId });
+
+    let totalPending = 0;
+    let highPriorityCount = 0;
+    let mediumPriorityCount = 0;
+    let lowPriorityCount = 0;
+
+    tasks.forEach(t => {
+        if (t.status && t.status !== 'Completed' && t.status !== 'Closed') {
+            totalPending++;
+            if (t.priority === 'High') highPriorityCount++;
+            else if (t.priority === 'Medium') mediumPriorityCount++;
+            else if (t.priority === 'Low') lowPriorityCount++;
+        }
+    });
+
+    return {
+        totalPending,
+        highPriorityCount,
+        mediumPriorityCount,
+        lowPriorityCount
+    };
+});
+
+// ── Mark Attendance ───────────────────────────────────────────────────
+this.on('markAttendance', async (req) => {
+    const { attendanceDate, attendanceDay, attendanceTime } = req.data;
+    const user = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+        || user.id || '';
+
+    if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
+
+    const emp = await SELECT.one.from(EMPLOYEE)
+        .columns('employeeId', 'employeeName')
+        .where({ email });
+
+    if (!emp) return req.error(404, 'Employee not found for this login.');
+
+    // Prevent duplicate marking for the same day
+    const existing = await SELECT.one.from(ATTENDANCE)
+        .where({
+            employee_employeeId: emp.employeeId,
+            attendanceDate: attendanceDate
         });
 
-        // ── Dashboard: Leave Balance ───────────────────────────────────
-        // Get leave balance for the logged-in employee.
-        // Fetches or creates default balance data.
-        this.on('getLeaveBalance', async (req) => {
-            const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id
-                || '';
+    if (existing) {
+        return req.error(409,
+            `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`
+        );
+    }
 
-            const emp = await SELECT.one
-                .from(EMPLOYEE)
-                .columns('employeeId')
-                .where({ email: email });
+    const attendanceId = `${emp.employeeId}-${attendanceDate}`;
 
-            if (!emp) {
-                return {
-                    casualLeave: 0,
-                    sickLeave: 0,
-                    annualLeave: 0,
-                    total: 0
-                };
-            }
+    await INSERT.into(ATTENDANCE).entries({
+        attendanceId,
+        employee_employeeId: emp.employeeId,
+        attendanceDate,
+        attendanceDay: attendanceDay || '',
+        attendanceTime: attendanceTime || new Date().toTimeString().split(' ')[0],
+        status: 'Present'
+    });
 
-            // Try to fetch the balance; if it doesn't exist, return defaults
-            const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
-            const balance = await SELECT.one
-                .from(LEAVE_BALANCE)
-                .where({ employee_employeeId: emp.employeeId });
+    cds.log('attend').info(
+        `Attendance marked: ${emp.employeeId} (${emp.employeeName}) ` +
+        `on ${attendanceDate} at ${attendanceTime}`
+    );
 
-            if (balance) {
-                const total = (balance.casualLeave || 0) + (balance.sickLeave || 0) + (balance.annualLeave || 0);
-                return {
-                    casualLeave: balance.casualLeave || 0,
-                    sickLeave: balance.sickLeave || 0,
-                    annualLeave: balance.annualLeave || 0,
-                    total: total
-                };
-            }
+    return {
+        attendanceId,
+        employeeId: emp.employeeId,
+        employeeName: emp.employeeName,
+        attendanceDate,
+        attendanceDay,
+        attendanceTime,
+        message: `Attendance recorded successfully for ${attendanceDay}, ${attendanceDate}.`
+    };
+}),
 
-            // Return default values if no balance record exists
+    // ── Check Today Attendance ────────────────────────────────────────────
+    this.on('getAttendance', async (req) => {
+        const user = req.user || {};
+        const email = (user.attr && (user.attr.email || user.attr.mail))
+            || user.id || '';
+
+        const emp = await SELECT.one.from(EMPLOYEE)
+            .columns('employeeId')
+            .where({ email });
+
+        if (!emp) {
             return {
-                casualLeave: 6,
-                sickLeave: 4,
-                annualLeave: 8,
-                total: 18
+                attendancePercentage: 0,
+                presentCount: 0,
+                absentCount: 0,
+                monthLabel: new Date().toLocaleString('default', { month: 'long' })
             };
-        });
+        }
 
-        // ── Dashboard: My Tasks ────────────────────────────────────────
-        // Get summary of tasks assigned to the logged-in employee.
-        // Returns counts of pending and high-priority tasks.
-        this.on('getMyTasks', async (req) => {
-            const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id || '';
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth() + 1;
+        const monthStr = String(month).padStart(2, '0');
 
-            const emp = await SELECT.one
-                .from(EMPLOYEE)
-                .columns('employeeId')
-                .where({ email: email });
-
-            if (!emp) {
-                return {
-                    totalPending: 0,
-                    highPriorityCount: 0,
-                    mediumPriorityCount: 0,
-                    lowPriorityCount: 0
-                };
-            }
-
-            const tasks = await SELECT.from(TASK)
-                .where({ assignedTo_employeeId: emp.employeeId });
-
-            let totalPending = 0;
-            let highPriorityCount = 0;
-            let mediumPriorityCount = 0;
-            let lowPriorityCount = 0;
-
-            tasks.forEach(t => {
-                if (t.status && t.status !== 'Completed' && t.status !== 'Closed') {
-                    totalPending++;
-                    if (t.priority === 'High') highPriorityCount++;
-                    else if (t.priority === 'Medium') mediumPriorityCount++;
-                    else if (t.priority === 'Low') lowPriorityCount++;
-                }
-            });
-
-            return {
-                totalPending,
-                highPriorityCount,
-                mediumPriorityCount,
-                lowPriorityCount
-            };
-        });
-
-        // ── Mark Attendance ───────────────────────────────────────────────────
-        this.on('markAttendance', async (req) => {
-            const { attendanceDate, attendanceDay, attendanceTime } = req.data;
-            const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id || '';
-
-            if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
-
-            const emp = await SELECT.one.from(EMPLOYEE)
-                .columns('employeeId', 'employeeName')
-                .where({ email });
-
-            if (!emp) return req.error(404, 'Employee not found for this login.');
-
-            // Prevent duplicate marking for the same day
-            const existing = await SELECT.one.from(ATTENDANCE)
-                .where({
-                    employee_employeeId: emp.employeeId,
-                    attendanceDate: attendanceDate
-                });
-
-            if (existing) {
-                return req.error(409,
-                    `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`
-                );
-            }
-
-            const attendanceId = `${emp.employeeId}-${attendanceDate}`;
-
-            await INSERT.into(ATTENDANCE).entries({
-                attendanceId,
-                employee_employeeId: emp.employeeId,
-                attendanceDate,
-                attendanceDay: attendanceDay || '',
-                attendanceTime: attendanceTime || new Date().toTimeString().split(' ')[0],
-                status: 'Present'
-            });
-
-            cds.log('attend').info(
-                `Attendance marked: ${emp.employeeId} (${emp.employeeName}) ` +
-                `on ${attendanceDate} at ${attendanceTime}`
-            );
-
-            return {
-                attendanceId,
-                employeeId: emp.employeeId,
-                employeeName: emp.employeeName,
-                attendanceDate,
-                attendanceDay,
-                attendanceTime,
-                message: `Attendance recorded successfully for ${attendanceDay}, ${attendanceDate}.`
-            };
-        }),
-
-            // ── Check Today Attendance ────────────────────────────────────────────
-            this.on('getAttendance', async (req) => {
-                const user = req.user || {};
-                const email = (user.attr && (user.attr.email || user.attr.mail))
-                    || user.id || '';
-
-                const emp = await SELECT.one.from(EMPLOYEE)
-                    .columns('employeeId')
-                    .where({ email });
-
-                if (!emp) {
-                    return {
-                        attendancePercentage: 0,
-                        presentCount: 0,
-                        absentCount: 0,
-                        monthLabel: new Date().toLocaleString('default', { month: 'long' })
-                    };
-                }
-
-                const now = new Date();
-                const year = now.getFullYear();
-                const month = now.getMonth() + 1;
-                const monthStr = String(month).padStart(2, '0');
-
-                // Fetch all attendance records for current month
-                const records = await SELECT.from(ATTENDANCE)
-                    .where(`employee_employeeId = '${emp.employeeId}'
+        // Fetch all attendance records for current month
+        const records = await SELECT.from(ATTENDANCE)
+            .where(`employee_employeeId = '${emp.employeeId}'
             AND attendanceDate LIKE '${year}-${monthStr}-%'`);
 
-                const presentCount = records.length;
+        const presentCount = records.length;
 
-                // Count working days (Mon-Fri) from 1st of month up to today
-                let workingDays = 0;
-                const d = new Date(year, month - 1, 1);
-                while (d <= now && d.getMonth() === month - 1) {
-                    const day = d.getDay();
-                    if (day !== 0 && day !== 6) workingDays++;
-                    d.setDate(d.getDate() + 1);
-                }
+        // Count working days (Mon-Fri) from 1st of month up to today
+        let workingDays = 0;
+        const d = new Date(year, month - 1, 1);
+        while (d <= now && d.getMonth() === month - 1) {
+            const day = d.getDay();
+            if (day !== 0 && day !== 6) workingDays++;
+            d.setDate(d.getDate() + 1);
+        }
 
-                const absentCount = Math.max(0, workingDays - presentCount);
-                const attendancePercentage = workingDays > 0
-                    ? Math.round((presentCount / workingDays) * 100)
-                    : 0;
+        const absentCount = Math.max(0, workingDays - presentCount);
+        const attendancePercentage = workingDays > 0
+            ? Math.round((presentCount / workingDays) * 100)
+            : 0;
 
-                return {
-                    attendancePercentage,
-                    presentCount,
-                    absentCount,
-                    monthLabel: now.toLocaleString('default', { month: 'long' })
-                };
-            });
+        return {
+            attendancePercentage,
+            presentCount,
+            absentCount,
+            monthLabel: now.toLocaleString('default', { month: 'long' })
+        };
+    });
 
-        this.on('getTodayAttendance', async (req) => {
-            const { attendanceDate } = req.data;
-            const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail))
-                || user.id || '';
+this.on('getTodayAttendance', async (req) => {
+    const { attendanceDate } = req.data;
+    const user = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail))
+        || user.id || '';
 
-            const emp = await SELECT.one.from(EMPLOYEE)
-                .columns('employeeId')
-                .where({ email });
+    const emp = await SELECT.one.from(EMPLOYEE)
+        .columns('employeeId')
+        .where({ email });
 
-            if (!emp) {
-                return { alreadyMarked: false, attendanceTime: null, attendanceDay: null };
-            }
+    if (!emp) {
+        return { alreadyMarked: false, attendanceTime: null, attendanceDay: null };
+    }
 
-            const existing = await SELECT.one.from(ATTENDANCE)
-                .where({
-                    employee_employeeId: emp.employeeId,
-                    attendanceDate: attendanceDate
-                });
-
-            return {
-                alreadyMarked: !!existing,
-                attendanceTime: existing ? existing.attendanceTime : null,
-                attendanceDay: existing ? existing.attendanceDay : null
-            };
+    const existing = await SELECT.one.from(ATTENDANCE)
+        .where({
+            employee_employeeId: emp.employeeId,
+            attendanceDate: attendanceDate
         });
 
-        return super.init();
-    }
-}
+    return {
+        alreadyMarked: !!existing,
+        attendanceTime: existing ? existing.attendanceTime : null,
+        attendanceDay: existing ? existing.attendanceDay : null
+    };
+});
+
+return super.init();
+
 
 class ManagerService extends cds.ApplicationService {
     async init() {
@@ -1007,67 +981,67 @@ class ManagerService extends cds.ApplicationService {
         });
 
 
-this.on('submitPerformanceRating', async (req) => {
-    const {
-        employeeId, ratingValue, reviewMonth,
-        reviewYear, reviewComment, ratingCategory
-    } = req.data;
+        this.on('submitPerformanceRating', async (req) => {
+            const {
+                employeeId, ratingValue, reviewMonth,
+                reviewYear, reviewComment, ratingCategory
+            } = req.data;
 
-    if (!employeeId)  return req.error(400, 'employeeId is required.');
-    if (!ratingValue) return req.error(400, 'ratingValue is required.');
-    if (!reviewMonth) return req.error(400, 'reviewMonth is required.');
-    if (!reviewYear)  return req.error(400, 'reviewYear is required.');
+            if (!employeeId) return req.error(400, 'employeeId is required.');
+            if (!ratingValue) return req.error(400, 'ratingValue is required.');
+            if (!reviewMonth) return req.error(400, 'reviewMonth is required.');
+            if (!reviewYear) return req.error(400, 'reviewYear is required.');
 
-    const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
+            const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
 
-    // Check if rating already exists for this employee/month/year
-    const existing = await SELECT.one.from(PERF)
-        .where({
-            employee_employeeId: employeeId,
-            reviewMonth:         reviewMonth,
-            reviewYear:          reviewYear
-        });
+            // Check if rating already exists for this employee/month/year
+            const existing = await SELECT.one.from(PERF)
+                .where({
+                    employee_employeeId: employeeId,
+                    reviewMonth: reviewMonth,
+                    reviewYear: reviewYear
+                });
 
-    const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2,'0')}`;
+            const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2, '0')}`;
 
-    if (existing) {
-        // Update existing rating
-        await UPDATE(PERF)
-            .set({
-                ratingValue:    ratingValue,
-                reviewComment:  reviewComment || '',
+            if (existing) {
+                // Update existing rating
+                await UPDATE(PERF)
+                    .set({
+                        ratingValue: ratingValue,
+                        reviewComment: reviewComment || '',
+                        ratingCategory: ratingCategory || ''
+                    })
+                    .where({ ratingId: existing.ratingId });
+
+                cds.log('perf').info(
+                    `Rating updated: ${employeeId} — ${reviewMonth}/${reviewYear} — ${ratingValue}`
+                );
+                return {
+                    ratingId: existing.ratingId,
+                    message: `Rating updated for ${employeeId} — ${reviewMonth}/${reviewYear}`
+                };
+            }
+
+            // Insert new rating
+            await INSERT.into(PERF).entries({
+                ratingId,
+                employee_employeeId: employeeId,
+                ratingValue: ratingValue,
+                reviewMonth: reviewMonth,
+                reviewYear: reviewYear,
+                reviewComment: reviewComment || '',
                 ratingCategory: ratingCategory || ''
-            })
-            .where({ ratingId: existing.ratingId });
+            });
 
-        cds.log('perf').info(
-            `Rating updated: ${employeeId} — ${reviewMonth}/${reviewYear} — ${ratingValue}`
-        );
-        return {
-            ratingId: existing.ratingId,
-            message:  `Rating updated for ${employeeId} — ${reviewMonth}/${reviewYear}`
-        };
-    }
-
-    // Insert new rating
-    await INSERT.into(PERF).entries({
-        ratingId,
-        employee_employeeId: employeeId,
-        ratingValue:         ratingValue,
-        reviewMonth:         reviewMonth,
-        reviewYear:          reviewYear,
-        reviewComment:       reviewComment  || '',
-        ratingCategory:      ratingCategory || ''
-    });
-
-    cds.log('perf').info(
-        `Rating added: ${employeeId} — ${reviewMonth}/${reviewYear} — ${ratingValue}`
-    );
-    return {
-        ratingId,
-        message: `Rating submitted for ${employeeId} — ${reviewMonth}/${reviewYear}`
-    };
-});
+            cds.log('perf').info(
+                `Rating added: ${employeeId} — ${reviewMonth}/${reviewYear} — ${ratingValue}`
+            );
+            return {
+                ratingId,
+                message: `Rating submitted for ${employeeId} — ${reviewMonth}/${reviewYear}`
+            };
+        });
 
         this.on('notifyTaskAssignment', async (req) => {
             const {

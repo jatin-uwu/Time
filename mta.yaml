@@ -91,3 +91,7 @@ resources:
               - '$XSAPPNAME.HR'
     requires:
       - name: app-api
+
+properties:
+  GOOGLE_SERVICE_ACCOUNT_EMAIL: ~{google-sa-email}
+  GOOGLE_PRIVATE_KEY: ~{google-private-key}

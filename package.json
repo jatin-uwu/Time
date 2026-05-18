@@ -8,6 +8,8 @@
     "@cap-js/hana": "^2",
     "@sap/cds": "^9",
     "@sap/xssec": "^4",
+    "google-auth-library": "^10.6.2",
+    "node-fetch": "^3.3.2",
     "nodemailer": "^8.0.7"
   },
   "devDependencies": {
@@ -40,42 +42,57 @@
           "users": {
             "jatin": {
               "password": "jatin",
-              "roles": ["Manager", "Employee"],
+              "roles": [
+                "Manager",
+                "Employee"
+              ],
               "attr": {
                 "email": "jatin.bajaj@ccentrik.com"
               }
             },
             "punit": {
               "password": "punit",
-              "roles": ["HR", "Employee"],
+              "roles": [
+                "HR",
+                "Employee"
+              ],
               "attr": {
                 "email": "punit.sharma@ccentrik.com"
               }
             },
             "neha": {
               "password": "neha",
-              "roles": ["Employee"],
+              "roles": [
+                "Employee"
+              ],
               "attr": {
                 "email": "neha.kapoor@ccentrik.com"
               }
             },
             "ankit": {
               "password": "ankit",
-              "roles": ["Employee"],
+              "roles": [
+                "Employee"
+              ],
               "attr": {
                 "email": "ankit.verma@ccentrik.com"
               }
             },
             "vineet": {
               "password": "vineet",
-              "roles": ["Manager", "Employee"],
+              "roles": [
+                "Manager",
+                "Employee"
+              ],
               "attr": {
                 "email": "vineet@ccentrik.com"
               }
             },
             "founder": {
               "password": "founder",
-              "roles": ["Manager"],
+              "roles": [
+                "Manager"
+              ],
               "attr": {
                 "email": "founder@ccentrik.com"
               }
