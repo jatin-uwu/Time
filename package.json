@@ -35,6 +35,7 @@
       },
       "auth": {
         "[production]": {
+          "kind": "xsuaa",
           "strategy": "JWT"
         },
         "[development]": {
@@ -98,11 +99,6 @@
               }
             }
           }
-        }
-      },
-      "[production]": {
-        "auth": {
-          "kind": "xsuaa"
         }
       }
     }

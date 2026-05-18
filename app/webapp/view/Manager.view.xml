@@ -106,10 +106,10 @@
 
                     <HBox class="tsMgrActionBtns">
                         <Button text="Approve" type="Accept" icon="sap-icon://accept"
-                            enabled="{= ${mgrView>/selectedStatus} === 'Pending' }"
+                            enabled="{= ${mgrView>/selectedStatus} === 'Submitted' }"
                             press=".onApprove" />
                         <Button text="Reject" type="Reject" icon="sap-icon://decline"
-                            enabled="{= ${mgrView>/selectedStatus} === 'Pending' }"
+                            enabled="{= ${mgrView>/selectedStatus} === 'Submitted' }"
                             press=".onReject"
                             class="sapUiSmallMarginBegin" />
                     </HBox>

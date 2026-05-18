@@ -16,7 +16,11 @@ sap.ui.define([
     const DAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
     const MONTHS    = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-    const STATUS_STATE = { "Pending": "Warning", "Approved": "Success", "Rejected": "Error" };
+    const STATUS_STATE = { "Pending": "Warning", "Submitted": "Warning", "Approved": "Success", "Rejected": "Error" };
+
+    function toShortLabel(date) {
+        return `${date.getDate()} ${MONTHS[date.getMonth()]}`;
+    }
 
     function buildDayLabels(weekStart) {
         return DAY_NAMES.map((name, i) => {
@@ -40,6 +44,7 @@ sap.ui.define([
                 selectedSubmittedOn: "",
                 selectedStatus:      "",
                 selectedRemarks:     "",
+                busy:                false,
                 days:  DAY_NAMES.map(n => ({ name: n, date: "" })),
                 rows:     [],
                 rowCount: 1
@@ -52,47 +57,94 @@ sap.ui.define([
         },
 
         _onRouteMatched() {
-            // Always start on the list view when route is entered
-            this._oMgrModel.setProperty("/showDetail",   false);
-            this._oMgrModel.setProperty("/pageTitle",    "Manager – Approvals");
+            this._oMgrModel.setProperty("/showDetail", false);
+            this._oMgrModel.setProperty("/pageTitle",  "Manager – Approvals");
             this._selectedSub = null;
             this._loadSubmissions();
         },
 
-        // ── Back button (list ← detail) ──────────────────────────────────────
         onNavBack() {
             this._oMgrModel.setProperty("/showDetail", false);
             this._oMgrModel.setProperty("/pageTitle",  "Manager – Approvals");
         },
 
-        // ── Submission list ──────────────────────────────────────────────────
-
+        // ── Load submissions from ManagerService (/manager) ───────────────
+        // Uses getModel("manager") — NOT getModel() which is /employee
         _loadSubmissions() {
+            const oMgrModel = this.getOwnerComponent().getModel("manager");
+            if (!oMgrModel) {
+                this._loadFromLocalStorage();
+                return;
+            }
+
+            this._oMgrModel.setProperty("/busy", true);
+
+            oMgrModel.bindList("/PendingApprovals", null, null, null, {
+                $expand: "employee"
+            }).requestContexts(0, 200)
+                .then(aCtx => {
+                    const timesheets = aCtx.map(c => c.getObject()).filter(Boolean);
+                    const submissions = timesheets.map(ts => {
+                        const weekStart = ts.weekStartDate
+                            ? new Date(ts.weekStartDate + "T00:00:00") : null;
+                        const weekEnd   = ts.weekEndDate
+                            ? new Date(ts.weekEndDate   + "T00:00:00") : null;
+                        const weekRange = weekStart && weekEnd
+                            ? `${toShortLabel(weekStart)} – ${toShortLabel(weekEnd)}`
+                            : ts.weekStartDate || "";
+
+                        return {
+                            timesheetId:   ts.timesheetId,
+                            employeeId:    ts.employee_employeeId,
+                            employeeName:  (ts.employee && ts.employee.employeeName)
+                                           || ts.employee_employeeId || "Employee",
+                            weekStart:     ts.weekStartDate,
+                            weekEnd:       ts.weekEndDate,
+                            weekRange,
+                            submittedOn:   ts.submittedOn
+                                ? new Date(ts.submittedOn).toLocaleString() : "",
+                            grandTotal:    "—",
+                            status:        ts.status,
+                            remarks:       ts.remarks || "",
+                            _source:       "backend"
+                        };
+                    });
+
+                    const pending = submissions.filter(s => s.status === "Submitted").length;
+                    this._oMgrModel.setProperty("/allSubmissions", submissions);
+                    this._oMgrModel.setProperty("/pendingCount",   pending);
+
+                    const oSeg = this.byId("statusFilter");
+                    const sKey = oSeg ? oSeg.getSelectedKey() : "Pending";
+                    this._applyFilter(sKey, submissions);
+                })
+                .catch(() => this._loadFromLocalStorage())
+                .finally(() => this._oMgrModel.setProperty("/busy", false));
+        },
+
+        _loadFromLocalStorage() {
             const oComp = this.getOwnerComponent();
-            // Wait for the JWT user, then filter to this manager's reportees.
-            const ready = oComp.getCurrentUser ? oComp.getCurrentUser() : Promise.resolve(null);
-            ready.then(() => {
-                const oHistoryModel = oComp.getModel("history");
-                const everyone      = oHistoryModel.getProperty("/submissions") || [];
-                const sMyId         = oComp.getCurrentEmployeeId();
+            const sMyId = oComp.getCurrentEmployeeId();
+            const all   = (oComp.getModel("history") &&
+                           oComp.getModel("history").getProperty("/submissions")) || [];
+            const mine  = all.filter(s => !s.reportsTo || s.reportsTo === sMyId);
 
-                // Show only submissions whose reportsTo points to this manager.
-                // Submissions without reportsTo (legacy) are visible to all
-                // managers — they pre-date the routing fix.
-                const all = everyone.filter(s => !s.reportsTo || s.reportsTo === sMyId);
+            const pending = mine.filter(s => s.status === "Pending").length;
+            this._oMgrModel.setProperty("/allSubmissions", mine);
+            this._oMgrModel.setProperty("/pendingCount",   pending);
 
-                const pending = all.filter(s => s.status === "Pending").length;
-                this._oMgrModel.setProperty("/allSubmissions", all);
-                this._oMgrModel.setProperty("/pendingCount",   pending);
-
-                const oSeg = this.byId("statusFilter");
-                const sKey = oSeg ? oSeg.getSelectedKey() : "Pending";
-                this._applyFilter(sKey, all);
-            });
+            const oSeg = this.byId("statusFilter");
+            const sKey = oSeg ? oSeg.getSelectedKey() : "Pending";
+            this._applyFilter(sKey, mine);
         },
 
         _applyFilter(sKey, all) {
-            const filtered = sKey === "All" ? all : all.filter(s => s.status === sKey);
+            // "Pending" tab shows status=Submitted (backend) OR status=Pending (localStorage)
+            const filtered = sKey === "All" ? all
+                : sKey === "Pending"  ? all.filter(s => s.status === "Pending" || s.status === "Pending")
+                : sKey === "Approved" ? all.filter(s => s.status === "Approved")
+                : sKey === "Rejected" ? all.filter(s => s.status === "Rejected")
+                : all;
             this._oMgrModel.setProperty("/submissions", filtered);
         },
 
@@ -100,10 +152,10 @@ sap.ui.define([
             const sKey = oEvent.getParameter("item").getKey();
             const all  = this._oMgrModel.getProperty("/allSubmissions");
             this._applyFilter(sKey, all);
-            this._oMgrModel.setProperty("/hasSelection", false);
             this._selectedSub = null;
         },
 
+        // ── Open timesheet detail ─────────────────────────────────────────
         onApprovalSelect(oEvent) {
             const oCtx = oEvent.getParameter("listItem").getBindingContext("mgrView");
             if (!oCtx) return;
@@ -120,9 +172,87 @@ sap.ui.define([
             this._oMgrModel.setProperty("/selectedStatus",      sub.status);
             this._oMgrModel.setProperty("/selectedRemarks",     sub.remarks || "");
 
-            this._buildTableRows(sub);
+            if (sub._source === "backend") {
+                this._loadEntriesFromBackend(sub);
+            } else {
+                this._buildTableRows(sub);
+            }
         },
 
+        // ── Load entries using getModel("manager") ────────────────────────
+        _loadEntriesFromBackend(sub) {
+            const oMgrModel = this.getOwnerComponent().getModel("manager");
+            if (!oMgrModel) { this._buildTableRows(sub); return; }
+
+            this._oMgrModel.setProperty("/busy", true);
+
+            oMgrModel.bindList("/ApprovalEntries", null, null, null, {
+                $expand: "task",
+                $filter: `timesheet_timesheetId eq '${sub.timesheetId}'`
+            }).requestContexts(0, 200)
+                .then(aCtx => {
+                    const entries    = aCtx.map(c => c.getObject()).filter(Boolean);
+                    const weekStart  = new Date(sub.weekStart + "T00:00:00");
+                    const weekDates  = DAYS.map((_, i) => {
+                        const d = new Date(weekStart);
+                        d.setDate(weekStart.getDate() + i);
+                        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+                    });
+
+                    // Pivot entries into grid rows
+                    const rowMap = new Map();
+                    entries.forEach(entry => {
+                        const taskId   = entry.task_taskId || "unknown";
+                        const taskName = (entry.task && entry.task.taskName) || "Unknown Task";
+                        const taskDesc = (entry.task && entry.task.taskDescription) || "";
+                        if (!rowMap.has(taskId)) {
+                            rowMap.set(taskId, { taskId, projectName: taskName, taskName: taskDesc,
+                                mon:0, tue:0, wed:0, thu:0, fri:0, sat:0, sun:0 });
+                        }
+                        const idx = weekDates.indexOf(entry.workDate);
+                        if (idx >= 0) rowMap.get(taskId)[DAYS[idx]] += parseFloat(entry.hoursWorked) || 0;
+                    });
+
+                    const dataRows = Array.from(rowMap.values()).map(row => {
+                        const r = { taskId: row.taskId, projectName: row.projectName, taskName: row.taskName };
+                        DAYS.forEach(d => { r[d] = row[d] > 0 ? this._toHHMM(row[d]) : ""; });
+                        const rowDec = DAYS.reduce((sum, d) => sum + this._parseHHMM(r[d]), 0);
+                        r._type      = "data";
+                        r._weekTotal = this._toHHMM(rowDec);
+                        return r;
+                    });
+
+                    // Day total row
+                    const colDec = { mon:0, tue:0, wed:0, thu:0, fri:0, sat:0, sun:0 };
+                    dataRows.forEach(row => DAYS.forEach(d => { colDec[d] += this._parseHHMM(row[d]); }));
+                    const grand = DAYS.reduce((s, d) => s + colDec[d], 0);
+
+                    const dayTotalRow = {
+                        _type: "total", projectName: "Day Total(Hrs)", taskName: "",
+                        _weekTotal: this._toHHMM(grand)
+                    };
+                    DAYS.forEach(d => { dayTotalRow[d] = this._toHHMM(colDec[d]); });
+
+                    // Status row
+                    const status    = sub.status || "Submitted";
+                    const statusRow = { _type: "status", projectName: "Status", taskName: "", _weekTotal: "" };
+                    DAYS.forEach(d => {
+                        statusRow[d] = dataRows.some(r => r[d] && r[d] !== "") ? status : "";
+                    });
+
+                    const allRows = [...dataRows, dayTotalRow, statusRow];
+                    this._oMgrModel.setProperty("/days",     buildDayLabels(weekStart));
+                    this._oMgrModel.setProperty("/rows",     allRows);
+                    this._oMgrModel.setProperty("/rowCount", allRows.length);
+
+                    const oTable = this.byId("mgrTable");
+                    if (oTable) oTable.setFixedBottomRowCount(2);
+                })
+                .catch(() => this._buildTableRows(sub))
+                .finally(() => this._oMgrModel.setProperty("/busy", false));
+        },
+
+        // Fallback for localStorage-based submissions
         _buildTableRows(submission) {
             const weekStart = new Date(submission.weekStart + "T00:00:00");
             this._oMgrModel.setProperty("/days", buildDayLabels(weekStart));
@@ -146,9 +276,7 @@ sap.ui.define([
             const statusRow = { _type: "status", projectName: "Status", taskName: "", _weekTotal: "" };
             DAYS.forEach(d => {
                 const hasValue = dataRows.some(r => r[d] && r[d] !== "");
-                if (!hasValue) { statusRow[d] = ""; return; }
-                const isDayApproved = dataRows.some(r => (r.approved || {})[d] === true);
-                statusRow[d] = isDayApproved ? "Approved" : status;
+                statusRow[d] = hasValue ? status : "";
             });
 
             const allRows = [...dataRows, dayTotalRow, statusRow];
@@ -159,14 +287,13 @@ sap.ui.define([
             if (oTable) oTable.setFixedBottomRowCount(2);
         },
 
-        // ── Approve ──────────────────────────────────────────────────────────
-
+        // ── Approve ───────────────────────────────────────────────────────
         onApprove() {
             const sub = this._selectedSub;
             if (!sub) return;
 
             MessageBox.confirm(
-                `Approve the timesheet for ${sub.weekRange} submitted by ${sub.employeeName || "this employee"}?`,
+                `Approve timesheet for ${sub.weekRange} submitted by ${sub.employeeName || "this employee"}?`,
                 {
                     title:   "Approve Timesheet",
                     actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
@@ -179,19 +306,30 @@ sap.ui.define([
 
         _doApprove() {
             const sub = this._selectedSub;
-            this._markApprovedInLocked(sub.weekStart);
-            this._persistStatus(sub.weekStart, "Approved", "");
-            this._postNotification(sub.weekStart, sub.weekRange, "approved", "");
+            if (!sub) return;
 
-            this._oMgrModel.setProperty("/selectedStatus",  "Approved");
-            this._oMgrModel.setProperty("/selectedRemarks", "");
-            this._rebuildStatus("Approved");
-            this._loadSubmissions();
-            MessageToast.show("Timesheet approved.");
+            this._oMgrModel.setProperty("/busy", true);
+
+            fetch("/manager/approveTimesheet", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body:    JSON.stringify({ timesheetId: sub.timesheetId, remarks: "" })
+            })
+            .then(r => r.ok ? r.json() : Promise.reject(new Error("Approve failed: " + r.status)))
+            .then(() => {
+                this._oMgrModel.setProperty("/selectedStatus",  "Approved");
+                this._oMgrModel.setProperty("/selectedRemarks", "");
+                // Post localStorage notification for employee
+                this._postNotification(sub.weekStart, sub.weekRange, "approved", "", sub.employeeId);
+                this._loadSubmissions();
+                this._rebuildStatus("Approved");
+                MessageToast.show("Timesheet approved.");
+            })
+            .catch(err => MessageBox.error((err && err.message) || "Approve failed."))
+            .finally(() => this._oMgrModel.setProperty("/busy", false));
         },
 
-        // ── Reject ───────────────────────────────────────────────────────────
-
+        // ── Reject ────────────────────────────────────────────────────────
         onReject() {
             if (!this._oRejectTextArea) {
                 this._oRejectTextArea = new TextArea({
@@ -199,14 +337,13 @@ sap.ui.define([
                     rows:        4,
                     width:       "100%"
                 });
-
                 this._oRejectDialog = new Dialog({
                     title: "Reject Timesheet",
                     content: [
                         new VBox({
                             items: [
                                 new Text({
-                                    text:     "Provide a reason for rejection. The employee will be notified and can edit their timesheet.",
+                                    text:     "Provide a reason for rejection. The employee will be notified.",
                                     wrapping: true
                                 }).addStyleClass("sapUiSmallMarginBottom"),
                                 new Label({ text: "Reason", labelFor: this._oRejectTextArea }),
@@ -233,82 +370,42 @@ sap.ui.define([
         _onRejectConfirm() {
             const sComment = this._oRejectTextArea.getValue().trim();
             if (!sComment) {
-                MessageToast.show("Please enter a rejection reason before confirming.");
+                MessageToast.show("Please enter a rejection reason.");
                 return;
             }
 
             const sub = this._selectedSub;
             this._oRejectDialog.close();
+            this._oMgrModel.setProperty("/busy", true);
 
-            this._persistStatus(sub.weekStart, "Rejected", sComment);
-            this._unlockWeek(sub.weekStart);
-            this._postNotification(sub.weekStart, sub.weekRange, "rejected", sComment);
-
-            this._oMgrModel.setProperty("/selectedStatus",  "Rejected");
-            this._oMgrModel.setProperty("/selectedRemarks", sComment);
-            this._rebuildStatus("Rejected");
-            this._loadSubmissions();
-
-            MessageToast.show(`Timesheet rejected. ${sub.employeeName || "Employee"} has been notified.`);
+            fetch("/manager/rejectTimesheet", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body:    JSON.stringify({ timesheetId: sub.timesheetId, remarks: sComment })
+            })
+            .then(r => r.ok ? r.json() : Promise.reject(new Error("Reject failed: " + r.status)))
+            .then(() => {
+                this._oMgrModel.setProperty("/selectedStatus",  "Rejected");
+                this._oMgrModel.setProperty("/selectedRemarks", sComment);
+                this._postNotification(sub.weekStart, sub.weekRange, "rejected", sComment, sub.employeeId);
+                this._loadSubmissions();
+                this._rebuildStatus("Rejected");
+                MessageToast.show(`Timesheet rejected. ${sub.employeeName || "Employee"} has been notified.`);
+            })
+            .catch(err => MessageBox.error((err && err.message) || "Reject failed."))
+            .finally(() => this._oMgrModel.setProperty("/busy", false));
         },
 
-        // ── Mark approved days in locked model ───────────────────────────────
-        _markApprovedInLocked(sWeekStart) {
-            const oLocksModel = this.getOwnerComponent().getModel("locked");
-            const allLocks    = oLocksModel.getData();
-            const weekRows    = allLocks[sWeekStart];
-            if (!weekRows) return;
+        // ── Post localStorage notification (for Notifications page) ──────
+        _postNotification(sWeekStart, sWeekRange, sType, sComment, sRecipientId) {
+            const oComp       = this.getOwnerComponent();
+            const oNotifModel = oComp.getModel("notifications");
+            if (!oNotifModel) return;
 
-            weekRows.forEach(row => {
-                if (!row.approved) row.approved = { mon:false, tue:false, wed:false, thu:false, fri:false, sat:false, sun:false };
-                DAYS.forEach(d => { if (row.locked[d]) row.approved[d] = true; });
-            });
-            oLocksModel.setData(allLocks);
-            this.getOwnerComponent().persistLocked();
-        },
-
-        // ── Shared persistence helpers ────────────────────────────────────────
-
-        _persistStatus(sWeekStart, sStatus, sRemarks) {
-            const oHistoryModel = this.getOwnerComponent().getModel("history");
-            const submissions   = oHistoryModel.getProperty("/submissions") || [];
-            const idx = submissions.findIndex(s => s.weekStart === sWeekStart);
-            if (idx >= 0) {
-                submissions[idx].status  = sStatus;
-                submissions[idx].remarks = sRemarks;
-                this._selectedSub = submissions[idx];
-                oHistoryModel.setProperty("/submissions", submissions);
-                this.getOwnerComponent().persistHistory();
-            }
-        },
-
-        _unlockWeek(sWeekStart) {
-            const oLocksModel = this.getOwnerComponent().getModel("locked");
-            const allLocks    = oLocksModel.getData();
-            const weekRows    = allLocks[sWeekStart];
-            if (!weekRows) return;
-
-            weekRows.forEach(row => {
-                const approved = row.approved || {};
-                DAYS.forEach(d => { if (!approved[d]) row.locked[d] = false; });
-                row._rowLocked = DAYS.some(d => row.locked[d]);
-            });
-            oLocksModel.setData(allLocks);
-            this.getOwnerComponent().persistLocked();
-        },
-
-        _postNotification(sWeekStart, sWeekRange, sType, sComment) {
-            const oNotifModel = this.getOwnerComponent().getModel("notifications");
-            const items       = oNotifModel.getProperty("/items") || [];
-
-            // The notification must go to the person who submitted the
-            // timesheet — never the approver.
-            const sub = this._selectedSub || {};
-            const sRecipient = sub.submittedBy || null;
-
+            const items = oNotifModel.getProperty("/items") || [];
             const message = sType === "approved"
                 ? `Your timesheet for ${sWeekRange} has been approved by your manager.`
-                : `Your timesheet for ${sWeekRange} was rejected by your manager. Reason: ${sComment}`;
+                : `Your timesheet for ${sWeekRange} was rejected. Reason: ${sComment}`;
 
             const notif = {
                 weekStart:           sWeekStart,
@@ -317,26 +414,30 @@ sap.ui.define([
                 message,
                 read:                false,
                 timestamp:           new Date().toISOString(),
-                recipientEmployeeId: sRecipient
+                recipientEmployeeId: sRecipientId || null
             };
 
-            // Replace any existing notification for the same week + recipient
-            const existing = items.findIndex(n =>
+            const idx = items.findIndex(n =>
                 n.weekStart === sWeekStart &&
-                (n.recipientEmployeeId || null) === (sRecipient || null));
-            if (existing >= 0) { items[existing] = notif; } else { items.unshift(notif); }
+                (n.recipientEmployeeId || null) === (sRecipientId || null)
+            );
+            if (idx >= 0) { items[idx] = notif; } else { items.unshift(notif); }
 
             oNotifModel.setProperty("/items", items);
-            this.getOwnerComponent().persistNotifications();
+            oComp.persistNotifications();
         },
 
         _rebuildStatus(sNewStatus) {
             if (!this._selectedSub) return;
-            this._buildTableRows({ ...this._selectedSub, status: sNewStatus });
+            const updated = Object.assign({}, this._selectedSub, { status: sNewStatus });
+            if (updated._source === "backend") {
+                this._loadEntriesFromBackend(updated);
+            } else {
+                this._buildTableRows(updated);
+            }
         },
 
-        // ── Formatters ────────────────────────────────────────────────────────
-
+        // ── Formatters ────────────────────────────────────────────────────
         formatStatusState(sStatus) {
             return STATUS_STATE[sStatus] || "None";
         },
@@ -349,9 +450,14 @@ sap.ui.define([
 
         formatDayCellClass(sValue, sType) {
             if (!sValue) return "";
-            if (sType === "total")  return "tsColTotalCell";
+            if (sType === "total") return "tsColTotalCell";
             if (sType === "status") {
-                const map = { "Approved": "tsStatusApproved", "Pending": "tsStatusPending", "Rejected": "tsStatusRejected" };
+                const map = {
+                    "Approved":  "tsStatusApproved",
+                    "Submitted": "tsStatusPending",
+                    "Pending":   "tsStatusPending",
+                    "Rejected":  "tsStatusRejected"
+                };
                 return map[sValue] || "";
             }
             return "tsHistGreenCell";

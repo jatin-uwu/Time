@@ -26,6 +26,13 @@ entity EmployeeMaster : managed {
     emergencyContact    : String(15);
     bloodGroup          : String(5);
 
+    workLocation        : String(50);
+    maritalStatus       : String(20);
+    fatherName          : String(100);
+    partnerName         : String(100);
+    marriageDate        : Date;
+    hasKids             : String(5);
+
     // Bank details (kept inline; promote to a separate entity if you ever
     // need to support multiple bank accounts per employee).
     bankAccountNumber   : String(30);

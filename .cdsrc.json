@@ -1,7 +1,10 @@
 {
   "requires": {
     "db": {
-      "kind": "sqlite"
+      "kind": "sqlite",
+      "credentials": {
+        "database": "db.sqlite"
+      }
     }
   },
   "build": {

@@ -142,7 +142,7 @@ class EmployeeService extends cds.ApplicationService {
             }
 
             await UPDATE(HEADER)
-                .set({ status: 'Submitted', submittedOn: new Date() })
+                .set({ status: 'Pending',  submittedOn: new Date() })
                 .where({ timesheetId });
 
             await UPDATE(ENTRY)
@@ -477,6 +477,13 @@ class EmployeeService extends cds.ApplicationService {
 this.on('getLeaveOverview', async (req) => {
     const user = req.user || {};
     const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+        // ── Dashboard: Work Anniversary ────────────────────────────────
+        // Calculate years completed since joining date for the logged-in employee.
+        this.on('getWorkAnniversary', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id
+                || '';
 
     const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
     if (!emp) {
@@ -952,10 +959,10 @@ class ManagerService extends cds.ApplicationService {
                 return req.error(404, `Timesheet '${timesheetId}' not found.`);
             }
 
-            if (header.status !== 'Submitted') {
+            if (header.status !== 'Pending') {
                 return req.error(400,
                     `Cannot approve — current status is '${header.status}'. ` +
-                    `Only 'Submitted' timesheets can be approved.`
+                    `Only 'Pending' timesheets can be approved.`
                 );
             }
 
@@ -1112,10 +1119,10 @@ class ManagerService extends cds.ApplicationService {
                 return req.error(404, `Timesheet '${timesheetId}' not found.`);
             }
 
-            if (header.status !== 'Submitted') {
+            if (header.status !== 'Pending') {
                 return req.error(400,
                     `Cannot reject — current status is '${header.status}'. ` +
-                    `Only 'Submitted' timesheets can be rejected.`
+                    `Only 'Pending' timesheets can be rejected.`
                 );
             }
 
