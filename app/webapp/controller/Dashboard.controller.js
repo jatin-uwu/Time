@@ -428,15 +428,102 @@ _loadGreeting() {
         },
 
         _loadLeaveBalance() {
+            const MAX_BALANCE = {
+                Casual:    5,
+                Sick:      5,
+                Paid:      11,
+                Maternity: 180,
+                Paternity: 2
+            };
+
+            const oComp  = this.getOwnerComponent();
+            const oModel = oComp.getModel();
+            const sEmpId = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
+
+            // If we can't reach OData model, fall back to backend action
+            if (!oModel || !sEmpId) {
+                this._loadLeaveBalanceFallback();
+                return;
+            }
+
+            // Fetch leave history exactly like ApplyLeave.controller.js does
+            oModel.bindList("/LeaveRequests", null, null, [
+                new sap.ui.model.Filter(
+                    "employee_employeeId",
+                    sap.ui.model.FilterOperator.EQ,
+                    sEmpId
+                )
+            ]).requestContexts(0, 200)
+                .then(aCtx => {
+                    const history = aCtx.map(c => c.getObject()).filter(Boolean);
+                    const used = { Casual: 0, Sick: 0, Paid: 0, Maternity: 0, Paternity: 0 };
+
+                    // Same cascade logic as ApplyLeave._computeBalance — only Approved leaves
+                    history
+                        .filter(r => r.status === "Approved")
+                        .forEach(r => {
+                            const days = r.days || 0;
+                            if (!days) return;
+
+                            if (r.leaveType === "Sick") {
+                                let remaining = days;
+
+                                const sickAvail = Math.max(0, MAX_BALANCE.Sick - used.Sick);
+                                const fromSick  = Math.min(remaining, sickAvail);
+                                used.Sick      += fromSick;
+                                remaining      -= fromSick;
+
+                                if (remaining > 0) {
+                                    const casualAvail = Math.max(0, MAX_BALANCE.Casual - used.Casual);
+                                    const fromCasual  = Math.min(remaining, casualAvail);
+                                    used.Casual      += fromCasual;
+                                    remaining        -= fromCasual;
+                                }
+
+                                if (remaining > 0) {
+                                    const paidAvail = Math.max(0, MAX_BALANCE.Paid - used.Paid);
+                                    const fromPaid  = Math.min(remaining, paidAvail);
+                                    used.Paid      += fromPaid;
+                                }
+
+                            } else if (used[r.leaveType] !== undefined) {
+                                const avail = Math.max(0, MAX_BALANCE[r.leaveType] - used[r.leaveType]);
+                                used[r.leaveType] += Math.min(days, avail);
+                            }
+                        });
+
+                    const casual  = Math.max(0, MAX_BALANCE.Casual    - used.Casual);
+                    const sick    = Math.max(0, MAX_BALANCE.Sick      - used.Sick);
+                    const annual  = Math.max(0, MAX_BALANCE.Paid      - used.Paid);
+                    const total   = casual + sick + annual;
+                    const usedPct = Math.min(100, Math.round(
+                        ((MAX_BALANCE.Casual + MAX_BALANCE.Sick + MAX_BALANCE.Paid - total) /
+                        (MAX_BALANCE.Casual + MAX_BALANCE.Sick + MAX_BALANCE.Paid)) * 100
+                    ));
+
+                    this._oDashModel.setProperty("/leaveBalance", {
+                        casualLeave: casual,
+                        sickLeave:   sick,
+                        annualLeave: annual,
+                        total,
+                        usedPct
+                    });
+                })
+                .catch(() => this._loadLeaveBalanceFallback())
+                .finally(() => this._refreshDash());
+        },
+
+        // Fallback if OData not available
+        _loadLeaveBalanceFallback() {
             this._callAction("getLeaveBalance").then(oData => {
                 const casual = oData.casualLeave || 0;
-                const sick = oData.sickLeave || 0;
-                const annual = oData.annualLeave || 0;
-                const total = casual + sick + annual;
+                const sick   = oData.sickLeave   || 0;
+                const annual = oData.annualLeave  || 0;
+                const total  = casual + sick + annual;
                 this._oDashModel.setProperty("/leaveBalance", {
                     casualLeave: casual, sickLeave: sick, annualLeave: annual,
                     total,
-                    usedPct: Math.min(100, Math.round((total / 30) * 100))
+                    usedPct: Math.min(100, Math.round((total / 21) * 100))
                 });
             }).catch(() => {
                 this._oDashModel.setProperty("/leaveBalance",
