@@ -54,6 +54,7 @@
                 alternateRowColors="false"
                 fixedColumnCount="1"
                 class="timesheetTable"
+                width="100%"
                 rowHeight="48">
 
                 <table:columns>
@@ -210,18 +211,69 @@
                 </table:columns>
             </table:Table>
 
-            <!-- Action Bar -->
-            <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsActionBar">
-                <Button text="+ Add Row" type="Emphasized" press=".onAddRow" />
-                <HBox alignItems="Center">
-                    <Button text="Save" icon="sap-icon://save" type="Default"
-                        press=".onSave" class="sapUiSmallMarginEnd"
-                        tooltip="Save your progress without submitting" />
-                    <Button text="Submit" type="Accept" press=".onSubmit"
-                        enabled="{view>/canSubmit}"
-                        tooltip="Fill Mon–Fri hours for all rows before submitting" />
-                </HBox>
-            </HBox>
+<!-- Action Bar -->
+<HBox justifyContent="SpaceBetween" alignItems="Center" class="tsActionBar">
+
+    <!-- Add Row — hidden when Submitted or Approved -->
+    <Button text="+ Add Row" type="Emphasized" press=".onAddRow"
+        visible="{= ${view>/timesheetStatus} !== 'Submitted' 
+               &amp;&amp; ${view>/timesheetStatus} !== 'Approved' }"/>
+
+    <HBox alignItems="Center" renderType="Bare">
+
+        <!-- Pending Approval badge — shown when Submitted -->
+        <HBox alignItems="Center" renderType="Bare"
+            visible="{= ${view>/timesheetStatus} === 'Submitted' }"
+            class="sapUiSmallMarginEnd">
+            <core:Icon src="sap-icon://pending" color="#f59e0b"
+                size="1.2rem" class="sapUiTinyMarginEnd"/>
+            <Text text="Pending Approval"
+                class="sapUiSmallMarginEnd"
+                style="font-weight:600;color:#f59e0b;font-size:0.95rem;"/>
+        </HBox>
+
+        <!-- Approved badge — shown when Approved -->
+        <HBox alignItems="Center" renderType="Bare"
+            visible="{= ${view>/timesheetStatus} === 'Approved' }"
+            class="sapUiSmallMarginEnd">
+            <core:Icon src="sap-icon://accept" color="#16a34a"
+                size="1.2rem" class="sapUiTinyMarginEnd"/>
+            <Text text="Approved"
+                style="font-weight:600;color:#16a34a;font-size:0.95rem;"/>
+        </HBox>
+
+        <!-- Rejected badge — shown when Rejected -->
+        <HBox alignItems="Center" renderType="Bare"
+            visible="{= ${view>/timesheetStatus} === 'Rejected' }"
+            class="sapUiSmallMarginEnd">
+            <core:Icon src="sap-icon://decline" color="#dc2626"
+                size="1.2rem" class="sapUiTinyMarginEnd"/>
+            <Text text="Rejected —"
+                style="font-weight:600;color:#dc2626;font-size:0.95rem;"/>
+        </HBox>
+
+        <!-- Save — hidden when Submitted or Approved -->
+        <Button text="Save" icon="sap-icon://save" type="Default"
+            press=".onSave" class="sapUiSmallMarginEnd"
+            tooltip="Save your progress without submitting"
+            visible="{= ${view>/timesheetStatus} !== 'Submitted' 
+                   &amp;&amp; ${view>/timesheetStatus} !== 'Approved' }"/>
+
+        <!-- Submit — only for Draft or empty status -->
+        <Button text="Submit" type="Accept" press=".onSubmit"
+            enabled="{view>/canSubmit}"
+            tooltip="Fill Mon–Fri hours for all rows before submitting"
+            visible="{= ${view>/timesheetStatus} === 'Draft' 
+                   || ${view>/timesheetStatus} === '' }"/>
+
+        <!-- Edit and Resend — only for Rejected -->
+        <Button text="Edit &amp; Resend" type="Emphasized"
+            icon="sap-icon://edit"
+            press=".onEditAndResend"
+            visible="{= ${view>/timesheetStatus} === 'Rejected' }"/>
+
+    </HBox>
+</HBox>
 
         </content>
     </Page>

@@ -122,66 +122,45 @@ sap.ui.define([
         // ─────────────────────────────────────────────────────────────────────
         // Greeting
         // ─────────────────────────────────────────────────────────────────────
-        _loadGreeting() {
-            const oComp = this.getOwnerComponent();
-            if (!oComp) return;
+_loadGreeting() {
+    const oComp = this.getOwnerComponent();
+    if (!oComp) return;
 
-            const hour = new Date().getHours();
-            const timeGreet = hour < 12 ? "Good Morning"
-                : hour < 17 ? "Good Afternoon"
-                    : "Good Evening";
-            // const emoji     = hour < 12 ? "☀️" : hour < 17 ? "👋" : "🌙";
+    const hour = new Date().getHours();
+    const timeGreet = hour < 12 ? "Good Morning"
+        : hour < 17 ? "Good Afternoon"
+        : "Good Evening";
 
-            const buildHTML = (name) => {
-                const namePart = name
-                    ? `, <span style="color:black;font-style:italic;">${name}!</span>`
-                    : `!`;
-                return `
-            <div>
-                <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-                    <span style="
-                        font-size: 1.85rem;
-                        font-weight: 800;
-                        color: #232823;
-                        letter-spacing: -0.4px;
-                        font-family: 'Segoe UI', Arial, sans-serif;
-                        line-height: 1.1;
-                    ">${timeGreet}${namePart}</span>
-        
-                </div>
-                <div style="
-                    font-size: 1.05rem;
-                    font-weight: 500;
-                    color: #151719;
-                    margin: 0;
-                ">Here's what's happening with you today.</div>
-            </div>`;
-            };
+    const buildHTML = (name) => {
+        const namePart = name
+            ? `, <span style="color:black;font-style:italic;">${name}!</span>`
+            : `!`;
+        return `
+        <div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+                <span style="font-size:1.85rem;font-weight:800;color:#232823;
+                             letter-spacing:-0.4px;font-family:'Segoe UI',Arial,sans-serif;
+                             line-height:1.1;">${timeGreet}${namePart}</span>
+            </div>
+            <div style="font-size:1.05rem;font-weight:500;color:#151719;margin:0;">
+                Here's what's happening with you today.
+            </div>
+        </div>`;
+    };
 
-            // Set immediately — never blank
-            this._oDashModel.setProperty("/greetingHTML", buildHTML(""));
+    // Render immediately with no name so it's never blank
+    this._oDashModel.setProperty("/greetingHTML", buildHTML(""));
 
-            const setName = (name) => {
-                if (name) this._oDashModel.setProperty("/greetingHTML", buildHTML(name));
-            };
-
-            if (oComp.getCurrentUser) {
-                oComp.getCurrentUser().then(u => {
-                    if (u && u.employeeName) { setName(u.employeeName); return; }
-                    if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
-                        oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
-                            if (emp && emp.employeeName) setName(emp.employeeName);
-                        });
-                    }
-                });
-                return;
+    // Always wait for the real backend-resolved user — never use the
+    // localStorage fallback for the greeting, as it causes wrong names.
+    if (oComp.getCurrentUser) {
+        oComp.getCurrentUser().then(u => {
+            if (u && u.employeeName) {
+                this._oDashModel.setProperty("/greetingHTML", buildHTML(u.employeeName));
             }
-            if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
-                oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(emp => {
-                    if (emp && emp.employeeName) setName(emp.employeeName);
-                });
-            }
-        },
+        });
+    }
+},
 
         // ─────────────────────────────────────────────────────────────────────
         // Route match — kick off all loaders

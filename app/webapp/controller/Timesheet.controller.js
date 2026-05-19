@@ -8,16 +8,16 @@ sap.ui.define([
 ], (Controller, JSONModel, MessageToast, MessageBox, Popover, Calendar) => {
     "use strict";
 
-    const DAYS      = ["mon","tue","wed","thu","fri","sat","sun"];
-    const DAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-    const MONTHS    = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-    const EMPTY_APPROVED = () => ({ mon:false, tue:false, wed:false, thu:false, fri:false, sat:false, sun:false });
+    const EMPTY_APPROVED = () => ({ mon: false, tue: false, wed: false, thu: false, fri: false, sat: false, sun: false });
 
     const EMPTY_ROW = () => ({
         projectName: "", taskName: "", taskId: "",
-        mon:"", tue:"", wed:"", thu:"", fri:"", sat:"", sun:"",
-        locked:   { mon:false, tue:false, wed:false, thu:false, fri:false, sat:false, sun:false },
+        mon: "", tue: "", wed: "", thu: "", fri: "", sat: "", sun: "",
+        locked: { mon: false, tue: false, wed: false, thu: false, fri: false, sat: false, sun: false },
         approved: EMPTY_APPROVED(),
         _rowLocked: false
     });
@@ -66,10 +66,10 @@ sap.ui.define([
     // Max 15 chars to fit the schema String(15).
     // Format: e.g. "1001270TASK0010" — empSuffix(4) + weekDay(3) + taskSuffix(7) + dayIdx(1)
     function makeEntryId(sEmpId, sWeekStart, sTaskId, dayIndex) {
-        const emp  = (sEmpId  || "").replace(/\D/g, "").slice(-4).padStart(4, "0");
+        const emp = (sEmpId || "").replace(/\D/g, "").slice(-4).padStart(4, "0");
         const week = (sWeekStart || "").replace(/-/g, "").slice(2, 7); // YYMMD → 5 chars
         const task = (sTaskId || "").replace(/\D/g, "").slice(-3).padStart(3, "0");
-        const day  = String(dayIndex);
+        const day = String(dayIndex);
         return (emp + week + task + day).substring(0, 15);
     }
 
@@ -77,18 +77,20 @@ sap.ui.define([
 
         onInit() {
             this._oViewModel = new JSONModel({
-                weekStart:       null,
+                weekStart: null,
                 weekStartFilter: "",
-                weekRangeLabel:  "",
-                grandTotal:      "0:00",
-                canSubmit:       false,
-                rowCount:        1,
-                canGoPrev:       false,
-                canGoNext:       false,
-                days:            [],
-                busy:            false,
-                colTotals: { mon:"0:00", tue:"0:00", wed:"0:00", thu:"0:00",
-                             fri:"0:00", sat:"0:00", sun:"0:00", total:"0:00" }
+                weekRangeLabel: "",
+                grandTotal: "0:00",
+                canSubmit: false,
+                rowCount: 1,
+                canGoPrev: false,
+                canGoNext: false,
+                days: [],
+                busy: false,
+                colTotals: {
+                    mon: "0:00", tue: "0:00", wed: "0:00", thu: "0:00",
+                    fri: "0:00", sat: "0:00", sun: "0:00", total: "0:00"
+                }
             });
             this.getView().setModel(this._oViewModel, "view");
 
@@ -120,6 +122,7 @@ sap.ui.define([
 
         _setWeekByFilter(sFilter) {
             const minWeek = getAllowedMinWeek();
+            this._savedDays = null;  
             const maxWeek = getAllowedMaxWeek();
             const [y, m, d] = sFilter.split("-").map(Number);
 
@@ -135,12 +138,12 @@ sap.ui.define([
             const end = new Date(start);
             end.setDate(start.getDate() + 6);
 
-            this._oViewModel.setProperty("/weekStart",       start);
+            this._oViewModel.setProperty("/weekStart", start);
             this._oViewModel.setProperty("/weekStartFilter", sFilter);
-            this._oViewModel.setProperty("/weekRangeLabel",  `${toShortLabel(start)} - ${toShortLabel(end)}`);
-            this._oViewModel.setProperty("/days",            buildDayLabels(start));
-            this._oViewModel.setProperty("/canGoPrev",       start.getTime() > minWeek.getTime());
-            this._oViewModel.setProperty("/canGoNext",       start.getTime() < maxWeek.getTime());
+            this._oViewModel.setProperty("/weekRangeLabel", `${toShortLabel(start)} - ${toShortLabel(end)}`);
+            this._oViewModel.setProperty("/days", buildDayLabels(start));
+            this._oViewModel.setProperty("/canGoPrev", start.getTime() > minWeek.getTime());
+            this._oViewModel.setProperty("/canGoNext", start.getTime() < maxWeek.getTime());
             this._loadTimesheetData();
         },
 
@@ -160,8 +163,9 @@ sap.ui.define([
 
         _setWeek(date) {
             const minWeek = getAllowedMinWeek();
+            this._savedDays = null;
             const maxWeek = getAllowedMaxWeek();
-            let   start   = getWeekStart(date);
+            let start = getWeekStart(date);
             if (start.getTime() < minWeek.getTime()) start = new Date(minWeek);
             if (start.getTime() > maxWeek.getTime()) start = new Date(maxWeek);
 
@@ -170,30 +174,30 @@ sap.ui.define([
 
             this._currentTimesheetId = null; // reset for new week
 
-            this._oViewModel.setProperty("/weekStart",       start);
+            this._oViewModel.setProperty("/weekStart", start);
             this._oViewModel.setProperty("/weekStartFilter", toDateString(start));
-            this._oViewModel.setProperty("/weekRangeLabel",  `${toShortLabel(start)} - ${toShortLabel(end)}`);
-            this._oViewModel.setProperty("/days",            buildDayLabels(start));
-            this._oViewModel.setProperty("/canGoPrev",       start.getTime() > minWeek.getTime());
-            this._oViewModel.setProperty("/canGoNext",       start.getTime() < maxWeek.getTime());
+            this._oViewModel.setProperty("/weekRangeLabel", `${toShortLabel(start)} - ${toShortLabel(end)}`);
+            this._oViewModel.setProperty("/days", buildDayLabels(start));
+            this._oViewModel.setProperty("/canGoPrev", start.getTime() > minWeek.getTime());
+            this._oViewModel.setProperty("/canGoNext", start.getTime() < maxWeek.getTime());
             this._loadTimesheetData();
         },
 
         onCalendarPress(oEvent) {
             if (!this._oCalPopover) {
-                const minWeek    = getAllowedMinWeek();
+                const minWeek = getAllowedMinWeek();
                 const maxWeekEnd = new Date(getAllowedMaxWeek());
                 maxWeekEnd.setDate(maxWeekEnd.getDate() + 6);
 
                 this._oDashCal = new Calendar({
                     minDate: minWeek,
                     maxDate: maxWeekEnd,
-                    select:  this.onCalendarWeekSelect.bind(this)
+                    select: this.onCalendarWeekSelect.bind(this)
                 });
                 this._oCalPopover = new Popover({
                     showHeader: false,
-                    placement:  "Bottom",
-                    content:    [this._oDashCal]
+                    placement: "Bottom",
+                    content: [this._oDashCal]
                 });
                 this.getView().addDependent(this._oCalPopover);
             }
@@ -201,7 +205,7 @@ sap.ui.define([
         },
 
         onCalendarWeekSelect(oEvent) {
-            const oCal   = oEvent.getSource();
+            const oCal = oEvent.getSource();
             const aDates = oCal.getSelectedDates();
             if (!aDates || !aDates.length) return;
             const oStart = aDates[0].getStartDate();
@@ -213,7 +217,7 @@ sap.ui.define([
         // ── Load timesheet from backend ───────────────────────────────────
         _loadTimesheetData() {
             const sWeekStart = this._oViewModel.getProperty("/weekStartFilter");
-            const oModel     = this.getOwnerComponent().getModel();
+            const oModel = this.getOwnerComponent().getModel();
             if (!oModel) { this._setRows([EMPTY_ROW()]); return; }
 
             this._oViewModel.setProperty("/busy", true);
@@ -224,12 +228,13 @@ sap.ui.define([
                 .then(aCtx => {
                     if (!aCtx || aCtx.length === 0) {
                         this._currentTimesheetId = null;
+                        this._savedDays = null;
                         this._setRows([EMPTY_ROW()]);
                         return;
                     }
                     const header = aCtx[0].getObject();
                     this._currentTimesheetId = header.timesheetId;
-                    this._currentStatus      = header.status;
+                    this._currentStatus = header.status;
 
                     const weekStart = this._oViewModel.getProperty("/weekStart");
                     const weekDates = DAYS.map((_, i) => {
@@ -254,27 +259,42 @@ sap.ui.define([
         },
 
         _pivotEntries(entries, weekDates, status) {
-            const rowMap   = new Map();
+            const rowMap = new Map();
             const isLocked = status === "Submitted" || status === "Approved";
 
             for (const entry of entries) {
-                const taskId   = entry.task_taskId ?? "unknown";
+                const taskId = entry.task_taskId ?? "unknown";
                 const taskName = entry.task?.taskName ?? "Unknown Task";
                 const taskDesc = entry.task?.taskDescription ?? "";
 
                 if (!rowMap.has(taskId)) {
-                    rowMap.set(taskId, { taskId, projectName: taskName, taskName: taskDesc,
-                        mon:0, tue:0, wed:0, thu:0, fri:0, sat:0, sun:0 });
+                    rowMap.set(taskId, {
+                        taskId, projectName: taskName, taskName: taskDesc,
+                        mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, sat: 0, sun: 0
+                    });
                 }
                 const idx = weekDates.indexOf(entry.workDate);
                 if (idx >= 0) rowMap.get(taskId)[DAYS[idx]] += parseFloat(entry.hoursWorked) || 0;
             }
 
+            // ── Track which days have saved hours so new rows lock them ──
+            this._savedDays = {
+                mon: false, tue: false, wed: false,
+                thu: false, fri: false, sat: false, sun: false
+            };
+            Array.from(rowMap.values()).forEach(row => {
+                DAYS.forEach(d => {
+                    if ((row[d] || 0) > 0) this._savedDays[d] = true;
+                });
+            });
+
             return Array.from(rowMap.values()).map(row => {
                 const r = {
                     taskId: row.taskId, projectName: row.projectName, taskName: row.taskName,
-                    locked:   { mon:isLocked, tue:isLocked, wed:isLocked, thu:isLocked,
-                                fri:isLocked, sat:isLocked, sun:isLocked },
+                    locked: {
+                        mon: isLocked, tue: isLocked, wed: isLocked, thu: isLocked,
+                        fri: isLocked, sat: isLocked, sun: isLocked
+                    },
                     approved: EMPTY_APPROVED(),
                     _rowLocked: isLocked
                 };
@@ -284,10 +304,10 @@ sap.ui.define([
         },
 
         _fallbackTasks: [
-            { taskId: "TASK001", taskName: "UI Development",  taskDescription: "Build weekly timesheet UI" },
-            { taskId: "TASK002", taskName: "CAP Backend",     taskDescription: "Create CAP service and entities" },
-            { taskId: "TASK003", taskName: "HR Review",       taskDescription: "Employee onboarding checklist" },
-            { taskId: "TASK004", taskName: "Sales Followup",  taskDescription: "Client meeting updates" }
+            { taskId: "TASK001", taskName: "UI Development", taskDescription: "Build weekly timesheet UI" },
+            { taskId: "TASK002", taskName: "CAP Backend", taskDescription: "Create CAP service and entities" },
+            { taskId: "TASK003", taskName: "HR Review", taskDescription: "Employee onboarding checklist" },
+            { taskId: "TASK004", taskName: "Sales Followup", taskDescription: "Client meeting updates" }
         ],
 
         _loadTasks() {
@@ -302,22 +322,22 @@ sap.ui.define([
 
         onTaskSelect(oEvent) {
             const oComboBox = oEvent.getSource();
-            const sKey      = oComboBox.getSelectedKey();
-            const oContext  = oComboBox.getBindingContext("rows");
+            const sKey = oComboBox.getSelectedKey();
+            const oContext = oComboBox.getBindingContext("rows");
             if (!oContext) return;
 
             const sPath = oContext.getPath();
             if (sKey) {
                 const task = this._oTasksModel.getData().find(t => t.taskId === sKey);
                 if (task) {
-                    this._oRowsModel.setProperty(sPath + "/taskId",      task.taskId);
+                    this._oRowsModel.setProperty(sPath + "/taskId", task.taskId);
                     this._oRowsModel.setProperty(sPath + "/projectName", task.taskName);
-                    this._oRowsModel.setProperty(sPath + "/taskName",    task.taskDescription || "");
+                    this._oRowsModel.setProperty(sPath + "/taskName", task.taskDescription || "");
                 }
             } else {
-                this._oRowsModel.setProperty(sPath + "/taskId",      "");
+                this._oRowsModel.setProperty(sPath + "/taskId", "");
                 this._oRowsModel.setProperty(sPath + "/projectName", "");
-                this._oRowsModel.setProperty(sPath + "/taskName",    "");
+                this._oRowsModel.setProperty(sPath + "/taskName", "");
             }
         },
 
@@ -327,31 +347,91 @@ sap.ui.define([
             this._updateRowCount();
         },
 
+        _newLockedRow() {
+            const saved = this._savedDays || {};
+            const locked = {};
+            DAYS.forEach(d => { locked[d] = saved[d] === true; });
+            return {
+                projectName: "", taskName: "", taskId: "",
+                mon: "", tue: "", wed: "", thu: "", fri: "", sat: "", sun: "",
+                locked,
+                approved: EMPTY_APPROVED(),
+                _rowLocked: false
+            };
+        },
+
         onAddRow() {
             const rows = this._oRowsModel.getProperty("/rows");
-            rows.push(EMPTY_ROW());
+            rows.push(this._newLockedRow());  // ← was EMPTY_ROW()
             this._oRowsModel.setProperty("/rows", rows);
             this._updateRowCount();
         },
 
         onSave() {
-            const rows       = this._oRowsModel.getProperty("/rows");
+            const rows = this._oRowsModel.getProperty("/rows");
             const sWeekStart = this._oViewModel.getProperty("/weekStartFilter");
             this._oViewModel.setProperty("/busy", true);
+
             this._saveToBackend(rows, sWeekStart, "Draft")
-                .then(() => MessageToast.show("Draft saved."))
+                .then(() => {
+                    // ── Sync to shared models so Dashboard bar chart updates ──
+                    this._syncToDashboard(rows, sWeekStart);
+                    MessageToast.show("Draft saved.");
+                })
                 .catch(err => MessageBox.error((err && err.message) || "Save failed."))
                 .finally(() => this._oViewModel.setProperty("/busy", false));
+        },
+
+        _syncToDashboard(rows, sWeekStart) {
+            const oComp = this.getOwnerComponent();
+
+            // 1. Write to "locked" model — Dashboard reads this for bar chart
+            const oLocksModel = oComp.getModel("locked");
+            if (oLocksModel) {
+                oLocksModel.setProperty("/" + sWeekStart, rows);
+                oComp.persistLocked();
+            }
+
+            // 2. Write to "history" model — Dashboard reads this as fallback
+            const oHistModel = oComp.getModel("history");
+            if (oHistModel) {
+                const submissions = oHistModel.getProperty("/submissions") || [];
+                const existingIdx = submissions.findIndex(s => s.weekStart === sWeekStart);
+
+                const entry = {
+                    weekStart: sWeekStart,
+                    rows: rows,
+                    status: "Draft",
+                    timesheetId: this._currentTimesheetId
+                };
+
+                if (existingIdx >= 0) {
+                    submissions[existingIdx] = entry;
+                } else {
+                    submissions.push(entry);
+                }
+
+                oHistModel.setProperty("/submissions", submissions);
+                oComp.persistHistory();
+            }
+            // Update _savedDays so immediately-added rows lock saved days
+this._savedDays = { mon:false, tue:false, wed:false,
+                    thu:false, fri:false, sat:false, sun:false };
+rows.forEach(row => {
+    DAYS.forEach(d => {
+        if (this._parseHHMM(row[d]) > 0) this._savedDays[d] = true;
+    });
+});
         },
 
         onSubmit() {
             const rows = this._oRowsModel.getProperty("/rows");
 
-            const colDec = { mon:0, tue:0, wed:0, thu:0, fri:0 };
-            rows.forEach(r => ["mon","tue","wed","thu","fri"].forEach(d => { colDec[d] += this._parseHHMM(r[d]); }));
-            const missingDays = ["mon","tue","wed","thu","fri"].filter(d => colDec[d] === 0);
+            const colDec = { mon: 0, tue: 0, wed: 0, thu: 0, fri: 0 };
+            rows.forEach(r => ["mon", "tue", "wed", "thu", "fri"].forEach(d => { colDec[d] += this._parseHHMM(r[d]); }));
+            const missingDays = ["mon", "tue", "wed", "thu", "fri"].filter(d => colDec[d] === 0);
             if (missingDays.length > 0) {
-                const names = { mon:"Monday", tue:"Tuesday", wed:"Wednesday", thu:"Thursday", fri:"Friday" };
+                const names = { mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday" };
                 MessageBox.error(
                     "Please fill hours for: " + missingDays.map(d => names[d]).join(", ") + ".",
                     { title: "Incomplete Timesheet" }
@@ -373,7 +453,7 @@ sap.ui.define([
             MessageBox.confirm(
                 `Send timesheet for ${this._oViewModel.getProperty("/weekRangeLabel")} for approval?`,
                 {
-                    title:   "Send for Approval",
+                    title: "Send for Approval",
                     actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
                     onClose: (sAction) => {
                         if (sAction === MessageBox.Action.OK) this._doSubmit(rows);
@@ -389,9 +469,9 @@ sap.ui.define([
             this._saveToBackend(rows, sWeekStart, "Draft")
                 .then(sTimesheetId => {
                     return fetch("/employee/submitTimesheet", {
-                        method:  "POST",
+                        method: "POST",
                         headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                        body:    JSON.stringify({ timesheetId: sTimesheetId })
+                        body: JSON.stringify({ timesheetId: sTimesheetId })
                     }).then(r => r.ok ? r.json() : Promise.reject(new Error("Submit action failed: " + r.status)));
                 })
                 .then(() => {
@@ -401,6 +481,7 @@ sap.ui.define([
                         return { ...row, locked, _rowLocked: DAYS.some(d => locked[d]) };
                     });
                     this._setRows(updatedRows);
+                    this._syncToDashboard(updatedRows, sWeekStart);  // ← ADD THIS
                     MessageToast.show("Sent for approval! Your manager will review your timesheet.");
                 })
                 .catch(err => {
@@ -419,12 +500,12 @@ sap.ui.define([
         //   3. DELETE each existing entry individually
         //   4. POST new entries with stable, unique IDs
         _saveToBackend(rows, sWeekStart, sStatus) {
-            const oComp     = this.getOwnerComponent();
-            const sEmpId    = oComp.getCurrentEmployeeId();
+            const oComp = this.getOwnerComponent();
+            const sEmpId = oComp.getCurrentEmployeeId();
             const weekStart = this._oViewModel.getProperty("/weekStart");
-            const weekEnd   = new Date(weekStart);
+            const weekEnd = new Date(weekStart);
             weekEnd.setDate(weekStart.getDate() + 6);
-            const sWeekEnd  = toDateString(weekEnd);
+            const sWeekEnd = toDateString(weekEnd);
 
             // ── Stable timesheetId: empId + weekStart (no random) ────────
             // e.g. "EMP1002-20260511" → trimmed to 15 chars → "EMP1002-202605"
@@ -447,93 +528,110 @@ sap.ui.define([
                     // the same cell on re-save. Max 15 chars.
                     // Format: TSIDprefix(8) + R(row,1) + D(day,1) → too short
                     // Better: empSuffix(4) + weekCompact(6) + row(2) + day(1) = 13 chars
-                    const empNum  = (sEmpId  || "").replace(/\D/g, "").slice(-4).padStart(4, "0");
-                    const wk      = sWeekStart.replace(/-/g, "").slice(2); // 6 chars YYMMDD
-                    const rPad    = String(rowIdx).padStart(2, "0");
-                    const dPad    = String(dayIdx);
+                    const empNum = (sEmpId || "").replace(/\D/g, "").slice(-4).padStart(4, "0");
+                    const wk = sWeekStart.replace(/-/g, "").slice(2); // 6 chars YYMMDD
+                    const rPad = String(rowIdx).padStart(2, "0");
+                    const dPad = String(dayIdx);
                     const entryId = (empNum + wk + rPad + dPad).substring(0, 15);
 
                     entries.push({
                         entryId,
                         timesheet_timesheetId: sTimesheetId,
-                        task_taskId:           row.taskId,
-                        workDate:              toDateString(workDate),
-                        hoursWorked:           val,
-                        description:           row.projectName || "",
-                        entryStatus:           "Open",
-                        isLocked:              false
+                        task_taskId: row.taskId,
+                        workDate: toDateString(workDate),
+                        hoursWorked: val,
+                        description: row.projectName || "",
+                        entryStatus: "Open",
+                        isLocked: false
                     });
                 });
             });
 
             const headers = { "Content-Type": "application/json", "Accept": "application/json" };
 
-            // Step 1 — Create header (POST, ignore 409 conflict = already exists)
-            return fetch("/employee/MyTimesheets", {
-                method: "POST", headers,
-                body: JSON.stringify({
-                    timesheetId:         sTimesheetId,
-                    employee_employeeId: sEmpId,
-                    weekStartDate:       sWeekStart,
-                    weekEndDate:         sWeekEnd,
-                    status:              "Draft",
-                    submissionType:      "Weekly",
-                    isAutoApproved:      false
+// Step 1 — UPSERT header: try POST, fall back to PATCH if already exists
+const headerBody = {
+    timesheetId:         sTimesheetId,
+    employee_employeeId: sEmpId,
+    weekStartDate:       sWeekStart,
+    weekEndDate:         sWeekEnd,
+    status:              "Draft",
+    submissionType:      "Weekly",
+    isAutoApproved:      false
+};
+
+return fetch("/employee/MyTimesheets", {
+    method: "POST", headers,
+    body: JSON.stringify(headerBody)
+})
+.then(r => {
+    // 201 = created, fine
+    if (r.ok) return;
+    // 409 (HANA) or 500 with PK error (SQLite) = already exists, PATCH it
+    if (r.status === 409 || r.status === 500) {
+        return fetch(`/employee/MyTimesheets('${sTimesheetId}')`, {
+            method: "PATCH", headers,
+            body: JSON.stringify({ status: "Draft" })
+        }).then(pr => {
+            if (!pr.ok) {
+                return pr.text().then(t =>
+                    Promise.reject(new Error(`Header PATCH failed ${pr.status}: ${t}`))
+                );
+            }
+        });
+    }
+    return r.text().then(t =>
+        Promise.reject(new Error(`Header POST failed ${r.status}: ${t}`))
+    );
+})
+
+                // Step 2 — Get existing entries to delete
+                .then(() => fetch(
+                    `/employee/MyEntries?$filter=timesheet_timesheetId eq '${sTimesheetId}'&$select=entryId`,
+                    { headers: { "Accept": "application/json" } }
+                ))
+                .then(r => r.ok ? r.json() : { value: [] })
+
+                // Step 3 — Delete existing entries sequentially
+                .then(data => {
+                    const existing = data.value || [];
+                    return existing.reduce((chain, e) =>
+                        chain.then(() =>
+                            fetch(`/employee/MyEntries('${e.entryId}')`, { method: "DELETE" })
+                                .catch(() => { }) // ignore individual delete errors
+                        ),
+                        Promise.resolve()
+                    );
                 })
-            })
-            .then(r => {
-                // 201 Created or 409 Already Exists are both fine
-                if (r.ok || r.status === 409) return;
-                return r.text().then(t => Promise.reject(new Error(`Header POST failed ${r.status}: ${t}`)));
-            })
 
-            // Step 2 — Get existing entries to delete
-            .then(() => fetch(
-                `/employee/MyEntries?$filter=timesheet_timesheetId eq '${sTimesheetId}'&$select=entryId`,
-                { headers: { "Accept": "application/json" } }
-            ))
-            .then(r => r.ok ? r.json() : { value: [] })
-
-            // Step 3 — Delete existing entries sequentially
-            .then(data => {
-                const existing = data.value || [];
-                return existing.reduce((chain, e) =>
+                // Step 4 — Insert new entries sequentially to avoid PK conflicts
+                .then(() => entries.reduce((chain, entry) =>
                     chain.then(() =>
-                        fetch(`/employee/MyEntries('${e.entryId}')`, { method: "DELETE" })
-                            .catch(() => {}) // ignore individual delete errors
+                        fetch("/employee/MyEntries", {
+                            method: "POST", headers,
+                            body: JSON.stringify(entry)
+                        }).then(r => {
+                            if (!r.ok) {
+                                return r.text().then(t =>
+                                    Promise.reject(new Error(`Entry POST failed ${r.status}: ${t}`))
+                                );
+                            }
+                        })
                     ),
                     Promise.resolve()
-                );
-            })
+                ))
 
-            // Step 4 — Insert new entries sequentially to avoid PK conflicts
-            .then(() => entries.reduce((chain, entry) =>
-                chain.then(() =>
-                    fetch("/employee/MyEntries", {
-                        method: "POST", headers,
-                        body: JSON.stringify(entry)
-                    }).then(r => {
-                        if (!r.ok) {
-                            return r.text().then(t =>
-                                Promise.reject(new Error(`Entry POST failed ${r.status}: ${t}`))
-                            );
-                        }
-                    })
-                ),
-                Promise.resolve()
-            ))
-
-            .then(() => sTimesheetId);
+                .then(() => sTimesheetId);
         },
 
         onHoursChange(oEvent) {
-            const oInput   = oEvent.getSource();
-            const sRaw     = oEvent.getParameter("value").trim();
-            const sDayKey  = oInput.data("day");
+            const oInput = oEvent.getSource();
+            const sRaw = oEvent.getParameter("value").trim();
+            const sDayKey = oInput.data("day");
             const oContext = oInput.getBindingContext("rows");
             if (!oContext) return;
 
-            const decimal    = this._parseHHMM(sRaw);
+            const decimal = this._parseHHMM(sRaw);
             const sFormatted = decimal > 0 ? this._toHHMM(decimal) : "";
 
             this._oRowsModel.setProperty(oContext.getPath() + "/" + sDayKey, sFormatted);
@@ -542,18 +640,18 @@ sap.ui.define([
         },
 
         _refreshTotals(rows) {
-            const colDec = { mon:0, tue:0, wed:0, thu:0, fri:0, sat:0, sun:0 };
+            const colDec = { mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, sat: 0, sun: 0 };
             rows.forEach(row => DAYS.forEach(d => { colDec[d] += this._parseHHMM(row[d]); }));
 
-            const grand  = DAYS.reduce((s, d) => s + colDec[d], 0);
+            const grand = DAYS.reduce((s, d) => s + colDec[d], 0);
             const totals = {};
             DAYS.forEach(d => { totals[d] = this._toHHMM(colDec[d]); });
             totals.total = this._toHHMM(grand);
 
-            this._oViewModel.setProperty("/colTotals",  totals);
+            this._oViewModel.setProperty("/colTotals", totals);
             this._oViewModel.setProperty("/grandTotal", this._toHHMM(grand));
 
-            const canSubmit = ["mon","tue","wed","thu","fri"].every(d => colDec[d] > 0);
+            const canSubmit = ["mon", "tue", "wed", "thu", "fri"].every(d => colDec[d] > 0);
             this._oViewModel.setProperty("/canSubmit", canSubmit);
         },
 
@@ -562,8 +660,8 @@ sap.ui.define([
             this._oViewModel.setProperty("/rowCount", Math.max(n, 1));
         },
 
-        formatNotLocked(bLocked)           { return bLocked !== true; },
-        formatDayEnabled(bLocked, bFuture)  { return bLocked !== true && bFuture !== true; },
+        formatNotLocked(bLocked) { return bLocked !== true; },
+        formatDayEnabled(bLocked, bFuture) { return bLocked !== true && bFuture !== true; },
 
         formatRowTotal(...args) {
             const total = args.reduce((s, v) => s + this._parseHHMM(v), 0);

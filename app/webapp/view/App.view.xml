@@ -150,8 +150,9 @@
                             id="navPerfRating"
                             title="Performance Rating"
                             icon="sap-icon://survey"
+                            type="Active"
                             press=".onNavPerfRating"
-                            visible="{= ${app>/role} === 'manager' }" />
+                            visible="{= ${appView>/userRole} === 'manager'}" />
                         <StandardListItem title="Leave Approvals"
                             icon="sap-icon://away"
                             type="Active"

@@ -7,7 +7,7 @@
     displayBlock="true">
 
     <Page id="perfRatingPage"
-          title="Performance Rating"
+          title="Performance Rating and Feedback"
           showHeader="true"
           showNavButton="false">
 
@@ -18,10 +18,8 @@
                 <HBox justifyContent="SpaceBetween" alignItems="Center"
                       style="margin-bottom:1rem;">
                     <VBox>
-                        <Title text="Performance Rating" level="H3"
-                               style="font-size:1.4rem;font-weight:700;color:#111827;"/>
                         <Text text="Rate your team members monthly performance"
-                              style="font-size:0.88rem;color:#6b7280;margin-top:4px;"/>
+                              style="font-size:1.20rem;color:#6b7280;margin-top:200px;"/>
                     </VBox>
                 </HBox>
 
@@ -30,9 +28,9 @@
                              box-shadow:0 2px 12px rgba(0,0,0,0.08);
                              padding:24px;box-sizing:border-box;">
 
-                    <Title text="Add / Update Rating"
-                           level="H5"
-                           style="font-size:1rem;font-weight:600;
+                    <Title text="Add Rating"
+                           level="H2"
+                           style="font-size:50rem;font-weight:600;
                                   color:#111827;margin-bottom:20px;"/>
 
                     <!-- Employee Selection -->
@@ -125,27 +123,27 @@
                 </VBox>
 
                 <!-- Ratings History Table -->
-                <VBox style="background:#fff;border-radius:12px;
-                             box-shadow:0 2px 12px rgba(0,0,0,0.08);
-                             padding:24px;box-sizing:border-box;margin-top:1rem;">
+                <VBox style="margin:0 1.5rem 1.5rem;background:#fff;border-radius:12px;
+                         box-shadow:0 2px 12px rgba(0,0,0,0.08);
+                         padding:28px;box-sizing:border-box;">
 
-                    <HBox justifyContent="SpaceBetween" alignItems="Center"
-                          style="margin-bottom:16px;">
-                        <Title text="Rating History" level="H5"
-                               style="font-size:1rem;font-weight:600;color:#111827;"/>
-                        <Select id="historyEmpSelect"
-                                width="200px"
-                                change=".onHistoryEmployeeChange"
-                                forceSelection="false">
-                            <core:Item key="" text="All Employees"/>
-                        </Select>
-                    </HBox>
+                <HBox justifyContent="SpaceBetween" alignItems="Center"
+                      style="margin-bottom:20px;">
+                    <Title text="Rating History" level="H4"
+                           style="font-size:1.1rem;font-weight:700;color:#111827;"/>
+                    <Select id="historyEmpSelect"
+                            width="220px"
+                            change=".onHistoryEmployeeChange"
+                            forceSelection="false">
+                        <core:Item key="" text="All Employees"/>
+                    </Select>
+                </HBox>
 
-                    <core:HTML id="ratingsTableHTML"
-                               sanitizeContent="false"
-                               content="{perfRating>/ratingsTableHTML}"/>
+                <core:HTML id="ratingsTableHTML"
+                           sanitizeContent="false"
+                           content="{perfRating>/ratingsTableHTML}"/>
 
-                </VBox>
+            </VBox>
 
             </VBox>
         </content>

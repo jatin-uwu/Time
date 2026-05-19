@@ -31,11 +31,11 @@ sap.ui.define([
             } catch (e) { /* ignore — non-blocking */ }
 
             // Restore persisted data so history survives page refresh
-            this.setModel(new JSONModel(this._fromStorage("tsHistory",        { submissions: [] })), "history");
-            this.setModel(new JSONModel(this._fromStorage("tsLocked",         {})),                  "locked");
-            this.setModel(new JSONModel(this._fromStorage("tsNotifications",  { items: [] })),        "notifications");
-            this.setModel(new JSONModel(this._fromStorage("tsTasks",          { items: [] })),        "tasks");
-            this.setModel(new JSONModel(this._fromStorage("tsTaskUpdates",    { byTaskId: {} })),     "taskUpdates");
+            this.setModel(new JSONModel(this._fromStorage("tsHistory", { submissions: [] })), "history");
+            this.setModel(new JSONModel(this._fromStorage("tsLocked", {})), "locked");
+            this.setModel(new JSONModel(this._fromStorage("tsNotifications", { items: [] })), "notifications");
+            this.setModel(new JSONModel(this._fromStorage("tsTasks", { items: [] })), "tasks");
+            this.setModel(new JSONModel(this._fromStorage("tsTaskUpdates", { byTaskId: {} })), "taskUpdates");
 
             this._seedDemoData();
 
@@ -46,14 +46,14 @@ sap.ui.define([
             // the sidebar shows the correct items after the promise resolves.
             this.getCurrentUser().then(user => {
                 if (user && user.role) {
-                    try { localStorage.setItem("tsRole", user.role); } catch (e) {}
+                    try { localStorage.setItem("tsRole", user.role); } catch (e) { }
                 }
             });
         },
 
         // ── Demo seed (idempotent) ────────────────────────────────────────
         _seedDemoData() {
-            const oTasks   = this.getModel("tasks");
+            const oTasks = this.getModel("tasks");
             const oUpdates = this.getModel("taskUpdates");
 
             if ((oTasks.getProperty("/items") || []).length > 0) return;
@@ -87,15 +87,15 @@ sap.ui.define([
                         "Use SAPUI5 sap.f cards and bind to the existing OData service. Make sure it works on tablet too.",
                     assignedTo_employeeId: "EMP1001",
                     priority: "High",
-                    status:   "In Progress",
+                    status: "In Progress",
                     startDate: iso(addDays(-3)),
-                    dueDate:   iso(addDays(4)),
+                    dueDate: iso(addDays(4)),
                     assignedOn: addDays(-3).toISOString(),
-                    createdAt:  addDays(-3).toISOString(),
+                    createdAt: addDays(-3).toISOString(),
                     statusUpdatedAt: addDays(-1).toISOString(),
-                    attachmentName:     "dashboard-widget-spec.txt",
+                    attachmentName: "dashboard-widget-spec.txt",
                     attachmentMimeType: "text/plain",
-                    attachmentDataUrl:  sampleDataUrl
+                    attachmentDataUrl: sampleDataUrl
                 },
                 {
                     taskId: "TASK002",
@@ -105,11 +105,11 @@ sap.ui.define([
                         "Include CSV seed data and write a basic integration test.",
                     assignedTo_employeeId: "EMP1001",
                     priority: "Medium",
-                    status:   "Open",
+                    status: "Open",
                     startDate: iso(today),
-                    dueDate:   iso(addDays(10)),
+                    dueDate: iso(addDays(10)),
                     assignedOn: addDays(-1).toISOString(),
-                    createdAt:  addDays(-1).toISOString()
+                    createdAt: addDays(-1).toISOString()
                 },
                 {
                     taskId: "TASK003",
@@ -119,11 +119,11 @@ sap.ui.define([
                         "and the first-week orientation. Share the draft with the team for review.",
                     assignedTo_employeeId: "EMP1002",
                     priority: "Medium",
-                    status:   "In Progress",
+                    status: "In Progress",
                     startDate: iso(addDays(-2)),
-                    dueDate:   iso(addDays(7)),
+                    dueDate: iso(addDays(7)),
                     assignedOn: addDays(-2).toISOString(),
-                    createdAt:  addDays(-2).toISOString()
+                    createdAt: addDays(-2).toISOString()
                 },
                 {
                     taskId: "TASK004",
@@ -133,11 +133,11 @@ sap.ui.define([
                         "actions in the CRM. Flag any hot leads that need a manager call.",
                     assignedTo_employeeId: "EMP1003",
                     priority: "High",
-                    status:   "In Progress",
+                    status: "In Progress",
                     startDate: iso(addDays(-5)),
-                    dueDate:   iso(addDays(2)),
+                    dueDate: iso(addDays(2)),
                     assignedOn: addDays(-5).toISOString(),
-                    createdAt:  addDays(-5).toISOString(),
+                    createdAt: addDays(-5).toISOString(),
                     statusUpdatedAt: addDays(-1).toISOString()
                 },
                 {
@@ -148,11 +148,11 @@ sap.ui.define([
                         "case study from Acme Corp. Final version due before the regional review.",
                     assignedTo_employeeId: "EMP1003",
                     priority: "Low",
-                    status:   "Open",
+                    status: "Open",
                     startDate: iso(today),
-                    dueDate:   iso(addDays(14)),
+                    dueDate: iso(addDays(14)),
                     assignedOn: today.toISOString(),
-                    createdAt:  today.toISOString()
+                    createdAt: today.toISOString()
                 },
                 {
                     taskId: "TASK006",
@@ -162,11 +162,11 @@ sap.ui.define([
                         "summary report for the finance review meeting on Friday.",
                     assignedTo_employeeId: "EMP1004",
                     priority: "High",
-                    status:   "Completed",
+                    status: "Completed",
                     startDate: iso(addDays(-10)),
-                    dueDate:   iso(addDays(-1)),
+                    dueDate: iso(addDays(-1)),
                     assignedOn: addDays(-10).toISOString(),
-                    createdAt:  addDays(-10).toISOString(),
+                    createdAt: addDays(-10).toISOString(),
                     statusUpdatedAt: addDays(-1).toISOString()
                 },
                 {
@@ -177,87 +177,87 @@ sap.ui.define([
                         "summary to share with HR.",
                     assignedTo_employeeId: "EMP1004",
                     priority: "Medium",
-                    status:   "Open",
+                    status: "Open",
                     startDate: iso(today),
-                    dueDate:   iso(addDays(5)),
+                    dueDate: iso(addDays(5)),
                     assignedOn: today.toISOString(),
-                    createdAt:  today.toISOString()
+                    createdAt: today.toISOString()
                 }
             ];
 
             const updates = {
                 "TASK001": [
                     {
-                        updateId:             "TASK001-U001",
-                        task_taskId:          "TASK001",
-                        updateDate:           iso(addDays(-2)),
-                        notes:                "Set up the widget skeleton, wired the OData binding for weekly hours and validated the model in the dev console.",
-                        attachmentName:       "",
-                        attachmentMimeType:   "",
-                        attachmentDataUrl:    "",
+                        updateId: "TASK001-U001",
+                        task_taskId: "TASK001",
+                        updateDate: iso(addDays(-2)),
+                        notes: "Set up the widget skeleton, wired the OData binding for weekly hours and validated the model in the dev console.",
+                        attachmentName: "",
+                        attachmentMimeType: "",
+                        attachmentDataUrl: "",
                         updatedBy_employeeId: "EMP1001",
-                        createdAt:            addDays(-2).toISOString()
+                        createdAt: addDays(-2).toISOString()
                     },
                     {
-                        updateId:             "TASK001-U002",
-                        task_taskId:          "TASK001",
-                        updateDate:           iso(addDays(-1)),
-                        notes:                "Implemented the bar chart and applied the design tokens. Tablet layout still has a small overflow that I'll fix tomorrow.",
-                        attachmentName:       "",
-                        attachmentMimeType:   "",
-                        attachmentDataUrl:    "",
+                        updateId: "TASK001-U002",
+                        task_taskId: "TASK001",
+                        updateDate: iso(addDays(-1)),
+                        notes: "Implemented the bar chart and applied the design tokens. Tablet layout still has a small overflow that I'll fix tomorrow.",
+                        attachmentName: "",
+                        attachmentMimeType: "",
+                        attachmentDataUrl: "",
                         updatedBy_employeeId: "EMP1001",
-                        createdAt:            addDays(-1).toISOString()
+                        createdAt: addDays(-1).toISOString()
                     }
                 ],
                 "TASK003": [
                     {
-                        updateId:             "TASK003-U001",
-                        task_taskId:          "TASK003",
-                        updateDate:           iso(addDays(-1)),
-                        notes:                "Drafted the onboarding checklist covering laptop, badge, and account setup. Shared with HR for review.",
-                        attachmentName:       "",
-                        attachmentMimeType:   "",
-                        attachmentDataUrl:    "",
+                        updateId: "TASK003-U001",
+                        task_taskId: "TASK003",
+                        updateDate: iso(addDays(-1)),
+                        notes: "Drafted the onboarding checklist covering laptop, badge, and account setup. Shared with HR for review.",
+                        attachmentName: "",
+                        attachmentMimeType: "",
+                        attachmentDataUrl: "",
                         updatedBy_employeeId: "EMP1002",
-                        createdAt:            addDays(-1).toISOString()
+                        createdAt: addDays(-1).toISOString()
                     }
                 ],
                 "TASK004": [
                     {
-                        updateId:             "TASK004-U001",
-                        task_taskId:          "TASK004",
-                        updateDate:           iso(addDays(-3)),
-                        notes:                "Spoke to 5 of the 12 leads. Two are hot — booking a manager call for next week. Three asked for follow-up next month.",
-                        attachmentName:       "",
-                        attachmentMimeType:   "",
-                        attachmentDataUrl:    "",
+                        updateId: "TASK004-U001",
+                        task_taskId: "TASK004",
+                        updateDate: iso(addDays(-3)),
+                        notes: "Spoke to 5 of the 12 leads. Two are hot — booking a manager call for next week. Three asked for follow-up next month.",
+                        attachmentName: "",
+                        attachmentMimeType: "",
+                        attachmentDataUrl: "",
                         updatedBy_employeeId: "EMP1003",
-                        createdAt:            addDays(-3).toISOString()
+                        createdAt: addDays(-3).toISOString()
                     },
                     {
-                        updateId:             "TASK004-U002",
-                        task_taskId:          "TASK004",
-                        updateDate:           iso(today),
-                        notes:                "Hot leads confirmed for the manager call. Sent the briefing pack and updated CRM with discovery notes.",
-                        attachmentName:       "",
-                        attachmentMimeType:   "",
-                        attachmentDataUrl:    "",
+                        updateId: "TASK004-U002",
+                        task_taskId: "TASK004",
+                        updateDate: iso(today),
+                        notes: "Hot leads confirmed for the manager call. Sent the briefing pack and updated CRM with discovery notes.",
+                        attachmentName: "",
+                        attachmentMimeType: "",
+                        attachmentDataUrl: "",
                         updatedBy_employeeId: "EMP1003",
-                        createdAt:            today.toISOString()
+                        createdAt: today.toISOString()
                     }
                 ],
                 "TASK006": [
                     {
-                        updateId:             "TASK006-U001",
-                        task_taskId:          "TASK006",
-                        updateDate:           iso(addDays(-2)),
-                        notes:                "Reconciliation complete. Summary report drafted and saved to the shared drive. Ready for review.",
-                        attachmentName:       "",
-                        attachmentMimeType:   "",
-                        attachmentDataUrl:    "",
+                        updateId: "TASK006-U001",
+                        task_taskId: "TASK006",
+                        updateDate: iso(addDays(-2)),
+                        notes: "Reconciliation complete. Summary report drafted and saved to the shared drive. Ready for review.",
+                        attachmentName: "",
+                        attachmentMimeType: "",
+                        attachmentDataUrl: "",
                         updatedBy_employeeId: "EMP1004",
-                        createdAt:            addDays(-2).toISOString()
+                        createdAt: addDays(-2).toISOString()
                     }
                 ]
             };
@@ -273,24 +273,24 @@ sap.ui.define([
         // The localStorage fallback is only used before the first backend
         // call resolves (i.e. during the very first render tick).
         getCurrentEmployeeId() {
-        // Always prefer the backend-resolved user first
-        if (this._oCurrentUser && this._oCurrentUser.employeeId) {
-            return this._oCurrentUser.employeeId;
-        }
+            // Always prefer the backend-resolved user first
+            if (this._oCurrentUser && this._oCurrentUser.employeeId) {
+                return this._oCurrentUser.employeeId;
+            }
 
-        // ── Fallback: read from localStorage ────────────────────────────
-        // Check if a real employeeId was persisted directly (set during login)
-        try {
-            const sStoredEmpId = localStorage.getItem("tsEmployeeId");
-            if (sStoredEmpId) return sStoredEmpId;
-        } catch (e) {}
+            // ── Fallback: read from localStorage ────────────────────────────
+            // Check if a real employeeId was persisted directly (set during login)
+            try {
+                const sStoredEmpId = localStorage.getItem("tsEmployeeId");
+                if (sStoredEmpId) return sStoredEmpId;
+            } catch (e) { }
 
-        // Last resort: derive from role
-        let sRole = "employee";
-        try { sRole = (localStorage.getItem("tsRole") || "employee").toLowerCase(); } catch (e) {}
-        if (sRole === "manager") return "EMP1005";
-        if (sRole === "hr")      return "EMP1002";
-        return "EMP1001";
+            // Last resort: derive from role
+            let sRole = "employee";
+            try { sRole = (localStorage.getItem("tsRole") || "employee").toLowerCase(); } catch (e) { }
+            if (sRole === "manager") return "EMP1005";
+            if (sRole === "hr") return "EMP1002";
+            return "EMP1001";
         },
 
         // Returns a promise that resolves to the JWT-resolved user record.
@@ -311,13 +311,14 @@ sap.ui.define([
                     if (oResult && (oResult.employeeId || oResult.email)) {
                         this._oCurrentUser = oResult;
                         try {
-                            localStorage.setItem("tsRole", oResult.role || "employee");
-                            // ── Persist the real employeeId so getCurrentEmployeeId()
-                            //    works correctly before the next getCurrentUser() resolves
+                            // Only set role if backend actually returns it
+                            if (oResult.role) {
+                                localStorage.setItem("tsRole", oResult.role.toLowerCase());
+                            }
                             if (oResult.employeeId) {
                                 localStorage.setItem("tsEmployeeId", oResult.employeeId);
                             }
-                        } catch (e) {}
+                        } catch (e) { }
                         return oResult;
                     }
                     return null;
@@ -331,14 +332,14 @@ sap.ui.define([
         // Built-in employee directory — mirrors EmployeeMaster.csv exactly.
         // Used as fallback when the OData /Employees call fails.
         _builtinEmployees: {
-            "EMP1001": { employeeId: "EMP1001", employeeName: "Jatin Bajaj",     designation: "Developer",       email: "jatin.bajaj@ccentrik.com",   address: "Delhi India",    mobileNumber: "9876543210", manager_employeeId: "EMP1005", isActive: true },
-            "EMP1002": { employeeId: "EMP1002", employeeName: "Punit Sharma",    designation: "HR",              email: "punit.sharma@ccentrik.com",  address: "Gwalior India",  mobileNumber: "9876543211", manager_employeeId: "EMP1005", isActive: true },
-            "EMP1003": { employeeId: "EMP1003", employeeName: "Neha Kapoor",     designation: "Sales Executive", email: "neha.kapoor@ccentrik.com",   address: "Gurgaon India",  mobileNumber: "9876543212", manager_employeeId: "EMP1006", isActive: true },
-            "EMP1004": { employeeId: "EMP1004", employeeName: "Ankit Verma",     designation: "Accountant",      email: "ankit.verma@ccentrik.com",   address: "Noida India",    mobileNumber: "9876543213", manager_employeeId: "EMP1005", isActive: true },
-            "EMP1005": { employeeId: "EMP1005", employeeName: "Vineet",          designation: "Manager",         email: "vineet@ccentrik.com",         address: "Delhi India",    mobileNumber: "9876543214", manager_employeeId: "EMP1006", isActive: true },
-            "EMP1006": { employeeId: "EMP1006", employeeName: "Founder Member",  designation: "Founder",         email: "founder@ccentrik.com",        address: "Delhi India",    mobileNumber: "9876543215", manager_employeeId: null,      isActive: true },
-            "EMP1007": { employeeId: "EMP1007", employeeName: "Punit Sharma",    designation: "Developer",       email: "punit.sharma@ccentrik.com",   address: "Delhi India",    mobileNumber: "9876543216", manager_employeeId: "EMP1005", isActive: true },
-            "EMP1008": { employeeId: "EMP1008", employeeName: "Priya Singh",     designation: "HR Manager",      email: "priya.singh@ccentrik.com",    address: "Bangalore India",mobileNumber: "9876543217", manager_employeeId: "EMP1006", isActive: true }
+            "EMP1001": { employeeId: "EMP1001", employeeName: "Jatin Bajaj", designation: "Developer", email: "jatin.bajaj@ccentrik.com", address: "Delhi India", mobileNumber: "9876543210", manager_employeeId: "EMP1005", isActive: true },
+            "EMP1002": { employeeId: "EMP1002", employeeName: "Punit Sharma", designation: "HR", email: "punit.sharma@ccentrik.com", address: "Gwalior India", mobileNumber: "9876543211", manager_employeeId: "EMP1005", isActive: true },
+            "EMP1003": { employeeId: "EMP1003", employeeName: "Neha Kapoor", designation: "Sales Executive", email: "neha.kapoor@ccentrik.com", address: "Gurgaon India", mobileNumber: "9876543212", manager_employeeId: "EMP1006", isActive: true },
+            "EMP1004": { employeeId: "EMP1004", employeeName: "Ankit Verma", designation: "Accountant", email: "ankit.verma@ccentrik.com", address: "Noida India", mobileNumber: "9876543213", manager_employeeId: "EMP1005", isActive: true },
+            "EMP1005": { employeeId: "EMP1005", employeeName: "Vineet", designation: "Manager", email: "vineet@ccentrik.com", address: "Delhi India", mobileNumber: "9876543214", manager_employeeId: "EMP1006", isActive: true },
+            "EMP1006": { employeeId: "EMP1006", employeeName: "Founder Member", designation: "Founder", email: "founder@ccentrik.com", address: "Delhi India", mobileNumber: "9876543215", manager_employeeId: null, isActive: true },
+            "EMP1007": { employeeId: "EMP1007", employeeName: "Punit Sharma", designation: "Developer", email: "punit.sharma@ccentrik.com", address: "Delhi India", mobileNumber: "9876543216", manager_employeeId: "EMP1005", isActive: true },
+            "EMP1008": { employeeId: "EMP1008", employeeName: "Priya Singh", designation: "HR Manager", email: "priya.singh@ccentrik.com", address: "Bangalore India", mobileNumber: "9876543217", manager_employeeId: "EMP1006", isActive: true }
         },
 
         getEmployeeById(sEmployeeId) {
@@ -369,11 +370,11 @@ sap.ui.define([
             } catch (e) { return oDefault; }
         },
 
-        persistHistory()       { try { localStorage.setItem("tsHistory",       JSON.stringify(this.getModel("history").getData()));       } catch (e) {} },
-        persistLocked()        { try { localStorage.setItem("tsLocked",        JSON.stringify(this.getModel("locked").getData()));        } catch (e) {} },
-        persistNotifications() { try { localStorage.setItem("tsNotifications", JSON.stringify(this.getModel("notifications").getData())); } catch (e) {} },
-        persistTasks()         { try { localStorage.setItem("tsTasks",         JSON.stringify(this.getModel("tasks").getData()));         } catch (e) {} },
-        persistTaskUpdates()   { try { localStorage.setItem("tsTaskUpdates",   JSON.stringify(this.getModel("taskUpdates").getData()));   } catch (e) {} },
+        persistHistory() { try { localStorage.setItem("tsHistory", JSON.stringify(this.getModel("history").getData())); } catch (e) { } },
+        persistLocked() { try { localStorage.setItem("tsLocked", JSON.stringify(this.getModel("locked").getData())); } catch (e) { } },
+        persistNotifications() { try { localStorage.setItem("tsNotifications", JSON.stringify(this.getModel("notifications").getData())); } catch (e) { } },
+        persistTasks() { try { localStorage.setItem("tsTasks", JSON.stringify(this.getModel("tasks").getData())); } catch (e) { } },
+        persistTaskUpdates() { try { localStorage.setItem("tsTaskUpdates", JSON.stringify(this.getModel("taskUpdates").getData())); } catch (e) { } },
 
         getContentDensityClass() {
             return Device.support.touch ? "sapUiSizeCozy" : "sapUiSizeCompact";

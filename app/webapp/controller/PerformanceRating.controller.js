@@ -94,45 +94,53 @@ sap.ui.define([
         },
 
         // ── Load employees under this manager ────────────────────────────────
-        _loadMyTeamEmployees() {
-            // Fetch employees from ManagerService
-            fetch("/manager/Employees", {
-                headers: { "Accept": "application/json" },
-                credentials: "include"
-            })
-            .then(r => r.json())
-            .then(data => {
-                const employees = (data.value || []);
-                this._oModel.setProperty("/employees", employees);
+    _loadMyTeamEmployees() {
+    fetch("/manager/Employees", {
+        headers: { "Accept": "application/json" },
+        credentials: "include"
+    })
+    .then(r => r.json())
+    .then(data => {
+        const employees = (data.value || []);
 
-                // Populate employee selects
-                const oEmpSelect     = this.byId("empSelect");
-                const oHistEmpSelect = this.byId("historyEmpSelect");
+        if (employees.length === 0) {
+            sap.m.MessageToast.show("No team members found.");
+            return;
+        }
 
-                // Clear existing items except first
-                while (oEmpSelect.getItems().length > 1) {
-                    oEmpSelect.removeItem(1);
-                }
-                while (oHistEmpSelect.getItems().length > 1) {
-                    oHistEmpSelect.removeItem(1);
-                }
+        this._oModel.setProperty("/employees", employees);
 
-                employees.forEach(emp => {
-                    oEmpSelect.addItem(new sap.ui.core.Item({
-                        key:  emp.employeeId,
-                        text: `${emp.employeeName} (${emp.employeeId})`
-                    }));
-                    oHistEmpSelect.addItem(new sap.ui.core.Item({
-                        key:  emp.employeeId,
-                        text: emp.employeeName
-                    }));
-                });
-            })
-            .catch(e => {
-                console.error("Failed to load employees:", e);
-                sap.m.MessageToast.show("Could not load team employees.");
-            });
-        },
+        const oEmpSelect     = this.byId("empSelect");
+        const oHistEmpSelect = this.byId("historyEmpSelect");
+
+        // Clear all items except placeholder
+        oEmpSelect.destroyItems();
+        oHistEmpSelect.destroyItems();
+
+        // Re-add placeholder
+        oEmpSelect.addItem(new sap.ui.core.Item({
+            key: "", text: "-- Select Employee --"
+        }));
+        oHistEmpSelect.addItem(new sap.ui.core.Item({
+            key: "", text: "All Employees"
+        }));
+
+        employees.forEach(emp => {
+            oEmpSelect.addItem(new sap.ui.core.Item({
+                key:  emp.employeeId,
+                text: `${emp.employeeName} (${emp.employeeId})`
+            }));
+            oHistEmpSelect.addItem(new sap.ui.core.Item({
+                key:  emp.employeeId,
+                text: emp.employeeName
+            }));
+        });
+    })
+    .catch(e => {
+        console.error("Failed to load employees:", e);
+        sap.m.MessageToast.show("Could not load team members: " + e.message);
+    });
+},
 
         // ── Load all ratings for manager's team ──────────────────────────────
         _loadAllRatings(sFilterEmpId) {
