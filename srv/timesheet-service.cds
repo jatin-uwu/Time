@@ -30,6 +30,18 @@ service EmployeeService @(path: '/employee') {
 
     entity PerformanceRatings as projection on db.timesheet.PerformanceRating;
 
+    @(requires: 'authenticated-user')
+    action uploadProfilePhoto(dataBase64: LargeString) returns {
+        success : Boolean;
+        message : String;
+    };
+
+    @(requires: 'authenticated-user')
+    action getProfilePhoto() returns {
+        dataBase64 : LargeString;
+        mimeType   : String(100);
+    };
+
     // ── Leave ────────────────────────────────────────────────────────
     @(requires: [
         'Employee',
