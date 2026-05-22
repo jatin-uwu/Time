@@ -1,0 +1,90 @@
+<mvc:View
+    controllerName="timesheet.app.controller.HRApprovals"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="hrApprovalsPage" title="HR Approvals" showNavButton="false">
+        <content>
+
+            <!-- ══════════════════════════════════════════════════════════
+                 Day Unlock Requests
+                 ══════════════════════════════════════════════════════════ -->
+            <Table id="dayUnlockTable"
+                   items="{hrView>/requests}"
+                   noDataText="No day-unlock requests found."
+                   class="sapUiSmallMargin">
+
+                <headerToolbar>
+                    <Toolbar>
+                        <core:Icon src="sap-icon://unlocked" class="sapUiSmallMarginEnd" />
+                        <Title text="Day Unlock Requests" level="H4" />
+                        <ToolbarSpacer />
+                        <ObjectStatus
+                            visible="{= ${hrView>/pendingCount} > 0 }"
+                            text="{hrView>/pendingCount} pending"
+                            state="Warning"
+                            icon="sap-icon://alert" />
+                        <ToolbarSpacer />
+                        <SegmentedButton id="hrFilterBtn"
+                                         selectionChange=".onFilterChange"
+                                         selectedKey="Pending">
+                            <items>
+                                <SegmentedButtonItem key="Pending"  text="Pending"  />
+                                <SegmentedButtonItem key="Approved" text="Approved" />
+                                <SegmentedButtonItem key="Rejected" text="Rejected" />
+                                <SegmentedButtonItem key="All"      text="All"      />
+                            </items>
+                        </SegmentedButton>
+                        <Button icon="sap-icon://refresh"
+                                press=".onRefresh"
+                                tooltip="Refresh"
+                                class="sapUiSmallMarginBegin" />
+                    </Toolbar>
+                </headerToolbar>
+
+                <columns>
+                    <Column><Text text="Employee"        /></Column>
+                    <Column><Text text="Requested Date"  /></Column>
+                    <Column><Text text="Requested On"    /></Column>
+                    <Column><Text text="Employee Remarks"/></Column>
+                    <Column><Text text="Status"          /></Column>
+                    <Column><Text text="HR Remarks"      /></Column>
+                    <Column width="14rem"><Text text="Actions" /></Column>
+                </columns>
+
+                <items>
+                    <ColumnListItem>
+                        <cells>
+                            <Text text="{hrView>employeeName}" />
+                            <Text text="{hrView>targetDate}"   />
+                            <Text text="{hrView>requestedOn}"  />
+                            <Text text="{hrView>employeeRemarks}" wrapping="false" maxLines="2" />
+                            <ObjectStatus
+                                text="{hrView>status}"
+                                state="{path:'hrView>status', formatter:'.formatStatusState'}" />
+                            <Text text="{hrView>hrRemarks}" />
+                            <HBox>
+                                <Button text="Approve"
+                                        type="Accept"
+                                        icon="sap-icon://accept"
+                                        visible="{= ${hrView>status} === 'Pending' }"
+                                        press=".onApprove"
+                                        class="sapUiTinyMarginEnd" />
+                                <Button text="Reject"
+                                        type="Reject"
+                                        icon="sap-icon://decline"
+                                        visible="{= ${hrView>status} === 'Pending' }"
+                                        press=".onReject" />
+                            </HBox>
+                        </cells>
+                    </ColumnListItem>
+                </items>
+
+            </Table>
+
+        </content>
+    </Page>
+
+</mvc:View>

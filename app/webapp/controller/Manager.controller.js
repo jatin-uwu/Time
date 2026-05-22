@@ -34,17 +34,21 @@ sap.ui.define([
 
         onInit() {
             this._oMgrModel = new JSONModel({
-                allSubmissions:      [],
-                submissions:         [],
-                pendingCount:        0,
-                showDetail:          false,
-                pageTitle:           "Manager – Approvals",
-                selectedEmployee:    "",
-                selectedWeek:        "",
-                selectedSubmittedOn: "",
-                selectedStatus:      "",
-                selectedRemarks:     "",
-                busy:                false,
+                allSubmissions:        [],
+                submissions:           [],
+                pendingCount:          0,
+                prevWeekRequests:      [],
+                allPrevWeekRequests:   [],
+                prevWeekPendingCount:  0,
+                activeSection:         "timesheets",   // drives tab visibility
+                showDetail:            false,
+                pageTitle:             "Manager – Approvals",
+                selectedEmployee:      "",
+                selectedWeek:          "",
+                selectedSubmittedOn:   "",
+                selectedStatus:        "",
+                selectedRemarks:       "",
+                busy:                  false,
                 days:  DAY_NAMES.map(n => ({ name: n, date: "" })),
                 rows:     [],
                 rowCount: 1
@@ -57,10 +61,12 @@ sap.ui.define([
         },
 
         _onRouteMatched() {
-            this._oMgrModel.setProperty("/showDetail", false);
-            this._oMgrModel.setProperty("/pageTitle",  "Manager – Approvals");
+            this._oMgrModel.setProperty("/showDetail",     false);
+            this._oMgrModel.setProperty("/pageTitle",      "Manager – Approvals");
+            this._oMgrModel.setProperty("/activeSection",  "timesheets");
             this._selectedSub = null;
             this._loadSubmissions();
+            this._loadPrevWeekRequests();
         },
 
         onNavBack() {
@@ -68,8 +74,16 @@ sap.ui.define([
             this._oMgrModel.setProperty("/pageTitle",  "Manager – Approvals");
         },
 
-        // ── Load submissions from ManagerService (/manager) ───────────────
-        // Uses getModel("manager") — NOT getModel() which is /employee
+        // ── Switch between Timesheets and Prev-Week tabs ──────────────────
+        onSectionTabSelect(oEvent) {
+            const sKey = oEvent.getParameter("selectedItem").getKey();
+            this._oMgrModel.setProperty("/activeSection", sKey);
+        },
+
+        // ════════════════════════════════════════════════════════════════════
+        // TIMESHEET APPROVALS
+        // ════════════════════════════════════════════════════════════════════
+
         _loadSubmissions() {
             const oMgrModel = this.getOwnerComponent().getModel("manager");
             if (!oMgrModel) {
@@ -110,7 +124,9 @@ sap.ui.define([
                         };
                     });
 
-                    const pending = submissions.filter(s => s.status === "Submitted").length;
+                    const pending = submissions.filter(s =>
+                        s.status === "Submitted" || s.status === "Pending"
+                    ).length;
                     this._oMgrModel.setProperty("/allSubmissions", submissions);
                     this._oMgrModel.setProperty("/pendingCount",   pending);
 
@@ -139,9 +155,8 @@ sap.ui.define([
         },
 
         _applyFilter(sKey, all) {
-            // "Pending" tab shows status=Submitted (backend) OR status=Pending (localStorage)
-            const filtered = sKey === "All" ? all
-                : sKey === "Pending"  ? all.filter(s => s.status === "Pending" || s.status === "Pending")
+            const filtered = sKey === "All"      ? all
+                : sKey === "Pending"  ? all.filter(s => s.status === "Pending" || s.status === "Submitted")
                 : sKey === "Approved" ? all.filter(s => s.status === "Approved")
                 : sKey === "Rejected" ? all.filter(s => s.status === "Rejected")
                 : all;
@@ -155,7 +170,6 @@ sap.ui.define([
             this._selectedSub = null;
         },
 
-        // ── Open timesheet detail ─────────────────────────────────────────
         onApprovalSelect(oEvent) {
             const oCtx = oEvent.getParameter("listItem").getBindingContext("mgrView");
             if (!oCtx) return;
@@ -179,7 +193,6 @@ sap.ui.define([
             }
         },
 
-        // ── Load entries using getModel("manager") ────────────────────────
         _loadEntriesFromBackend(sub) {
             const oMgrModel = this.getOwnerComponent().getModel("manager");
             if (!oMgrModel) { this._buildTableRows(sub); return; }
@@ -191,15 +204,14 @@ sap.ui.define([
                 $filter: `timesheet_timesheetId eq '${sub.timesheetId}'`
             }).requestContexts(0, 200)
                 .then(aCtx => {
-                    const entries    = aCtx.map(c => c.getObject()).filter(Boolean);
-                    const weekStart  = new Date(sub.weekStart + "T00:00:00");
-                    const weekDates  = DAYS.map((_, i) => {
+                    const entries   = aCtx.map(c => c.getObject()).filter(Boolean);
+                    const weekStart = new Date(sub.weekStart + "T00:00:00");
+                    const weekDates = DAYS.map((_, i) => {
                         const d = new Date(weekStart);
                         d.setDate(weekStart.getDate() + i);
                         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
                     });
 
-                    // Pivot entries into grid rows
                     const rowMap = new Map();
                     entries.forEach(entry => {
                         const taskId   = entry.task_taskId || "unknown";
@@ -222,7 +234,6 @@ sap.ui.define([
                         return r;
                     });
 
-                    // Day total row
                     const colDec = { mon:0, tue:0, wed:0, thu:0, fri:0, sat:0, sun:0 };
                     dataRows.forEach(row => DAYS.forEach(d => { colDec[d] += this._parseHHMM(row[d]); }));
                     const grand = DAYS.reduce((s, d) => s + colDec[d], 0);
@@ -233,7 +244,6 @@ sap.ui.define([
                     };
                     DAYS.forEach(d => { dayTotalRow[d] = this._toHHMM(colDec[d]); });
 
-                    // Status row
                     const status    = sub.status || "Submitted";
                     const statusRow = { _type: "status", projectName: "Status", taskName: "", _weekTotal: "" };
                     DAYS.forEach(d => {
@@ -252,7 +262,6 @@ sap.ui.define([
                 .finally(() => this._oMgrModel.setProperty("/busy", false));
         },
 
-        // Fallback for localStorage-based submissions
         _buildTableRows(submission) {
             const weekStart = new Date(submission.weekStart + "T00:00:00");
             this._oMgrModel.setProperty("/days", buildDayLabels(weekStart));
@@ -287,7 +296,7 @@ sap.ui.define([
             if (oTable) oTable.setFixedBottomRowCount(2);
         },
 
-        // ── Approve ───────────────────────────────────────────────────────
+        // ── Approve Timesheet ─────────────────────────────────────────────
         onApprove() {
             const sub = this._selectedSub;
             if (!sub) return;
@@ -319,7 +328,6 @@ sap.ui.define([
             .then(() => {
                 this._oMgrModel.setProperty("/selectedStatus",  "Approved");
                 this._oMgrModel.setProperty("/selectedRemarks", "");
-                // Post localStorage notification for employee
                 this._postNotification(sub.weekStart, sub.weekRange, "approved", "", sub.employeeId);
                 this._loadSubmissions();
                 this._rebuildStatus("Approved");
@@ -329,7 +337,7 @@ sap.ui.define([
             .finally(() => this._oMgrModel.setProperty("/busy", false));
         },
 
-        // ── Reject ────────────────────────────────────────────────────────
+        // ── Reject Timesheet ──────────────────────────────────────────────
         onReject() {
             if (!this._oRejectTextArea) {
                 this._oRejectTextArea = new TextArea({
@@ -396,7 +404,188 @@ sap.ui.define([
             .finally(() => this._oMgrModel.setProperty("/busy", false));
         },
 
-        // ── Post localStorage notification (for Notifications page) ──────
+        // ════════════════════════════════════════════════════════════════════
+        // PREV-WEEK FILL REQUESTS
+        // ════════════════════════════════════════════════════════════════════
+
+        _loadPrevWeekRequests() {
+            const oMgrModel = this.getOwnerComponent().getModel("manager");
+            if (!oMgrModel) return;
+
+            oMgrModel.bindList("/PrevWeekRequests").requestContexts(0, 200)
+                .then(aCtx => {
+                    const all = aCtx.map(c => c.getObject()).filter(Boolean);
+
+                    // Enrich with employee names
+                    const oComp = this.getOwnerComponent();
+                    const empPromises = all.map(r => {
+                        if (oComp.getEmployeeById) {
+                            return oComp.getEmployeeById(r.employee_employeeId)
+                                .then(emp => {
+                                    r.employeeName = emp ? emp.employeeName : r.employee_employeeId;
+                                    return r;
+                                })
+                                .catch(() => {
+                                    r.employeeName = r.employee_employeeId;
+                                    return r;
+                                });
+                        }
+                        r.employeeName = r.employee_employeeId;
+                        return Promise.resolve(r);
+                    });
+
+                    Promise.all(empPromises).then(enriched => {
+                        // Build human-readable week range
+                        enriched.forEach(r => {
+                            if (r.weekStartDate && r.weekEndDate) {
+                                const ws = new Date(r.weekStartDate + "T00:00:00");
+                                const we = new Date(r.weekEndDate   + "T00:00:00");
+                                r.weekRange = `${toShortLabel(ws)} – ${toShortLabel(we)}`;
+                            } else {
+                                r.weekRange = r.weekStartDate || "";
+                            }
+                            r.requestedOn = r.requestedOn
+                                ? new Date(r.requestedOn).toLocaleString() : "";
+                        });
+
+                        const pending = enriched.filter(r => r.status === "Pending").length;
+                        this._oMgrModel.setProperty("/allPrevWeekRequests",  enriched);
+                        this._oMgrModel.setProperty("/prevWeekPendingCount", pending);
+                        this._oMgrModel.setProperty("/prevWeekRequests",     enriched);
+                    });
+                })
+                .catch(err => console.error("Failed to load prev-week requests:", err));
+        },
+
+        // ── Approve Prev-Week Request ─────────────────────────────────────
+        onApprovePrevWeek(oEvent) {
+            const oCtx  = oEvent.getSource().getBindingContext("mgrView");
+            const oItem = oCtx.getObject();
+
+            MessageBox.confirm(
+                `Approve prev-week fill request for ${oItem.employeeName} (${oItem.weekRange})?`,
+                {
+                    title:            "Approve Request",
+                    actions:          [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                    emphasizedAction: MessageBox.Action.OK,
+                    onClose: (sAction) => {
+                        if (sAction !== MessageBox.Action.OK) return;
+                        this._submitPrevWeekDecision(oItem, true, "");
+                    }
+                }
+            );
+        },
+
+        // ── Reject Prev-Week Request ──────────────────────────────────────
+        onRejectPrevWeek(oEvent) {
+            const oCtx  = oEvent.getSource().getBindingContext("mgrView");
+            const oItem = oCtx.getObject();
+
+            const oTA = new TextArea({
+                placeholder: "Reason for rejection (optional)...",
+                rows:        3,
+                width:       "100%"
+            });
+
+            const oDialog = new Dialog({
+                title: "Reject Prev-Week Request",
+                content: [
+                    new VBox({
+                        items: [
+                            new Text({
+                                text:     "Provide a reason. The employee will be notified.",
+                                wrapping: true
+                            }).addStyleClass("sapUiSmallMarginBottom"),
+                            new Label({ text: "Reason", labelFor: oTA }),
+                            oTA
+                        ]
+                    }).addStyleClass("sapUiSmallMargin")
+                ],
+                beginButton: new Button({
+                    text:  "Reject",
+                    type:  "Reject",
+                    press: () => {
+                        const remarks = oTA.getValue().trim();
+                        oDialog.close();
+                        oDialog.destroy();
+                        this._submitPrevWeekDecision(oItem, false, remarks);
+                    }
+                }),
+                endButton: new Button({
+                    text:  "Cancel",
+                    press: () => {
+                        oDialog.close();
+                        oDialog.destroy();
+                    }
+                })
+            });
+
+            this.getView().addDependent(oDialog);
+            oDialog.open();
+        },
+
+        _submitPrevWeekDecision(oItem, bApproved, sRemarks) {
+            const oMgrModel = this.getOwnerComponent().getModel("manager");
+            if (!oMgrModel) return;
+
+            const oCtx = oMgrModel.bindContext("/approvePrevWeekRequest(...)");
+            oCtx.setParameter("requestId",      oItem.requestId);
+            oCtx.setParameter("approved",       bApproved);
+            oCtx.setParameter("managerRemarks", sRemarks || "");
+
+            oCtx.execute()
+                .then(() => {
+                    const sVerb = bApproved ? "approved" : "rejected";
+                    MessageToast.show(`Prev-week request ${sVerb} successfully.`);
+
+                    // Notify the employee
+                    this._postPrevWeekNotification(oItem, bApproved, sRemarks);
+
+                    this._loadPrevWeekRequests();
+                })
+                .catch(err => {
+                    MessageBox.error(
+                        (err && err.message) || "Could not process prev-week request.",
+                        { title: "Error" }
+                    );
+                });
+        },
+
+        _postPrevWeekNotification(oItem, bApproved, sRemarks) {
+            try {
+                const oComp       = this.getOwnerComponent();
+                const oNotifModel = oComp.getModel("notifications");
+                if (!oNotifModel) return;
+
+                const recipientId = oItem.employee_employeeId || oItem.employeeId || "";
+                if (!recipientId) return;
+
+                const items   = oNotifModel.getProperty("/items") || [];
+                const message = bApproved
+                    ? `Your request to fill the prev-week timesheet (${oItem.weekRange}) was approved.`
+                    : `Your request to fill the prev-week timesheet (${oItem.weekRange}) was rejected.`
+                        + (sRemarks ? ` Reason: ${sRemarks}` : "");
+
+                items.unshift({
+                    type:                bApproved ? "approved" : "rejected",
+                    message,
+                    weekRange:           oItem.weekRange,
+                    recipientEmployeeId: recipientId,
+                    read:                false,
+                    timestamp:           new Date().toISOString()
+                });
+
+                oNotifModel.setProperty("/items", items);
+                oComp.persistNotifications();
+            } catch (e) {
+                console.warn("Failed to push prev-week notification:", e);
+            }
+        },
+
+        // ════════════════════════════════════════════════════════════════════
+        // SHARED HELPERS
+        // ════════════════════════════════════════════════════════════════════
+
         _postNotification(sWeekStart, sWeekRange, sType, sComment, sRecipientId) {
             const oComp       = this.getOwnerComponent();
             const oNotifModel = oComp.getModel("notifications");
@@ -408,7 +597,7 @@ sap.ui.define([
                 : `Your timesheet for ${sWeekRange} was rejected. Reason: ${sComment}`;
 
             const notif = {
-                weekStart:           sWeekStart,
+                weekStart,
                 weekRange:           sWeekRange,
                 type:                sType,
                 message,
