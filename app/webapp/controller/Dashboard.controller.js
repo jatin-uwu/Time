@@ -199,14 +199,191 @@ sap.ui.define([
         },
 
         // ── Notification button handler ───────────────────────────────────────
+        // ── Notification bell → open slide-in panel ───────────────────────────
         onNotificationPress() {
-            const oRouter = this.getOwnerComponent().getRouter();
-            // Navigate to notifications route if it exists, else show message
-            try {
-                oRouter.navTo("notifications");
-            } catch (e) {
-                sap.m.MessageToast.show("No new notifications.");
+            this.getOwnerComponent().getRouter().navTo("notifications");
+        },
+
+        _openNotifPanel(oSource) {
+            const oComp = this.getOwnerComponent();
+            const oModel = oComp.getModel("notifications");
+            const items = oModel ? (oModel.getProperty("/items") || []) : [];
+            const sEmpId = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
+            const sRole = (oComp._oCurrentUser && oComp._oCurrentUser.role)
+                || (localStorage.getItem("tsRole") || "employee").toLowerCase();
+
+            // Filter to current user's notifications (same logic as Notifications controller)
+            const mine = items.filter(n => {
+                if (n.recipientEmployeeId) return n.recipientEmployeeId === sEmpId;
+                return sRole !== "manager";
+            }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+            // Also include backend notifications from recentNotifications
+            const backendItems = this._oDashModel.getProperty("/recentNotifications/items") || [];
+
+            // Merge: backend items first, then local model items (deduplicate by title+time)
+            const allItems = [...backendItems, ...mine.map(n => ({
+                type: n.type || "DEFAULT",
+                title: n.title || n.weekRange || "Notification",
+                message: n.message || "",
+                notifiedAt: n.timestamp || null,
+                isRead: n.read || false
+            }))];
+
+            const _timeAgo = (isoStr) => {
+                if (!isoStr) return '';
+                const diff = Date.now() - new Date(isoStr).getTime();
+                const mins = Math.floor(diff / 60000);
+                const hours = Math.floor(diff / 3600000);
+                const days = Math.floor(diff / 86400000);
+                if (mins < 1) return 'Just now';
+                if (mins < 60) return `${mins} min${mins !== 1 ? 's' : ''} ago`;
+                if (hours < 24) return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
+                return `${days} day${days !== 1 ? 's' : ''} ago`;
+            };
+
+            const NOTIF_META = {
+                TIMESHEET_APPROVED: { color: '#16a34a', bg: '#f0fdf4', icon: '<path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' },
+                TIMESHEET_REJECTED: { color: '#dc2626', bg: '#fef2f2', icon: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>' },
+                TASK_ASSIGNED: { color: '#f59e0b', bg: '#fffbeb', icon: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>' },
+                PERFORMANCE_RATED: { color: '#8b5cf6', bg: '#f5f3ff', icon: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>' },
+                LEAVE_APPROVED: { color: '#3b82f6', bg: '#eff6ff', icon: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><path d="M9 14l2 2 4-4"/>' },
+                LEAVE_REJECTED: { color: '#dc2626', bg: '#fef2f2', icon: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="9" y1="14" x2="15" y2="14"/>' },
+                approved: { color: '#16a34a', bg: '#f0fdf4', icon: '<path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' },
+                rejected: { color: '#dc2626', bg: '#fef2f2', icon: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>' },
+                DEFAULT: { color: '#6b7280', bg: '#f9fafb', icon: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>' }
+            };
+
+            const sViewId = this.getView().getId();
+
+            const notifRows = allItems.length === 0
+                ? `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                       padding:40px 20px;text-align:center;">
+               <svg width="48" height="48" viewBox="0 0 24 24" fill="none"
+                    stroke="#d1d5db" stroke-width="1.5" style="margin-bottom:12px;">
+                   <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                   <path d="M13.73 21a2 2 0 01-3.46 0"/>
+               </svg>
+               <div style="font-size:0.9rem;font-weight:600;color:#374151;margin-bottom:4px;">No notifications</div>
+               <div style="font-size:0.78rem;color:#9ca3af;">You're all caught up!</div>
+           </div>`
+                : allItems.map(n => {
+                    const meta = NOTIF_META[n.type] || NOTIF_META.DEFAULT;
+                    return `
+            <div style="display:flex;align-items:flex-start;gap:12px;
+                        padding:12px 16px;border-bottom:1px solid #f3f4f6;
+                        background:${n.isRead ? '#fff' : '#f8faff'};
+                        transition:background 0.2s;">
+                <span style="width:36px;height:36px;border-radius:50%;
+                             background:${meta.bg};display:flex;align-items:center;
+                             justify-content:center;flex-shrink:0;margin-top:1px;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                         stroke="${meta.color}" stroke-width="2"
+                         stroke-linecap="round" stroke-linejoin="round">
+                        ${meta.icon}
+                    </svg>
+                </span>
+                <div style="flex:1;min-width:0;">
+                    <div style="font-size:0.83rem;font-weight:${n.isRead ? '400' : '600'};
+                                color:#111827;line-height:1.35;margin-bottom:2px;">
+                        ${n.title}
+                    </div>
+                    <div style="font-size:0.75rem;color:#6b7280;
+                                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                        ${n.message}
+                    </div>
+                    <div style="font-size:0.72rem;color:#9ca3af;margin-top:3px;">
+                        ${_timeAgo(n.notifiedAt)}
+                    </div>
+                </div>
+                ${!n.isRead
+                            ? `<span style="width:8px;height:8px;border-radius:50%;
+                                   background:#3b82f6;flex-shrink:0;margin-top:5px;"></span>`
+                            : ''}
+            </div>`;
+                }).join("");
+
+            const unreadCount = allItems.filter(n => !n.isRead).length;
+
+            const panelHTML = `
+        <div style="width:380px;max-height:520px;display:flex;flex-direction:column;
+                    font-family:'Segoe UI',Arial,sans-serif;border-radius:12px;overflow:hidden;">
+
+            <!-- Header -->
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:14px 16px;border-bottom:1px solid #f3f4f6;
+                        background:#fff;flex-shrink:0;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                         stroke="#111827" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                        <path d="M13.73 21a2 2 0 01-3.46 0"/>
+                    </svg>
+                    <span style="font-size:0.95rem;font-weight:700;color:#111827;">Notifications</span>
+                    ${unreadCount > 0
+                    ? `<span style="background:#3b82f6;color:#fff;font-size:0.7rem;font-weight:700;
+                                        padding:2px 7px;border-radius:10px;">${unreadCount}</span>`
+                    : ''}
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    ${allItems.length > 0
+                    ? `<span onclick="sap.ui.getCore().byId('${sViewId}').getController()._viewAllNotifications()"
+                                 style="font-size:0.78rem;color:#3b82f6;cursor:pointer;font-weight:500;
+                                        padding:4px 8px;border-radius:6px;hover:background:#eff6ff;">
+                               View All
+                           </span>`
+                    : ''}
+                    <!-- Close / X button → navigates to dashboard -->
+                    <span onclick="sap.ui.getCore().byId('${sViewId}').getController()._closeNotifPanel()"
+                          style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;
+                                 cursor:pointer;border-radius:6px;color:#6b7280;font-size:1.1rem;
+                                 background:#f3f4f6;line-height:1;"
+                          title="Close">✕</span>
+                </div>
+            </div>
+
+            <!-- Scrollable notification list -->
+            <div style="overflow-y:auto;flex:1;">${notifRows}</div>
+
+        </div>`;
+
+            // Use a ResponsivePopover so it stays anchored to the bell
+            this._oNotifPopover = new sap.m.Popover({
+                showHeader: false,
+                placement: "Bottom",
+                contentWidth: "380px",
+                afterClose: () => {
+                    if (this._oNotifPopover) {
+                        this._oNotifPopover.destroy();
+                        this._oNotifPopover = null;
+                    }
+                }
+            });
+
+            const oHtml = new sap.ui.core.HTML({
+                content: panelHTML,
+                sanitizeContent: false
+            });
+
+            this._oNotifPopover.addContent(oHtml);
+            this.getView().addDependent(this._oNotifPopover);
+            this._oNotifPopover.openBy(oSource);
+        },
+
+        // ── Close panel + stay on dashboard ──────────────────────────────────
+        _closeNotifPanel() {
+            if (this._oNotifPopover) {
+                this._oNotifPopover.close();
+                this._oNotifPopover.destroy();
+                this._oNotifPopover = null;
             }
+            // Navigate to dashboard (overview)
+            this.getOwnerComponent().getRouter().navTo("dashboard");
+        },
+
+        // ── "View All" inside the panel → Notifications page ─────────────────
+        _viewAllNotifications() {
+            this.getOwnerComponent().getRouter().navTo("notifications");
         },
 
         // ── Mark Active / Attendance ──────────────────────────────────────────
@@ -1741,7 +1918,8 @@ sap.ui.define([
                 box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
             <span style="font-size:0.95rem;font-weight:600;color:#111827;">Recent Notifications</span>
-            <span style="font-size:0.75rem;color:#3b82f6;cursor:pointer;">View All</span>
+            <span onclick="sap.ui.getCore().byId('${this.getView().getId()}').getController()._viewAllNotifications()"
+      style="font-size:0.75rem;color:#3b82f6;cursor:pointer;">View All</span>
         </div>
         ${notifRows}
     </div>`;

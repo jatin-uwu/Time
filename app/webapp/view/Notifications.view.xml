@@ -5,10 +5,9 @@
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
-    <Page id="notificationsPage" class="tsDashboardPage tsNotifPage" showHeader="false" enableScrolling="true">
-
+    <Page id="notificationsPage" class="tsDashboardPage tsNotifPage"
+          showHeader="false" enableScrolling="true">
         <content>
-
             <VBox class="tsNotifWrap">
 
                 <!-- ── Hero header ── -->
@@ -17,30 +16,40 @@
                         <VBox>
                             <HBox alignItems="Center">
                                 <core:Icon src="sap-icon://bell" class="tsNotifHeroIcon" />
-                                <Title text="Notifications" level="H3" class="tsNotifHeroTitle sapUiTinyMarginBegin" />
+                                <Title text="Notifications" level="H3"
+                                       class="tsNotifHeroTitle sapUiTinyMarginBegin" />
                             </HBox>
-                            <Text text="{= ${notifView>/unreadCount} > 0 ? ${notifView>/unreadCount} + ' unread of ' + ${notifView>/notifications}.length + ' total' : 'You are all caught up' }"
+                            <Text text="{= ${notifView>/unreadCount} > 0
+                                ? ${notifView>/unreadCount} + ' unread'
+                                : 'You are all caught up' }"
                                   class="tsNotifHeroSub" />
                         </VBox>
-                        <Button text="Mark all as read"
-                                type="Emphasized"
-                                icon="sap-icon://accept"
-                                visible="{= ${notifView>/unreadCount} > 0 }"
-                                press=".onMarkAllRead"
-                                class="tsNotifMarkAllBtn" />
+
+                        <HBox alignItems="Center" style="gap:8px;">
+                            <Button text="Mark all as read"
+                                    type="Emphasized"
+                                    icon="sap-icon://accept"
+                                    visible="{= ${notifView>/unreadCount} > 0 }"
+                                    press=".onMarkAllRead"
+                                    class="tsNotifMarkAllBtn" />
+                            <!-- Close → Dashboard -->
+                            <Button icon="sap-icon://decline"
+                                    type="Transparent"
+                                    tooltip="Back to Dashboard"
+                                    press=".onCloseNotifications" />
+                        </HBox>
                     </HBox>
                 </VBox>
 
                 <!-- ── Empty state ── -->
                 <VBox visible="{= !${notifView>/hasNotifications} }"
-                      class="tsNotifEmpty"
-                      alignItems="Center">
+                      class="tsNotifEmpty" alignItems="Center">
                     <core:Icon src="sap-icon://bell" size="3rem" color="#d1d5db"
                                class="sapUiSmallMarginBottom" />
-                    <Title text="No notifications" level="H4" class="sapUiTinyMarginBottom" />
+                    <Title text="No notifications" level="H4"
+                           class="sapUiTinyMarginBottom" />
                     <Text text="You'll be notified here when your manager approves or rejects a timesheet."
-                          textAlign="Center"
-                          class="tsNotifEmptyHint" />
+                          textAlign="Center" class="tsNotifEmptyHint" />
                 </VBox>
 
                 <!-- ── Notification cards ── -->
@@ -51,67 +60,60 @@
                       class="tsNotifList">
 
                     <CustomListItem type="Inactive"
-                                    class="{= ${notifView>read} ? 'tsNotifItem tsNotifRead' : 'tsNotifItem tsNotifUnread' }">
+                        class="{= ${notifView>isRead} ? 'tsNotifItem tsNotifRead' : 'tsNotifItem tsNotifUnread' }">
 
-                        <HBox class="tsNotifCard" alignItems="Start" justifyContent="SpaceBetween" width="100%">
+                        <HBox class="tsNotifCard" alignItems="Start"
+                              justifyContent="SpaceBetween" width="100%">
 
-                            <!-- Status accent stripe -->
-                            <VBox class="tsNotifAccent {= ${notifView>type} === 'approved' ? 'tsNotifAccentApproved' : 'tsNotifAccentRejected' }" />
+                            <VBox class="{= ['approved','TIMESHEET_APPROVED','LEAVE_APPROVED'].indexOf(${notifView>type}) >= 0
+                                          ? 'tsNotifAccent tsNotifAccentApproved'
+                                          : 'tsNotifAccent tsNotifAccentRejected' }" />
 
-                            <!-- Icon + body — flush left -->
-                            <HBox alignItems="Start" justifyContent="Start" class="tsNotifMain" width="100%">
-
-                                <VBox class="{= ${notifView>type} === 'approved' ? 'tsNotifIconWrap tsNotifIconApproved' : 'tsNotifIconWrap tsNotifIconRejected' }"
-                                      alignItems="Center"
-                                      justifyContent="Center">
+                            <HBox alignItems="Start" class="tsNotifMain" width="100%">
+                                <VBox class="{path:'notifView>type', formatter:'.formatTypeIconClass'}"
+                                      alignItems="Center" justifyContent="Center">
                                     <core:Icon
                                         src="{path:'notifView>type', formatter:'.formatTypeIcon'}"
-                                        size="1.35rem" />
+                                        size="1.2rem" />
                                 </VBox>
 
                                 <VBox class="tsNotifBody" width="100%">
-                                    <HBox alignItems="Center" justifyContent="Start" class="tsNotifTopRow" width="100%">
+                                    <HBox alignItems="Center" class="tsNotifTopRow" width="100%">
                                         <ObjectStatus
                                             text="{path:'notifView>type', formatter:'.formatTypeLabel'}"
                                             state="{path:'notifView>type', formatter:'.formatTypeState'}"
                                             class="tsNotifBadge" />
-                                        <Text text="•" class="tsNotifBullet sapUiTinyMarginBegin sapUiTinyMarginEnd"
-                                              visible="{= !!${notifView>weekRange} }" />
-                                        <Text text="{notifView>weekRange}"
-                                              class="tsNotifWeek"
-                                              visible="{= !!${notifView>weekRange} }" />
                                     </HBox>
+                                    <Text text="{notifView>title}"
+                                          class="sapUiTinyMarginTop"
+                                          style="font-weight:600;font-size:0.83rem;color:#111827;"
+                                          wrapping="false" />
                                     <Text text="{notifView>message}"
                                           class="tsNotifMessage sapUiTinyMarginTop"
                                           wrapping="true" />
                                 </VBox>
-
                             </HBox>
 
-                            <!-- Right meta — pinned to the right -->
                             <VBox class="tsNotifMeta" alignItems="End" justifyContent="Start">
-                                <HBox alignItems="Center" justifyContent="End" class="tsNotifWhen">
-                                    <core:Icon src="sap-icon://history" size="0.85rem" color="#9ca3af" />
-                                    <Text text="{path:'notifView>timestamp', formatter:'.formatTimestamp'}"
+                                <HBox alignItems="Center" class="tsNotifWhen">
+                                    <core:Icon src="sap-icon://history"
+                                               size="0.8rem" color="#9ca3af" />
+                                    <Text text="{path:'notifView>notifiedAt', formatter:'.formatTimeAgo'}"
                                           class="tsNotifTime sapUiTinyMarginBegin" />
                                 </HBox>
                                 <core:Icon src="sap-icon://circle-task-2"
-                                           visible="{= !${notifView>read} }"
-                                           color="#3b82f6"
-                                           size="0.7rem"
+                                           visible="{= !${notifView>isRead} }"
+                                           color="#3b82f6" size="0.7rem"
                                            class="tsNotifUnreadDot sapUiTinyMarginTop" />
                             </VBox>
 
                         </HBox>
-
                     </CustomListItem>
 
                 </List>
 
             </VBox>
-
         </content>
-
     </Page>
 
 </mvc:View>

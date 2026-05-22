@@ -157,7 +157,7 @@ class EmployeeService extends cds.ApplicationService {
             // Parse "data:image/jpeg;base64,<data>" or plain base64
             let mimeType = 'image/jpeg';
             let rawBase64 = dataBase64;
-            const match = dataBase64.match(/^data:([^;]+);base64,(.+)$/);
+            const match = dataBase64.match(/^data:([^;]+);base64,(.+)$/s);
             if (match) {
                 mimeType = match[1];
                 rawBase64 = match[2];
@@ -224,10 +224,13 @@ class EmployeeService extends cds.ApplicationService {
                 return { dataBase64: '', mimeType: '' };
             }
  
-            const mimeType = emp.profilePhotoMimeType || 'image/jpeg';
+            // Always guarantee a valid mime type — never return empty string
+            const mimeType = (emp.profilePhotoMimeType && emp.profilePhotoMimeType.trim())
+                ? emp.profilePhotoMimeType.trim()
+                : 'image/jpeg';
             return {
                 dataBase64: `data:${mimeType};base64,${base64}`,
-                mimeType
+                mimeType: mimeType
             };
         });
 

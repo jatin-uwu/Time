@@ -7,7 +7,7 @@
     displayBlock="true">
 
 
-<Toolbar style="background:#1e293b; min-height:72px; padding:0px 20px;">
+<Toolbar style="background:#1e293b; min-height:72px; padding:0px 20px; box-shadow:0 2px 12px rgba(0,0,0,0.35);">
 
     <Button id="menuToggleBtn"
         icon="sap-icon://menu2"
@@ -33,7 +33,7 @@
             padding-left:16px;
         '&gt;
             &lt;span style='
-                color:color:#94a3b8;
+                color:color:#f1f5f9;
                 font-size:0.82rem;
                 font-weight:800;
                 letter-spacing:3.5px;
@@ -58,10 +58,13 @@
             type="Transparent"
             tooltip="Upload profile picture"
             press=".onUploadProfilePicture" />
-        <Avatar initials="{= ${appView>/userInitials} || 'JD' }"
-            displaySize="XS"
-            press=".onProfilePress"
-            tooltip="My profile" />
+        <Avatar id="toolbarAvatar"
+        src="{appView>/profilePhotoSrc}"
+        initials="{= ${appView>/profilePhotoSrc} ? '' : (${appView>/userInitials} || 'JD') }"
+        backgroundColor="{= ${appView>/profilePhotoSrc} ? 'Transparent' : 'Accent6' }"
+        displaySize="XS"
+        press=".onProfilePress"
+        tooltip="My profile" />
     </Toolbar>
 
     <SplitApp id="app">
@@ -120,17 +123,6 @@
                             style="background:transparent; color:#cbd5e1;">
                             <customData>
                                 <core:CustomData key="target" value="history" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem title="Notifications"
-                            icon="sap-icon://bell"
-                            type="Active"
-                            info="{= ${appView>/unreadCount} > 0 ? String(${appView>/unreadCount}) : '' }"
-                            infoState="Error"
-                            press=".onNavSelect"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="notifications" />
                             </customData>
                         </StandardListItem>
                         <StandardListItem title="Approvals"
