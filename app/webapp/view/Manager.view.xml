@@ -16,69 +16,149 @@
         <content>
 
             <!-- ════════════════════════════════════════════════════════════
-                 STATE 1 — Full-width approval queue (list view)
+                 STATE 1 — Approval queue with two tabs:
+                   • Timesheet Approvals
+                   • Prev-Week Fill Requests
                  ════════════════════════════════════════════════════════════ -->
             <VBox visible="{= !${mgrView>/showDetail} }" class="tsMgrListView">
 
-                <!-- Toolbar: pending badge + filter -->
-                <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween">
-                    <HBox alignItems="Center">
-                        <core:Icon src="sap-icon://approvals" class="tsMgrToolbarIcon" />
-                        <Title text="Pending Approvals" level="H4" class="sapUiSmallMarginBegin" />
-                    </HBox>
-                    <ObjectStatus
-                        visible="{= ${mgrView>/pendingCount} > 0 }"
-                        text="{mgrView>/pendingCount} pending"
-                        state="Warning"
-                        icon="sap-icon://alert" />
-                </HBox>
-
-                <!-- Filter tabs -->
-                <SegmentedButton id="statusFilter" selectedKey="Pending"
-                    selectionChange=".onFilterChange" class="tsMgrFilter">
+                <!-- Section tabs: Timesheets vs Prev-Week -->
+                <IconTabBar id="mgrSectionTabs"
+                            select=".onSectionTabSelect"
+                            selectedKey="timesheets"
+                            class="sapUiSmallMarginBottom">
                     <items>
-                        <SegmentedButtonItem key="Pending"  text="Pending"  />
-                        <SegmentedButtonItem key="All"      text="All"      />
-                        <SegmentedButtonItem key="Approved" text="Approved" />
-                        <SegmentedButtonItem key="Rejected" text="Rejected" />
+                        <IconTabFilter key="timesheets"
+                                       text="Timesheet Approvals"
+                                       icon="sap-icon://approvals"
+                                       count="{mgrView>/pendingCount}" />
+                        <IconTabFilter key="prevweek"
+                                       text="Prev-Week Requests"
+                                       icon="sap-icon://calendar"
+                                       count="{mgrView>/prevWeekPendingCount}" />
                     </items>
-                </SegmentedButton>
+                </IconTabBar>
 
-                <!-- Full-width submission cards -->
-                <List id="approvalList"
-                      mode="None"
-                      items="{mgrView>/submissions}"
-                      noDataText="No timesheets found for this filter."
-                      itemPress=".onApprovalSelect"
-                      class="tsMgrApprovalList">
+                <!-- ── TAB 1: Timesheet Approvals ──────────────────────── -->
+                <VBox visible="{= ${mgrView>/activeSection} === 'timesheets' }">
 
-                    <CustomListItem type="Navigation" class="tsMgrListItem">
-                        <HBox class="tsMgrCard" alignItems="Center" justifyContent="SpaceBetween">
+                    <!-- Toolbar: pending badge + filter -->
+                    <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween">
+                        <HBox alignItems="Center">
+                            <core:Icon src="sap-icon://approvals" class="tsMgrToolbarIcon" />
+                            <Title text="Pending Approvals" level="H4" class="sapUiSmallMarginBegin" />
+                        </HBox>
+                        <ObjectStatus
+                            visible="{= ${mgrView>/pendingCount} > 0 }"
+                            text="{mgrView>/pendingCount} pending"
+                            state="Warning"
+                            icon="sap-icon://alert" />
+                    </HBox>
 
-                            <!-- Left: employee + week info -->
-                            <VBox class="tsMgrCardLeft">
-                                <HBox alignItems="Center">
-                                    <core:Icon src="sap-icon://employee" class="tsMgrCardIcon" />
-                                    <Text text="{mgrView>employeeName}" class="tsMgrCardName sapUiTinyMarginBegin" />
+                    <!-- Status filter -->
+                    <SegmentedButton id="statusFilter" selectedKey="Pending"
+                        selectionChange=".onFilterChange" class="tsMgrFilter">
+                        <items>
+                            <SegmentedButtonItem key="Pending"  text="Pending"  />
+                            <SegmentedButtonItem key="All"      text="All"      />
+                            <SegmentedButtonItem key="Approved" text="Approved" />
+                            <SegmentedButtonItem key="Rejected" text="Rejected" />
+                        </items>
+                    </SegmentedButton>
+
+                    <!-- Timesheet submission cards -->
+                    <List id="approvalList"
+                          mode="None"
+                          items="{mgrView>/submissions}"
+                          noDataText="No timesheets found for this filter."
+                          itemPress=".onApprovalSelect"
+                          class="tsMgrApprovalList">
+
+                        <CustomListItem type="Navigation" class="tsMgrListItem">
+                            <HBox class="tsMgrCard" alignItems="Center" justifyContent="SpaceBetween">
+
+                                <!-- Left: employee + week info -->
+                                <VBox class="tsMgrCardLeft">
+                                    <HBox alignItems="Center">
+                                        <core:Icon src="sap-icon://employee" class="tsMgrCardIcon" />
+                                        <Text text="{mgrView>employeeName}" class="tsMgrCardName sapUiTinyMarginBegin" />
+                                        <ObjectStatus
+                                            text="{mgrView>status}"
+                                            state="{path:'mgrView>status', formatter:'.formatStatusState'}"
+                                            class="sapUiSmallMarginBegin" />
+                                    </HBox>
+                                    <Text text="{mgrView>weekRange}"     class="tsMgrCardWeek" />
+                                    <Text text="Submitted: {mgrView>submittedOn}" class="tsMgrCardDate" />
+                                </VBox>
+
+                                <!-- Right: total hours -->
+                                <VBox alignItems="End" class="tsMgrCardRight">
+                                    <Text text="{mgrView>grandTotal}" class="tsMgrCardHours" />
+                                    <Text text="Total hrs"            class="tsMgrCardDate"  />
+                                </VBox>
+
+                            </HBox>
+                        </CustomListItem>
+                    </List>
+
+                </VBox>
+
+                <!-- ── TAB 2: Prev-Week Fill Requests ─────────────────── -->
+                <VBox visible="{= ${mgrView>/activeSection} === 'prevweek' }">
+
+                    <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween">
+                        <HBox alignItems="Center">
+                            <core:Icon src="sap-icon://calendar" class="tsMgrToolbarIcon" />
+                            <Title text="Prev-Week Fill Requests" level="H4" class="sapUiSmallMarginBegin" />
+                        </HBox>
+                        <ObjectStatus
+                            visible="{= ${mgrView>/prevWeekPendingCount} > 0 }"
+                            text="{mgrView>/prevWeekPendingCount} pending"
+                            state="Warning"
+                            icon="sap-icon://alert" />
+                    </HBox>
+
+                    <Table id="prevWeekTable"
+                           items="{mgrView>/prevWeekRequests}"
+                           noDataText="No prev-week fill requests."
+                           class="sapUiSmallMarginTop">
+                        <columns>
+                            <Column><Text text="Employee"        /></Column>
+                            <Column><Text text="Week"            /></Column>
+                            <Column><Text text="Requested On"    /></Column>
+                            <Column><Text text="Employee Remarks"/></Column>
+                            <Column><Text text="Status"          /></Column>
+                            <Column width="14rem"><Text text="Actions" /></Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem>
+                                <cells>
+                                    <Text text="{mgrView>employeeName}"     />
+                                    <Text text="{mgrView>weekRange}"        />
+                                    <Text text="{mgrView>requestedOn}"      />
+                                    <Text text="{mgrView>employeeRemarks}"  wrapping="false" maxLines="2" />
                                     <ObjectStatus
                                         text="{mgrView>status}"
-                                        state="{path:'mgrView>status', formatter:'.formatStatusState'}"
-                                        class="sapUiSmallMarginBegin" />
-                                </HBox>
-                                <Text text="{mgrView>weekRange}" class="tsMgrCardWeek" />
-                                <Text text="Submitted: {mgrView>submittedOn}" class="tsMgrCardDate" />
-                            </VBox>
+                                        state="{path:'mgrView>status', formatter:'.formatStatusState'}" />
+                                    <HBox>
+                                        <Button text="Approve"
+                                                type="Accept"
+                                                icon="sap-icon://accept"
+                                                visible="{= ${mgrView>status} === 'Pending' }"
+                                                press=".onApprovePrevWeek"
+                                                class="sapUiTinyMarginEnd" />
+                                        <Button text="Reject"
+                                                type="Reject"
+                                                icon="sap-icon://decline"
+                                                visible="{= ${mgrView>status} === 'Pending' }"
+                                                press=".onRejectPrevWeek" />
+                                    </HBox>
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
 
-                            <!-- Right: total hours -->
-                            <VBox alignItems="End" class="tsMgrCardRight">
-                                <Text text="{mgrView>grandTotal}" class="tsMgrCardHours" />
-                                <Text text="Total hrs" class="tsMgrCardDate" />
-                            </VBox>
-
-                        </HBox>
-                    </CustomListItem>
-
-                </List>
+                </VBox>
 
             </VBox>
 
@@ -87,7 +167,7 @@
                  ════════════════════════════════════════════════════════════ -->
             <VBox visible="{mgrView>/showDetail}" class="tsMgrDetailView">
 
-                <!-- Detail header: employee info + action buttons -->
+                <!-- Detail header -->
                 <HBox class="tsMgrDetailHeader" justifyContent="SpaceBetween" alignItems="Center">
                     <VBox>
                         <HBox alignItems="Center">
@@ -106,16 +186,16 @@
 
                     <HBox class="tsMgrActionBtns">
                         <Button text="Approve" type="Accept" icon="sap-icon://accept"
-                            enabled="{= ${mgrView>/selectedStatus} === 'Pending' }"
+                            enabled="{= ${mgrView>/selectedStatus} === 'Pending' || ${mgrView>/selectedStatus} === 'Submitted' }"
                             press=".onApprove" />
                         <Button text="Reject" type="Reject" icon="sap-icon://decline"
-                            enabled="{= ${mgrView>/selectedStatus} === 'Pending' }"
+                            enabled="{= ${mgrView>/selectedStatus} === 'Pending' || ${mgrView>/selectedStatus} === 'Submitted' }"
                             press=".onReject"
                             class="sapUiSmallMarginBegin" />
                     </HBox>
                 </HBox>
 
-                <!-- Rejection reason strip (shown after rejection) -->
+                <!-- Rejection reason strip -->
                 <MessageStrip
                     visible="{= !!${mgrView>/selectedRemarks} }"
                     text="{= 'Rejection reason: ' + ${mgrView>/selectedRemarks} }"
