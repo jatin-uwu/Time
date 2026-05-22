@@ -130,6 +130,51 @@ entity TimesheetEntry : managed {
     isLocked           : Boolean default false;
 }
 
+entity TimesheetDayUnlockRequest : managed {
+    key requestId       : String(30);       // e.g. EMP1001-2026-05-19-HR
+
+    employee            : Association to EmployeeMaster;
+    targetDate          : Date;             // The specific missed date
+
+    // HR person the employee selected from the filtered HR list
+    hrApprover          : Association to EmployeeMaster;
+
+    status              : String(20) default 'Pending';
+                                            // Pending | Approved | Rejected
+    employeeRemarks     : String(255);
+    hrRemarks           : String(255);
+
+    requestedOn         : Timestamp;
+    resolvedOn          : Timestamp;
+}
+
+// ── Previous-Week Timesheet Approval Request ──────────────────────────────────
+// Created when an employee clicks "Fill Previous Week" and confirms sending
+// to manager. Manager approves → TimesheetHeader for that week is created
+// (or unlocked) and the employee can fill + submit it directly.
+entity TimesheetPrevWeekRequest : managed {
+    key requestId       : String(30);       // e.g. EMP1001-PREV-1716000000000
+
+    employee            : Association to EmployeeMaster;
+    weekStartDate       : Date;             // Monday of the previous week
+    weekEndDate         : Date;             // Sunday of the previous week
+
+    // Manager is resolved automatically from employee.manager
+    manager             : Association to EmployeeMaster;
+
+    status              : String(20) default 'Pending';
+                                            // Pending | Approved | Rejected
+    employeeRemarks     : String(255);
+    managerRemarks      : String(255);
+
+    requestedOn         : Timestamp;
+    resolvedOn          : Timestamp;
+
+    // Once approved, this links to the TimesheetHeader that was unlocked
+    timesheetId         : String(15);
+}
+
+
 entity LeaveRequest : managed {
     key leaveId        : String(20);
     employee           : Association to EmployeeMaster;
