@@ -715,6 +715,7 @@ sap.ui.define([
 
             this._callAction("getPerformanceTrend", { year: year })
                 .then(oData => {
+                    console.log("Performance trend raw:", JSON.stringify(oData));  // ← ADD THIS
                     let months = Array(12).fill(null);
                     try {
                         let raw = [];
@@ -725,8 +726,6 @@ sap.ui.define([
                         } else if (Array.isArray(oData.months)) {
                             raw = oData.months;
                         }
-
-                        // ── NEW: normalise — each slot may be a number OR an object ──
                         months = raw.map(slot => {
                             if (slot === null || slot === undefined) return null;
                             if (typeof slot === "number") return slot;
@@ -735,7 +734,6 @@ sap.ui.define([
                             }
                             return null;
                         });
-
                     } catch (e) {
                         months = Array(12).fill(null);
                     }
@@ -1314,7 +1312,7 @@ sap.ui.define([
             const trendMonths = Array.isArray(trend.months) ? trend.months : Array(12).fill(null);
             const trendYear = trend.selectedYear || String(new Date().getFullYear());
 
-            const W = 440, H = 170, PL = 32, PR = 10, PT = 18, PB = 26;
+            const W = 440, H = 155, PL = 32, PR = 10, PT = 14, PB = 20;
             const CW = W - PL - PR, CH = H - PT - PB;
             const xOf = (i) => PL + (i / 11) * CW;
             const yOf = (v) => PT + CH - ((v - 1) / 4) * CH;   // scale 1-5
@@ -1925,41 +1923,32 @@ sap.ui.define([
         // Bar chart for timesheet hours in the current week 
         // ─────────────────────────────────────────────────────────────────────
         _buildBarChart(weekDays) {
-            const MAX_H = 14;
             const X_STEP = 100, BAR_W = 60;
             const CHART_W = X_STEP * 5;
-            const MAX_BAR = 160;   // tall enough to show clear height differences
+            const MAX_BAR = 180;
             const TOP_PAD = 20;
             const BASE_Y = MAX_BAR + TOP_PAD;
-            const VIEW_H = BASE_Y + 30;
+            const VIEW_H = BASE_Y + 24;  // ← reduced bottom padding
 
-            // Find actual max hours this week so bars scale relative to each other
             const weekMax = Math.max(...weekDays.slice(0, 5).map(d => d.hours || 0), 1);
 
             let bars = "";
             weekDays.slice(0, 5).forEach((day, i) => {
                 const x = i * X_STEP + (X_STEP - BAR_W) / 2;
-
-                // Scale bar height relative to the tallest bar this week
-                // minimum 12px just so empty days show a stub
                 const barH = day.hours > 0
                     ? Math.max(12, (day.hours / weekMax) * MAX_BAR)
-                    : 12;
-
+                    : 6;  // ← tiny stub for empty days
                 const y = BASE_Y - barH;
                 const col = day.hours > 0 ? "#3b82f6" : "#e5e7eb";
                 const cxB = x + BAR_W / 2;
 
-                // Bar
                 bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}"
                        rx="8" fill="${col}"/>`;
 
-                // Day label below
-                bars += `<text x="${cxB}" y="${BASE_Y + 20}" text-anchor="middle"
+                bars += `<text x="${cxB}" y="${BASE_Y + 16}" text-anchor="middle"
                        font-size="11" fill="#6b7280"
                        font-family="sans-serif">${day.name}</text>`;
 
-                // Hour label — inside bar if tall enough, above bar if short
                 if (day.hours > 0) {
                     const lbl = (day.hoursLabel || "").replace(" hrs", "h");
                     const inside = barH >= 28;
@@ -1972,7 +1961,7 @@ sap.ui.define([
             });
 
             return `
-        <div style="padding:0 18px 14px;width:100%;box-sizing:border-box;margin-top:8px;">
+        <div style="padding:0 18px 8px;width:100%;box-sizing:border-box;margin-top:4px;">
             <svg viewBox="0 0 ${CHART_W} ${VIEW_H}" width="100%"
                  style="overflow:visible;display:block;">
                 ${bars}
