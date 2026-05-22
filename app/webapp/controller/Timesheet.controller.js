@@ -25,9 +25,9 @@ sap.ui.define([
 ) {
     "use strict";
 
-    const BASE_URL   = "/employee";
-    const DAYS       = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+    const BASE_URL = "/employee";
+    const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const DAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
     return Controller.extend("timesheet.app.controller.Timesheet", {
 
@@ -46,37 +46,37 @@ sap.ui.define([
         // ── Initialise all JSON models and internal state ─────────────────────
         _initModels: function () {
             this.getView().setModel(new JSONModel({
-                weekStatus:             "None",
-                weekStatusState:        "None",
-                weekStatusIcon:         "",
-                weekRangeLabel:         "",
-                prevWeekRangeLabel:     "",
-                isViewingPrevWeek:      false,
-                isPrevWeekApproved:     false,
-                canEdit:                false,
-                canSubmit:              false,
-                infoMessage:            "",
-                infoMessageType:        "Information",
+                weekStatus: "None",
+                weekStatusState: "None",
+                weekStatusIcon: "",
+                weekRangeLabel: "",
+                prevWeekRangeLabel: "",
+                isViewingPrevWeek: false,
+                isPrevWeekApproved: false,
+                canEdit: false,
+                canSubmit: false,
+                infoMessage: "",
+                infoMessageType: "Information",
                 showRequestPrevWeekBtn: false,
-                showPrevWeekPending:    false,
-                showFillPrevWeekBtn:    false,
-                showPrevWeekDone:       false,
-                prevWeekFillEnabled:    false
+                showPrevWeekPending: false,
+                showFillPrevWeekBtn: false,
+                showPrevWeekDone: false,
+                prevWeekFillEnabled: false
             }), "viewModel");
 
             // Internal state
-            this._currentEmployee  = null;
-            this._weekStartDate    = null;
-            this._weekEndDate      = null;
+            this._currentEmployee = null;
+            this._weekStartDate = null;
+            this._weekEndDate = null;
             this._prevWeekStartDate = null;
-            this._prevWeekEndDate   = null;
-            this._timesheetId      = null;
-            this._tasks            = [];
-            this._rows             = [];
-            this._dayUnlockReqs    = {};
-            this._prevWeekRequest  = null;
+            this._prevWeekEndDate = null;
+            this._timesheetId = null;
+            this._tasks = [];
+            this._rows = [];
+            this._dayUnlockReqs = {};
+            this._prevWeekRequest = null;
             this._injectedControls = [];  // tracks placeAt controls for cleanup
-            this._csrfToken        = null;
+            this._csrfToken = null;
 
             // HR unlock dialog model
             this.getView().setModel(new JSONModel({
@@ -105,8 +105,8 @@ sap.ui.define([
         },
 
         _getMondayOfWeek: function (date) {
-            const d    = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-            const day  = d.getDay();
+            const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+            const day = d.getDay();
             const diff = day === 0 ? -6 : 1 - day;
             d.setDate(d.getDate() + diff);
             return d;
@@ -129,6 +129,62 @@ sap.ui.define([
             return this._toISODate(d);
         },
 
+        _getAvailableTasks: function (currentRowIdx) {
+            // Get taskIds already selected in OTHER rows
+            const usedTaskIds = new Set();
+            this._rows.forEach(function (row, idx) {
+                if (idx !== currentRowIdx && row.taskId) {
+                    usedTaskIds.add(row.taskId);
+                }
+            });
+            // Return tasks not used in other rows
+            return this._tasks.filter(function (t) {
+                return !usedTaskIds.has(t.taskId);
+            });
+        },
+
+        _refreshTaskDropdowns: function (weekDays, canEdit) {
+            // For each row, find its Select control and rebuild items
+            // based on what other rows have selected
+            this._rows.forEach(function (row, rowIdx) {
+                // Find the Select control placed in this row's task cell
+                const vid = this.getView().getId();
+                const taskSpan = document.getElementById(vid + "--taskCell_" + rowIdx);
+                if (!taskSpan) return;
+
+                // Get the SAP Select placed inside this span
+                const selectDom = taskSpan.querySelector(".sapMSlt");
+                if (!selectDom) return;
+
+                // Find the SAP control by its DOM ref
+                const sel = sap.ui.getCore().byId(
+                    selectDom.id.replace("-arrow", "").replace("-label", "")
+                );
+                // Walk up to find the Select control
+                let sapCtrl = null;
+                this._injectedControls.forEach(function (ctrl) {
+                    if (ctrl instanceof Select && ctrl.getDomRef() &&
+                        taskSpan.contains(ctrl.getDomRef())) {
+                        sapCtrl = ctrl;
+                    }
+                });
+
+                if (!sapCtrl) return;
+
+                // Rebuild items
+                sapCtrl.destroyItems();
+                sapCtrl.addItem(new Item({ key: "", text: "-- Select Task --" }));
+                this._getAvailableTasks(rowIdx).forEach(function (t) {
+                    sapCtrl.addItem(new Item({ key: t.taskId, text: t.taskName }));
+                });
+
+                // Re-select the current value (it may have been destroyed)
+                if (row.taskId) {
+                    sapCtrl.setSelectedKey(row.taskId);
+                }
+            }.bind(this));
+        },
+
         _computeWeekDates: function (refDate, offset) {
             const mon = this._getMondayOfWeek(refDate);
             if (offset === -1) mon.setDate(mon.getDate() - 7);
@@ -136,7 +192,7 @@ sap.ui.define([
             sun.setDate(mon.getDate() + 6);
 
             this._weekStartDate = this._toISODate(mon);
-            this._weekEndDate   = this._toISODate(sun);
+            this._weekEndDate = this._toISODate(sun);
 
             // Always keep prev week dates for the bottom section
             const prevMon = new Date(this._getMondayOfWeek(new Date()));
@@ -144,7 +200,7 @@ sap.ui.define([
             const prevSun = new Date(prevMon);
             prevSun.setDate(prevMon.getDate() + 6);
             this._prevWeekStartDate = this._toISODate(prevMon);
-            this._prevWeekEndDate   = this._toISODate(prevSun);
+            this._prevWeekEndDate = this._toISODate(prevSun);
 
             const vm = this.getView().getModel("viewModel");
             vm.setProperty("/weekRangeLabel",
@@ -159,7 +215,7 @@ sap.ui.define([
 
         _getWeekDays: function () {
             const days = [];
-            const mon  = new Date(this._weekStartDate + "T00:00:00");
+            const mon = new Date(this._weekStartDate + "T00:00:00");
             for (let i = 0; i < 7; i++) {
                 const d = new Date(mon);
                 d.setDate(mon.getDate() + i);
@@ -191,13 +247,13 @@ sap.ui.define([
                 // Load week data
                 const data = await this._callAction(
                     BASE_URL + "/getTimesheetWeekData", {
-                        weekStartDate: this._weekStartDate,
-                        weekEndDate:   this._weekEndDate
-                    }
+                    weekStartDate: this._weekStartDate,
+                    weekEndDate: this._weekEndDate
+                }
                 );
 
-                this._timesheetId   = data.timesheetId;
-                this._tasks         = JSON.parse(data.tasks || "[]");
+                this._timesheetId = data.timesheetId;
+                this._tasks = JSON.parse(data.tasks || "[]");
                 this._dayUnlockReqs = {};
 
                 // Index unlock requests by date (keep most recent per date)
@@ -231,14 +287,14 @@ sap.ui.define([
                         return t.taskId === e.task_taskId;
                     });
                     rowMap[e.task_taskId] = {
-                        taskId:   e.task_taskId,
+                        taskId: e.task_taskId,
                         taskName: task ? task.taskName : e.task_taskId,
-                        entries:  {},
-                        locked:   {}
+                        entries: {},
+                        locked: {}
                     };
                 }
                 rowMap[e.task_taskId].entries[e.workDate] = e.hoursWorked;
-                rowMap[e.task_taskId].locked[e.workDate]  = !!e.isLocked;
+                rowMap[e.task_taskId].locked[e.workDate] = !!e.isLocked;
             }.bind(this));
 
             this._rows = Object.values(rowMap);
@@ -253,22 +309,22 @@ sap.ui.define([
         // All setProperty calls use native booleans — never strings
         // ══════════════════════════════════════════════════════════════════════
         _updateViewModelState: function (weekStatus, isPrevWeekApproved) {
-            const vm     = this.getView().getModel("viewModel");
+            const vm = this.getView().getModel("viewModel");
             const isView = vm.getProperty("/isViewingPrevWeek");
 
             const stateMap = {
-                "Draft":            { state: "None",    icon: "sap-icon://edit"    },
-                "Pending":          { state: "Warning", icon: "sap-icon://pending" },
-                "Approved":         { state: "Success", icon: "sap-icon://accept"  },
-                "Rejected":         { state: "Error",   icon: "sap-icon://decline" },
-                "PrevWeekApproved": { state: "Success", icon: "sap-icon://accept"  },
-                "None":             { state: "None",    icon: ""                   }
+                "Draft": { state: "None", icon: "sap-icon://edit" },
+                "Pending": { state: "Warning", icon: "sap-icon://pending" },
+                "Approved": { state: "Success", icon: "sap-icon://accept" },
+                "Rejected": { state: "Error", icon: "sap-icon://decline" },
+                "PrevWeekApproved": { state: "Success", icon: "sap-icon://accept" },
+                "None": { state: "None", icon: "" }
             };
             const s = stateMap[weekStatus] || stateMap["None"];
 
-            vm.setProperty("/weekStatus",         weekStatus);
-            vm.setProperty("/weekStatusState",    s.state);
-            vm.setProperty("/weekStatusIcon",     s.icon);
+            vm.setProperty("/weekStatus", weekStatus);
+            vm.setProperty("/weekStatusState", s.state);
+            vm.setProperty("/weekStatusIcon", s.icon);
             vm.setProperty("/isPrevWeekApproved", !!isPrevWeekApproved);
 
             // canEdit
@@ -304,7 +360,7 @@ sap.ui.define([
             }
 
             // Prev-week section button states
-            const pr         = this._prevWeekRequest;
+            const pr = this._prevWeekRequest;
             const prevStatus = pr ? pr.status : null;
 
             vm.setProperty("/showRequestPrevWeekBtn",
@@ -345,60 +401,60 @@ sap.ui.define([
         _renderGrid: function () {
             this._destroyInjectedControls(); // MUST be first
 
-            const vm         = this.getView().getModel("viewModel");
-            const canEdit    = vm.getProperty("/canEdit");
-            const today      = this._toISODate(new Date());
-            const yesterday  = this._getYesterday();
+            const vm = this.getView().getModel("viewModel");
+            const canEdit = vm.getProperty("/canEdit");
+            const today = this._toISODate(new Date());
+            const yesterday = this._getYesterday();
             const twoDaysAgo = this._getTwoDaysAgo();
-            const weekDays   = this._getWeekDays();
-            const isView     = vm.getProperty("/isViewingPrevWeek");
-            const vid        = this.getView().getId();
+            const weekDays = this._getWeekDays();
+            const isView = vm.getProperty("/isViewingPrevWeek");
+            const vid = this.getView().getId();
 
             // Clear rows container
             const rowsContainer = this._clearContainer("timesheetRowsContainer");
             if (!rowsContainer) return;
 
             // Destroy old HTML control (prevents ID conflict on re-render)
-            const tableId  = vid + "--tsTable";
+            const tableId = vid + "--tsTable";
             const oldTable = sap.ui.getCore().byId(tableId);
             if (oldTable) oldTable.destroy();
 
             // Hide static XML header/totals rows (table renders its own)
-            const dayHeaderRow   = this.byId("dayHeaderRow");
+            const dayHeaderRow = this.byId("dayHeaderRow");
             const dailyTotalsRow = this.byId("dailyTotalsRow");
-            if (dayHeaderRow)   dayHeaderRow.setVisible(false);
+            if (dayHeaderRow) dayHeaderRow.setVisible(false);
             if (dailyTotalsRow) dailyTotalsRow.setVisible(false);
 
             // ── <thead> ───────────────────────────────────────────────────
             let thead = '<thead><tr style="background:#f5f6f7;border-bottom:2px solid #d9d9d9;">';
             thead += '<th style="width:220px;padding:10px 12px;text-align:left;font-weight:700;'
-                   + 'font-size:0.9rem;color:#32363a;border-right:1px solid #e5e5e5;">'
-                   + 'Project / Task</th>';
+                + 'font-size:0.9rem;color:#32363a;border-right:1px solid #e5e5e5;">'
+                + 'Project / Task</th>';
 
             weekDays.forEach(function (dateStr, idx) {
-                const isSun      = idx === 6;
-                const isToday    = dateStr === today    && !isView;
-                const isYest     = dateStr === yesterday  && !isView;
-                const isTwoDays  = dateStr === twoDaysAgo && !isView;
-                const bg = isToday   ? "#dbeeff"
-                         : (isYest || isTwoDays) ? "#f0faf0"
-                         : isSun     ? "#fafafa"
-                         : "transparent";
+                const isSun = idx === 6;
+                const isToday = dateStr === today && !isView;
+                const isYest = dateStr === yesterday && !isView;
+                const isTwoDays = dateStr === twoDaysAgo && !isView;
+                const bg = isToday ? "#dbeeff"
+                    : (isYest || isTwoDays) ? "#f0faf0"
+                        : isSun ? "#fafafa"
+                            : "transparent";
                 const col = isToday ? "#0854a0" : "#6a6d70";
-                const fw  = isToday ? "700" : "500";
+                const fw = isToday ? "700" : "500";
 
                 thead += '<th style="width:110px;padding:10px 8px;text-align:center;background:'
-                       + bg + ';border-right:1px solid #e5e5e5;">'
-                       + '<div style="font-weight:' + fw + ';font-size:0.8rem;color:#32363a;">'
-                       + DAYS[idx] + '</div>'
-                       + '<div style="font-size:0.75rem;color:' + col + ';font-weight:' + fw + ';">'
-                       + this._formatDisplayDate(dateStr) + '</div>'
-                       + (isSun ? '<div style="font-size:0.7rem;color:#a0a0a0;margin-top:2px;">Holiday</div>' : '')
-                       + '</th>';
+                    + bg + ';border-right:1px solid #e5e5e5;">'
+                    + '<div style="font-weight:' + fw + ';font-size:0.8rem;color:#32363a;">'
+                    + DAYS[idx] + '</div>'
+                    + '<div style="font-size:0.75rem;color:' + col + ';font-weight:' + fw + ';">'
+                    + this._formatDisplayDate(dateStr) + '</div>'
+                    + (isSun ? '<div style="font-size:0.7rem;color:#a0a0a0;margin-top:2px;">Holiday</div>' : '')
+                    + '</th>';
             }.bind(this));
 
             thead += '<th style="width:80px;padding:10px 8px;text-align:center;font-weight:700;'
-                   + 'font-size:0.9rem;color:#32363a;">Total</th></tr></thead>';
+                + 'font-size:0.9rem;color:#32363a;">Total</th></tr></thead>';
 
             // ── <tbody> data rows ─────────────────────────────────────────
             let tbody = '<tbody>';
@@ -409,21 +465,21 @@ sap.ui.define([
 
                 // Task cell — SAP Select injected after render
                 tbody += '<td style="padding:6px 8px;border-right:1px solid #e5e5e5;'
-                       + 'vertical-align:middle;min-width:220px;">'
-                       + '<span id="' + vid + '--taskCell_' + rowIdx + '"></span></td>';
+                    + 'vertical-align:middle;min-width:220px;">'
+                    + '<span id="' + vid + '--taskCell_' + rowIdx + '"></span></td>';
 
                 weekDays.forEach(function (dateStr, dayIdx) {
-                    const isSun     = dayIdx === 6;
-                    const isToday   = dateStr === today    && !isView;
-                    const isYest    = dateStr === yesterday  && !isView;
+                    const isSun = dayIdx === 6;
+                    const isToday = dateStr === today && !isView;
+                    const isYest = dateStr === yesterday && !isView;
                     const isTwoDays = dateStr === twoDaysAgo && !isView;
-                    const bg = isToday   ? "#dbeeff"
-                             : (isYest || isTwoDays) ? "#f0faf0"
-                             : isSun     ? "#f5f5f5"
-                             : "transparent";
+                    const bg = isToday ? "#dbeeff"
+                        : (isYest || isTwoDays) ? "#f0faf0"
+                            : isSun ? "#f5f5f5"
+                                : "transparent";
 
                     tbody += '<td style="padding:4px 6px;text-align:center;background:' + bg
-                           + ';border-right:1px solid #e5e5e5;vertical-align:middle;">';
+                        + ';border-right:1px solid #e5e5e5;vertical-align:middle;">';
                     if (isSun) {
                         tbody += '<span style="color:#bbb;font-size:1rem;">\u2014</span>';
                     } else {
@@ -435,9 +491,9 @@ sap.ui.define([
 
                 // Row total cell
                 tbody += '<td style="padding:6px 8px;text-align:center;font-weight:600;'
-                       + 'vertical-align:middle;color:#32363a;" id="'
-                       + vid + '--rowTotal_' + rowIdx + '">'
-                       + (rowTotal > 0 ? rowTotal : 0) + '</td>';
+                    + 'vertical-align:middle;color:#32363a;" id="'
+                    + vid + '--rowTotal_' + rowIdx + '">'
+                    + (rowTotal > 0 ? rowTotal : 0) + '</td>';
                 tbody += '</tr>';
             }.bind(this));
 
@@ -445,7 +501,7 @@ sap.ui.define([
             let weekTotal = 0;
             tbody += '<tr style="background:#f5f6f7;border-top:2px solid #d9d9d9;font-weight:700;">';
             tbody += '<td style="padding:8px 12px;border-right:1px solid #e5e5e5;'
-                   + 'font-size:0.875rem;color:#32363a;">Daily Total</td>';
+                + 'font-size:0.875rem;color:#32363a;">Daily Total</td>';
 
             weekDays.forEach(function (dateStr, idx) {
                 const isSun = idx === 6;
@@ -454,36 +510,36 @@ sap.ui.define([
                     this._rows.forEach(function (r) {
                         dayTotal += parseFloat(r.entries[dateStr] || 0);
                     });
-                    dayTotal   = parseFloat(dayTotal.toFixed(2));
+                    dayTotal = parseFloat(dayTotal.toFixed(2));
                     weekTotal += dayTotal;
                 }
                 tbody += '<td style="padding:8px 6px;text-align:center;'
-                       + 'border-right:1px solid #e5e5e5;color:'
-                       + (dayTotal > 8 ? "#bb0000" : "#32363a") + ';" id="'
-                       + vid + '--dayTotal_' + idx + '">'
-                       + (isSun ? '\u2014' : dayTotal) + '</td>';
+                    + 'border-right:1px solid #e5e5e5;color:'
+                    + (dayTotal > 8 ? "#bb0000" : "#32363a") + ';" id="'
+                    + vid + '--dayTotal_' + idx + '">'
+                    + (isSun ? '\u2014' : dayTotal) + '</td>';
             }.bind(this));
 
             tbody += '<td style="padding:8px 8px;text-align:center;color:#32363a;" id="'
-                   + vid + '--weekTotal">'
-                   + parseFloat(weekTotal.toFixed(2)) + '</td>';
+                + vid + '--weekTotal">'
+                + parseFloat(weekTotal.toFixed(2)) + '</td>';
             tbody += '</tr></tbody>';
 
             // ── Assemble complete HTML ────────────────────────────────────
             const completeHtml =
                 '<div style="width:100%;overflow-x:auto;border-radius:6px;'
-              + 'box-shadow:0 1px 4px rgba(0,0,0,0.1);">'
-              + '<table style="width:100%;border-collapse:collapse;'
-              + 'border:1px solid #d9d9d9;font-family:inherit;font-size:0.875rem;">'
-              + thead + tbody
-              + '</table></div>';
+                + 'box-shadow:0 1px 4px rgba(0,0,0,0.1);">'
+                + '<table style="width:100%;border-collapse:collapse;'
+                + 'border:1px solid #d9d9d9;font-family:inherit;font-size:0.875rem;">'
+                + thead + tbody
+                + '</table></div>';
 
             // ── HTML control with afterRendering injection guard ───────────
-            const self     = this;
+            const self = this;
             const injected = { done: false };
 
             const htmlControl = new HTML(tableId, {
-                content:        completeHtml,
+                content: completeHtml,
                 afterRendering: function () {
                     if (injected.done) return;
                     injected.done = true;
@@ -496,8 +552,8 @@ sap.ui.define([
 
         // ── Inject SAP Select + Input into rendered HTML table spans ──────────
         _injectSAPControls: function (weekDays, canEdit, today, isView) {
-            const vid        = this.getView().getId();
-            const yesterday  = this._getYesterday();
+            const vid = this.getView().getId();
+            const yesterday = this._getYesterday();
             const twoDaysAgo = this._getTwoDaysAgo();
 
             this._rows.forEach(function (row, rowIdx) {
@@ -506,17 +562,19 @@ sap.ui.define([
                 const taskSpan = document.getElementById(vid + "--taskCell_" + rowIdx);
                 if (taskSpan) {
                     const sel = new Select({
-                        width:       "100%",
+                        width: "100%",
                         selectedKey: row.taskId || "",
-                        enabled:     !!canEdit,
+                        enabled: !!canEdit,
                         change: function (evt) {
-                            this._rows[rowIdx].taskId   = evt.getParameter("selectedItem").getKey();
+                            this._rows[rowIdx].taskId = evt.getParameter("selectedItem").getKey();
                             this._rows[rowIdx].taskName = evt.getParameter("selectedItem").getText();
                             this._recalcTotals(weekDays);
+                            // Refresh all other dropdowns to remove/restore this task
+                            this._refreshTaskDropdowns(weekDays, canEdit);
                         }.bind(this)
                     });
                     sel.addItem(new Item({ key: "", text: "-- Select Task --" }));
-                    this._tasks.forEach(function (t) {
+                    this._getAvailableTasks(rowIdx).forEach(function (t) {
                         sel.addItem(new Item({ key: t.taskId, text: t.taskName }));
                     });
                     sel.placeAt(taskSpan);
@@ -533,7 +591,7 @@ sap.ui.define([
                     if (!span) return;
 
                     const isLocked = row.locked[dateStr] === true;
-                    let   editable = false;
+                    let editable = false;
 
                     if (canEdit) {
                         if (isView) {
@@ -542,8 +600,8 @@ sap.ui.define([
                         } else {
                             // Current week: today, yesterday, 2 days ago
                             editable = (dateStr === today ||
-                                        dateStr === yesterday ||
-                                        dateStr === twoDaysAgo);
+                                dateStr === yesterday ||
+                                dateStr === twoDaysAgo);
                             // Also editable if HR approved unlock
                             const ur = this._dayUnlockReqs[dateStr];
                             if (ur && ur.status === "Approved") editable = true;
@@ -553,12 +611,12 @@ sap.ui.define([
 
                     const existingVal = row.entries[dateStr];
                     const inp = new Input({
-                        value:       existingVal != null ? String(existingVal) : "",
-                        editable:    !!editable,
-                        width:       "100%",
-                        type:        "Number",
+                        value: existingVal != null ? String(existingVal) : "",
+                        editable: !!editable,
+                        width: "100%",
+                        type: "Number",
                         placeholder: editable ? "0" : "",
-                        liveChange:  function (evt) {
+                        liveChange: function (evt) {
                             const val = parseFloat(evt.getParameter("newValue")) || 0;
                             if (val < 0 || val > 24) {
                                 evt.getSource().setValueState("Error");
@@ -568,6 +626,25 @@ sap.ui.define([
                             evt.getSource().setValueState("None");
                             if (!this._rows[rowIdx].entries) this._rows[rowIdx].entries = {};
                             this._rows[rowIdx].entries[dateStr] = val;
+
+                            // Validate daily total for this date across all rows
+                            const dailyTotal = this._rows.reduce(function (sum, r) {
+                                return sum + parseFloat(r.entries[dateStr] || 0);
+                            }, 0);
+
+                            if (dailyTotal > 24) {
+                                evt.getSource().setValueState("Error");
+                                evt.getSource().setValueStateText(
+                                    "Daily total for this day is " + dailyTotal +
+                                    " hours. Cannot exceed 24 hours across all tasks."
+                                );
+                                // Revert the value
+                                this._rows[rowIdx].entries[dateStr] = 0;
+                                evt.getSource().setValue("0");
+                                this._recalcTotals(weekDays);
+                                return;
+                            }
+
                             this._recalcTotals(weekDays);
 
                             // Update canSubmit
@@ -588,7 +665,7 @@ sap.ui.define([
 
         // ── Update totals by writing directly to DOM cells ────────────────────
         _recalcTotals: function (weekDays) {
-            const wd  = weekDays || this._getWeekDays();
+            const wd = weekDays || this._getWeekDays();
             const vid = this.getView().getId();
             let weekTotal = 0;
 
@@ -598,7 +675,7 @@ sap.ui.define([
                 this._rows.forEach(function (r) {
                     dayTotal += parseFloat(r.entries[dateStr] || 0);
                 });
-                dayTotal   = parseFloat(dayTotal.toFixed(2));
+                dayTotal = parseFloat(dayTotal.toFixed(2));
                 weekTotal += dayTotal;
 
                 const dc = document.getElementById(vid + "--dayTotal_" + idx);
@@ -610,7 +687,7 @@ sap.ui.define([
 
             // Row totals
             this._rows.forEach(function (row, rowIdx) {
-                const rt   = this._calcRowTotal(row, wd);
+                const rt = this._calcRowTotal(row, wd);
                 const rtEl = document.getElementById(vid + "--rowTotal_" + rowIdx);
                 if (rtEl) rtEl.textContent = rt;
             }.bind(this));
@@ -636,15 +713,15 @@ sap.ui.define([
         // (calling _renderGrid would trigger afterRendering again → duplicate rows)
         // ══════════════════════════════════════════════════════════════════════
         onAddRow: function () {
-            const rowIdx     = this._rows.length;
-            const weekDays   = this._getWeekDays();
-            const vm         = this.getView().getModel("viewModel");
-            const canEdit    = vm.getProperty("/canEdit");
-            const today      = this._toISODate(new Date());
-            const yesterday  = this._getYesterday();
+            const rowIdx = this._rows.length;
+            const weekDays = this._getWeekDays();
+            const vm = this.getView().getModel("viewModel");
+            const canEdit = vm.getProperty("/canEdit");
+            const today = this._toISODate(new Date());
+            const yesterday = this._getYesterday();
             const twoDaysAgo = this._getTwoDaysAgo();
-            const isView     = vm.getProperty("/isViewingPrevWeek");
-            const vid        = this.getView().getId();
+            const isView = vm.getProperty("/isViewingPrevWeek");
+            const vid = this.getView().getId();
 
             // Add empty row to data model
             this._rows.push({ taskId: null, taskName: null, entries: {}, locked: {} });
@@ -652,8 +729,8 @@ sap.ui.define([
             // Find tbody of existing table
             const rowsContainerDom = this.byId("timesheetRowsContainer").getDomRef();
             if (!rowsContainerDom) return;
-            const tbody    = rowsContainerDom.querySelector("tbody");
-            if (!tbody)    return;
+            const tbody = rowsContainerDom.querySelector("tbody");
+            if (!tbody) return;
             const totalRow = tbody.querySelector("tr:last-child"); // daily totals row
 
             // Build new <tr>
@@ -661,24 +738,24 @@ sap.ui.define([
             tr.style.borderBottom = "1px solid #e5e5e5";
 
             // Task cell
-            const taskTd   = document.createElement("td");
+            const taskTd = document.createElement("td");
             taskTd.style.cssText =
                 "padding:6px 8px;border-right:1px solid #e5e5e5;vertical-align:middle;min-width:220px;";
             const taskSpan = document.createElement("span");
-            taskSpan.id    = vid + "--taskCell_" + rowIdx;
+            taskSpan.id = vid + "--taskCell_" + rowIdx;
             taskTd.appendChild(taskSpan);
             tr.appendChild(taskTd);
 
             // Day cells
             weekDays.forEach(function (dateStr, dayIdx) {
-                const isSun     = dayIdx === 6;
-                const isToday   = dateStr === today    && !isView;
-                const isYest    = dateStr === yesterday  && !isView;
+                const isSun = dayIdx === 6;
+                const isToday = dateStr === today && !isView;
+                const isYest = dateStr === yesterday && !isView;
                 const isTwoDays = dateStr === twoDaysAgo && !isView;
-                const bg = isToday   ? "#dbeeff"
-                         : (isYest || isTwoDays) ? "#f0faf0"
-                         : isSun     ? "#f5f5f5"
-                         : "transparent";
+                const bg = isToday ? "#dbeeff"
+                    : (isYest || isTwoDays) ? "#f0faf0"
+                        : isSun ? "#f5f5f5"
+                            : "transparent";
 
                 const td = document.createElement("td");
                 td.style.cssText =
@@ -689,18 +766,18 @@ sap.ui.define([
                     td.innerHTML = '<span style="color:#bbb;font-size:1rem;">\u2014</span>';
                 } else {
                     const span = document.createElement("span");
-                    span.id    = vid + "--inputCell_" + rowIdx + "_" + dayIdx;
+                    span.id = vid + "--inputCell_" + rowIdx + "_" + dayIdx;
                     td.appendChild(span);
                 }
                 tr.appendChild(td);
             }.bind(this));
 
             // Row total cell
-            const totalTd         = document.createElement("td");
+            const totalTd = document.createElement("td");
             totalTd.style.cssText =
                 "padding:6px 8px;text-align:center;font-weight:600;vertical-align:middle;color:#32363a;";
-            totalTd.id            = vid + "--rowTotal_" + rowIdx;
-            totalTd.textContent   = "0";
+            totalTd.id = vid + "--rowTotal_" + rowIdx;
+            totalTd.textContent = "0";
             tr.appendChild(totalTd);
 
             // Insert before the daily totals row
@@ -710,17 +787,19 @@ sap.ui.define([
             const taskSpanEl = document.getElementById(vid + "--taskCell_" + rowIdx);
             if (taskSpanEl) {
                 const sel = new Select({
-                    width:       "100%",
+                    width: "100%",
                     selectedKey: "",
-                    enabled:     !!canEdit,
+                    enabled: !!canEdit,
                     change: function (evt) {
-                        this._rows[rowIdx].taskId   = evt.getParameter("selectedItem").getKey();
+                        this._rows[rowIdx].taskId = evt.getParameter("selectedItem").getKey();
                         this._rows[rowIdx].taskName = evt.getParameter("selectedItem").getText();
                         this._recalcTotals(weekDays);
+                        this._refreshTaskDropdowns(weekDays, canEdit);
                     }.bind(this)
+
                 });
                 sel.addItem(new Item({ key: "", text: "-- Select Task --" }));
-                this._tasks.forEach(function (t) {
+                this._getAvailableTasks(rowIdx).forEach(function (t) {
                     sel.addItem(new Item({ key: t.taskId, text: t.taskName }));
                 }.bind(this));
                 sel.placeAt(taskSpanEl);
@@ -738,18 +817,18 @@ sap.ui.define([
                 let editable = false;
                 if (canEdit) {
                     editable = isView ? true
-                             : (dateStr === today ||
-                                dateStr === yesterday ||
-                                dateStr === twoDaysAgo);
+                        : (dateStr === today ||
+                            dateStr === yesterday ||
+                            dateStr === twoDaysAgo);
                     const ur = this._dayUnlockReqs[dateStr];
                     if (ur && ur.status === "Approved") editable = true;
                 }
 
                 const inp = new Input({
-                    value:       "",
-                    editable:    !!editable,
-                    width:       "100%",
-                    type:        "Number",
+                    value: "",
+                    editable: !!editable,
+                    width: "100%",
+                    type: "Number",
                     placeholder: editable ? "0" : "",
                     liveChange: function (evt) {
                         const val = parseFloat(evt.getParameter("newValue")) || 0;
@@ -761,6 +840,25 @@ sap.ui.define([
                         evt.getSource().setValueState("None");
                         if (!this._rows[rowIdx].entries) this._rows[rowIdx].entries = {};
                         this._rows[rowIdx].entries[dateStr] = val;
+
+                        // Validate daily total for this date across all rows
+                        const dailyTotal = this._rows.reduce(function (sum, r) {
+                            return sum + parseFloat(r.entries[dateStr] || 0);
+                        }, 0);
+
+                        if (dailyTotal > 24) {
+                            evt.getSource().setValueState("Error");
+                            evt.getSource().setValueStateText(
+                                "Daily total for this day is " + dailyTotal +
+                                " hours. Cannot exceed 24 hours across all tasks."
+                            );
+                            // Revert the value
+                            this._rows[rowIdx].entries[dateStr] = 0;
+                            evt.getSource().setValue("0");
+                            this._recalcTotals(weekDays);
+                            return;
+                        }
+
                         this._recalcTotals(weekDays);
                         const vm2 = this.getView().getModel("viewModel");
                         const has = this._rows.some(function (r) {
@@ -787,14 +885,14 @@ sap.ui.define([
             const vm = this.getView().getModel("viewModel");
             if (vm.getProperty("/isViewingPrevWeek")) return;
 
-            const today      = this._toISODate(new Date());
-            const yesterday  = this._getYesterday();
+            const today = this._toISODate(new Date());
+            const yesterday = this._getYesterday();
             const twoDaysAgo = this._getTwoDaysAgo();
-            const weekDays   = this._getWeekDays();
-            let   hasMissed  = false;
+            const weekDays = this._getWeekDays();
+            let hasMissed = false;
 
             weekDays.forEach(function (dateStr, idx) {
-                if (idx === 6)        return; // skip Sunday (holiday)
+                if (idx === 6) return; // skip Sunday (holiday)
                 if (dateStr >= today) return; // skip today and future days
 
                 // Yesterday and 2 days ago are directly editable — skip
@@ -813,24 +911,24 @@ sap.ui.define([
                 if (!req) {
                     // No request yet — show request button
                     buttonEnabled = true;
-                    buttonText    = "Request HR Approval \u2014 " +
-                                   DAY_LABELS[idx] + ", " +
-                                   this._formatDisplayDate(dateStr);
-                    buttonType    = "Attention";
+                    buttonText = "Request HR Approval \u2014 " +
+                        DAY_LABELS[idx] + ", " +
+                        this._formatDisplayDate(dateStr);
+                    buttonType = "Attention";
                 } else if (req.status === "Pending") {
                     buttonEnabled = false;
-                    buttonText    = "Request Sent \u2014 " + this._formatDisplayDate(dateStr);
-                    buttonType    = "Default";
-                    statusText    = "HR Approval Pending for " + this._formatDisplayDate(dateStr);
+                    buttonText = "Request Sent \u2014 " + this._formatDisplayDate(dateStr);
+                    buttonType = "Default";
+                    statusText = "HR Approval Pending for " + this._formatDisplayDate(dateStr);
                 } else if (req.status === "Approved") {
                     return; // cell is now editable directly
                 } else if (req.status === "Rejected") {
                     buttonEnabled = true;
-                    buttonText    = "Re-request HR Approval \u2014 " +
-                                   DAY_LABELS[idx] + ", " +
-                                   this._formatDisplayDate(dateStr);
-                    buttonType    = "Negative";
-                    statusText    = "HR request rejected for " + this._formatDisplayDate(dateStr);
+                    buttonText = "Re-request HR Approval \u2014 " +
+                        DAY_LABELS[idx] + ", " +
+                        this._formatDisplayDate(dateStr);
+                    buttonType = "Negative";
+                    statusText = "HR request rejected for " + this._formatDisplayDate(dateStr);
                 } else {
                     return;
                 }
@@ -842,7 +940,7 @@ sap.ui.define([
 
                 if (statusText) {
                     const os = new ObjectStatus({
-                        text:  statusText,
+                        text: statusText,
                         state: (req && req.status === "Rejected") ? "Error" : "Warning"
                     });
                     os.addStyleClass("sapUiSmallMarginEnd");
@@ -850,11 +948,11 @@ sap.ui.define([
                 }
 
                 const btn = new Button({
-                    text:    buttonText,
-                    type:    buttonType,
-                    icon:    "sap-icon://approvals",
+                    text: buttonText,
+                    type: buttonType,
+                    icon: "sap-icon://approvals",
                     enabled: !!buttonEnabled,
-                    press:   (function (d) {
+                    press: (function (d) {
                         return function () { this._openHRUnlockDialog(d); }.bind(this);
                     }.bind(this))(dateStr)
                 });
@@ -864,7 +962,7 @@ sap.ui.define([
 
             if (hasMissed) {
                 const lbl = new Label({
-                    text:   "\u26A0\uFE0F Missed Days \u2014 HR Approval Required",
+                    text: "\u26A0\uFE0F Missed Days \u2014 HR Approval Required",
                     design: "Bold"
                 });
                 lbl.addStyleClass("sapUiSmallMarginTop sapUiSmallMarginBottom");
@@ -879,8 +977,8 @@ sap.ui.define([
             this._hrUnlockTargetDate = dateStr;
 
             const hrModel = this.getView().getModel("hrUnlockModel");
-            hrModel.setProperty("/targetDate",      dateStr);
-            hrModel.setProperty("/selectedHrId",    "");
+            hrModel.setProperty("/targetDate", dateStr);
+            hrModel.setProperty("/selectedHrId", "");
             hrModel.setProperty("/employeeRemarks", "");
 
             // Load HR list on first open
@@ -903,10 +1001,10 @@ sap.ui.define([
                     "/hrEmployees",
                     (data.value || []).map(function (e) {
                         return {
-                            employeeId:   e.employeeId,
+                            employeeId: e.employeeId,
                             employeeName: e.employeeName,
-                            designation:  e.designation,
-                            department:   e.department
+                            designation: e.designation,
+                            department: e.department
                         };
                     })
                 );
@@ -916,7 +1014,7 @@ sap.ui.define([
         },
 
         onSubmitHRUnlockRequest: async function () {
-            const hrId    = this.byId("hrApproverSelect").getSelectedKey();
+            const hrId = this.byId("hrApproverSelect").getSelectedKey();
             const hrModel = this.getView().getModel("hrUnlockModel");
 
             if (!hrId) {
@@ -927,8 +1025,8 @@ sap.ui.define([
             try {
                 this.getView().setBusy(true);
                 await this._callAction(BASE_URL + "/requestDayUnlock", {
-                    targetDate:      this._hrUnlockTargetDate,
-                    hrApproverId:    hrId,
+                    targetDate: this._hrUnlockTargetDate,
+                    hrApproverId: hrId,
                     employeeRemarks: hrModel.getProperty("/employeeRemarks")
                 });
                 MessageToast.show("HR unlock request sent successfully!");
@@ -983,8 +1081,8 @@ sap.ui.define([
             try {
                 this.getView().setBusy(true);
                 await this._callAction(BASE_URL + "/requestPrevWeekFill", {
-                    weekStartDate:   this._prevWeekStartDate,
-                    weekEndDate:     this._prevWeekEndDate,
+                    weekStartDate: this._prevWeekStartDate,
+                    weekEndDate: this._prevWeekEndDate,
                     employeeRemarks: remarks
                 });
                 MessageToast.show("Approval request sent to your manager!");
@@ -1008,7 +1106,7 @@ sap.ui.define([
             const vm = this.getView().getModel("viewModel");
             vm.setProperty("/isViewingPrevWeek", true);
             this._weekStartDate = this._prevWeekStartDate;
-            this._weekEndDate   = this._prevWeekEndDate;
+            this._weekEndDate = this._prevWeekEndDate;
             vm.setProperty("/weekRangeLabel",
                 this._formatDisplayDate(this._weekStartDate) +
                 " \u2013 " +
@@ -1047,12 +1145,12 @@ sap.ui.define([
                 this.getView().setBusy(true);
                 const result = await this._callAction(
                     BASE_URL + "/saveTimesheetEntries", {
-                        timesheetId:   this._timesheetId,
-                        weekStartDate: this._weekStartDate,
-                        weekEndDate:   this._weekEndDate,
-                        isPrevWeek:    !!vm.getProperty("/isViewingPrevWeek"),
-                        entries:       JSON.stringify(validEntries)
-                    }
+                    timesheetId: this._timesheetId,
+                    weekStartDate: this._weekStartDate,
+                    weekEndDate: this._weekEndDate,
+                    isPrevWeek: !!vm.getProperty("/isViewingPrevWeek"),
+                    entries: JSON.stringify(validEntries)
+                }
                 );
                 this._timesheetId = result.timesheetId;
                 MessageToast.show("Saved " + result.saved + " entr" +
@@ -1070,18 +1168,18 @@ sap.ui.define([
         // SUBMIT — only allowed on Friday or Saturday
         // ══════════════════════════════════════════════════════════════════════
         onSubmitTimesheet: function () {
-            const vm            = this.getView().getModel("viewModel");
+            const vm = this.getView().getModel("viewModel");
             const isViewingPrev = vm.getProperty("/isViewingPrevWeek");
 
             // Block submit before Friday for current week
             if (!isViewingPrev) {
                 const dayOfWeek = new Date().getDay(); // 0=Sun ... 5=Fri ... 6=Sat
                 if (dayOfWeek < 5) {
-                    const names    = ["Sunday","Monday","Tuesday","Wednesday",
-                                      "Thursday","Friday","Saturday"];
+                    const names = ["Sunday", "Monday", "Tuesday", "Wednesday",
+                        "Thursday", "Friday", "Saturday"];
                     const daysLeft = 5 - dayOfWeek;
                     MessageBox.warning(
-                        "You can only submit the weekly timesheet on Friday or later.\n\n" +
+                        "You can only submit the xeekly timesheet on Friday or later.\n\n" +
                         "Today is " + names[dayOfWeek] + " \u2014 " +
                         daysLeft + " day" + (daysLeft > 1 ? "s" : "") + " until Friday."
                     );
@@ -1099,11 +1197,11 @@ sap.ui.define([
 
             const confirmMsg = isViewingPrev
                 ? "This will save and finalise the previous week timesheet " +
-                  "(no further approval needed). Proceed?"
+                "(no further approval needed). Proceed?"
                 : "This will submit your timesheet to your manager for approval. Proceed?";
 
             MessageBox.confirm(confirmMsg, {
-                actions:          [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
                 emphasizedAction: MessageBox.Action.OK,
                 onClose: async function (action) {
                     if (action !== MessageBox.Action.OK) return;
@@ -1112,27 +1210,30 @@ sap.ui.define([
 
                         // Save first, then submit
                         await this._callAction(BASE_URL + "/saveTimesheetEntries", {
-                            timesheetId:   this._timesheetId,
+                            timesheetId: this._timesheetId,
                             weekStartDate: this._weekStartDate,
-                            weekEndDate:   this._weekEndDate,
-                            isPrevWeek:    !!isViewingPrev,
-                            entries:       JSON.stringify(validEntries)
+                            weekEndDate: this._weekEndDate,
+                            isPrevWeek: !!isViewingPrev,
+                            entries: JSON.stringify(validEntries)
                         });
 
                         const msg = await this._callAction(
                             BASE_URL + "/submitTimesheetWeek", {
-                                timesheetId: this._timesheetId,
-                                isPrevWeek:  !!isViewingPrev
-                            }
+                            timesheetId: this._timesheetId,
+                            isPrevWeek: !!isViewingPrev
+                        }
                         );
 
                         MessageBox.success(
-                            typeof msg === "string"
-                                ? msg
-                                : "Timesheet submitted successfully!",
+                            typeof msg === "string" ? msg : "Timesheet submitted successfully!",
                             {
                                 onClose: function () {
-                                    this._loadTimesheetData();
+                                    if (isViewingPrev) {
+                                        // Auto switch back to current week after prev week submit
+                                        this.onSwitchToCurrentWeek();
+                                    } else {
+                                        this._loadTimesheetData();
+                                    }
                                 }.bind(this)
                             }
                         );
@@ -1151,9 +1252,9 @@ sap.ui.define([
         _updateDashboardCharts: function () {
             try {
                 sap.ui.getCore().getEventBus().publish("Timesheet", "DataChanged", {
-                    timesheetId:   this._timesheetId,
+                    timesheetId: this._timesheetId,
                     weekStartDate: this._weekStartDate,
-                    weekEndDate:   this._weekEndDate
+                    weekEndDate: this._weekEndDate
                 });
             } catch (e) {
                 console.warn("EventBus publish failed:", e);
@@ -1169,11 +1270,11 @@ sap.ui.define([
                 if (!row.taskId) return;
                 Object.entries(row.entries).forEach(function (pair) {
                     const dateStr = pair[0];
-                    const hours   = pair[1];
+                    const hours = pair[1];
                     if (hours > 0) {
                         entries.push({
-                            taskId:      row.taskId,
-                            workDate:    dateStr,
+                            taskId: row.taskId,
+                            workDate: dateStr,
                             hoursWorked: hours,
                             description: ""
                         });
@@ -1185,7 +1286,7 @@ sap.ui.define([
 
         _callAction: async function (url, payload) {
             const resp = await fetch(url, {
-                method:  "POST",
+                method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                     "X-CSRF-Token": await this._fetchCSRFToken()
@@ -1210,7 +1311,7 @@ sap.ui.define([
             if (this._csrfToken) return this._csrfToken;
             try {
                 const r = await fetch(BASE_URL, {
-                    method:  "GET",
+                    method: "GET",
                     headers: { "X-CSRF-Token": "Fetch" }
                 });
                 this._csrfToken = r.headers.get("x-csrf-token") || "";

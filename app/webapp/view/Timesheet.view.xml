@@ -15,37 +15,13 @@
         showNavButton="false"
         backgroundDesign="List">
 
-        <!-- ── Header Bar ──────────────────────────────────────────────────── -->
+        <!-- ── Header Bar — buttons only, no title here ───────────────────── -->
         <customHeader>
             <Bar>
                 <contentLeft>
-                    <VBox>
-                        <Title text="Weekly Timesheet" level="H2" />
-                        <HBox alignItems="Center">
-                            <Button
-                                id="btnPrevWeekNav"
-                                icon="sap-icon://navigation-left-arrow"
-                                type="Transparent"
-                                visible="{viewModel>/isPrevWeekApproved}"
-                                press=".onSwitchToPrevWeek"
-                                tooltip="View Previous Week (Manager Approved)" />
-                            <Title
-                                id="weekRangeTitle"
-                                text="{viewModel>/weekRangeLabel}"
-                                level="H4"
-                                class="sapUiSmallMarginBeginEnd" />
-                            <Button
-                                id="btnCurrentWeekNav"
-                                icon="sap-icon://navigation-right-arrow"
-                                type="Transparent"
-                                visible="{= ${viewModel>/isViewingPrevWeek} === true }"
-                                press=".onSwitchToCurrentWeek"
-                                tooltip="Back to Current Week" />
-                        </HBox>
-                    </VBox>
+                    <Title text="Weekly Timesheet" level="H1" />
                 </contentLeft>
                 <contentRight>
-                    <!-- Status badge -->
                     <ObjectStatus
                         id="timesheetStatusBadge"
                         text="{viewModel>/weekStatus}"
@@ -74,6 +50,35 @@
         <content>
             <VBox class="sapUiSmallMargin">
 
+                <!-- ── Title + week range — lives in page content, not Bar ── -->
+                <HBox
+                    justifyContent="SpaceBetween"
+                    alignItems="Center"
+                    class="sapUiSmallMarginBottom">
+                    <VBox>
+                        <HBox alignItems="Center" class="sapUiTinyMarginTop">
+                            <Button
+                                id="btnPrevWeekNav"
+                                icon="sap-icon://navigation-left-arrow"
+                                type="Transparent"
+                                visible="{viewModel>/isPrevWeekApproved}"
+                                press=".onSwitchToPrevWeek"
+                                tooltip="View Previous Week (Manager Approved)" />
+                            <Text
+                                id="weekRangeTitle"
+                                text="{viewModel>/weekRangeLabel}"
+                                class="sapUiSmallMarginBeginEnd" />
+                            <Button
+                                id="btnCurrentWeekNav"
+                                icon="sap-icon://navigation-right-arrow"
+                                type="Transparent"
+                                visible="{= ${viewModel>/isViewingPrevWeek} === true }"
+                                press=".onSwitchToCurrentWeek"
+                                tooltip="Back to Current Week" />
+                        </HBox>
+                    </VBox>
+                </HBox>
+
                 <!-- ── Info message strip ──────────────────────────────────── -->
                 <MessageStrip
                     id="infoStrip"
@@ -86,18 +91,13 @@
                 <!-- ── Previous week approved banner ───────────────────────── -->
                 <MessageStrip
                     visible="{viewModel>/isPrevWeekApproved}"
-                    text="Manager has approved filling the previous week. Click the &#x2190; arrow in the header to switch."
+                    text="Manager has approved filling the previous week. Click the &#x2190; arrow below the title to switch."
                     type="Success"
                     showIcon="true"
                     class="sapUiSmallMarginBottom" />
 
                 <!-- ══════════════════════════════════════════════════════════
                      TIMESHEET GRID
-                     The actual table is built dynamically in the controller
-                     using sap/ui/core/HTML and placeAt(). The containers
-                     below are the anchors the controller writes into.
-                     dayHeaderRow and dailyTotalsRow are hidden by controller
-                     because the HTML table renders its own header/footer.
                      ══════════════════════════════════════════════════════════ -->
                 <Panel
                     id="timesheetGridPanel"
@@ -108,7 +108,7 @@
                         <VBox id="timesheetGridContainer" width="100%">
 
                             <!-- Hidden — controller hides these; table renders its own -->
-                            <HBox id="dayHeaderRow" visible="false" class="sapUiSmallMarginBottom">
+                            <HBox id="dayHeaderRow" visible="false">
                                 <VBox width="220px" class="sapUiSmallMarginEnd">
                                     <Label text="Project / Task" />
                                 </VBox>
@@ -121,7 +121,7 @@
                             <!-- Controller renders HTML table into this VBox -->
                             <VBox id="timesheetRowsContainer" />
 
-                            <!-- Add Row button — shown below the table -->
+                            <!-- Add Row button -->
                             <HBox class="sapUiSmallMarginTop" visible="{viewModel>/canEdit}">
                                 <Button
                                     id="btnAddRow"
@@ -131,7 +131,7 @@
                                     press=".onAddRow" />
                             </HBox>
 
-                            <!-- Hidden — controller uses DOM totals row inside the table -->
+                            <!-- Hidden totals row — table renders its own -->
                             <HBox id="dailyTotalsRow" visible="false">
                                 <VBox width="220px" class="sapUiSmallMarginEnd">
                                     <Text text="Daily Total" />
@@ -148,18 +148,17 @@
 
                 <!-- ══════════════════════════════════════════════════════════
                      MISSED DAY HR APPROVAL BUTTONS
-                     Built dynamically — one button per missed past weekday
-                     that is older than 2 days and has no HR unlock yet
                      ══════════════════════════════════════════════════════════ -->
                 <VBox id="missedDayActionsContainer" class="sapUiSmallMarginTop" />
 
                 <!-- ══════════════════════════════════════════════════════════
-                     PREVIOUS WEEK SECTION
+                     PREVIOUS WEEK SECTION — hidden when viewing prev week
                      ══════════════════════════════════════════════════════════ -->
                 <Panel
                     id="prevWeekPanel"
                     backgroundDesign="Transparent"
-                    class="sapUiMediumMarginTop">
+                    class="sapUiMediumMarginTop"
+                    visible="{= !${viewModel>/isViewingPrevWeek} }">
                     <HBox
                         justifyContent="SpaceBetween"
                         alignItems="Center"
@@ -171,7 +170,6 @@
                                 class="sapUiSmallMarginTop" />
                         </VBox>
                         <HBox alignItems="Center">
-                            <!-- State 1: No request yet -->
                             <Button
                                 id="btnRequestPrevWeek"
                                 text="Request to Fill Previous Week"
@@ -179,16 +177,12 @@
                                 icon="sap-icon://edit"
                                 visible="{viewModel>/showRequestPrevWeekBtn}"
                                 press=".onRequestPrevWeekFill" />
-
-                            <!-- State 2: Request pending manager approval -->
                             <ObjectStatus
                                 id="prevWeekPendingStatus"
                                 text="Approval Pending from Manager"
                                 state="Warning"
                                 icon="sap-icon://pending"
                                 visible="{viewModel>/showPrevWeekPending}" />
-
-                            <!-- State 3: Approved — can now fill previous week -->
                             <Button
                                 id="btnFillPrevWeek"
                                 text="Fill Previous Week"
@@ -197,8 +191,6 @@
                                 visible="{viewModel>/showFillPrevWeekBtn}"
                                 enabled="{viewModel>/prevWeekFillEnabled}"
                                 press=".onSwitchToPrevWeek" />
-
-                            <!-- State 4: Already submitted -->
                             <ObjectStatus
                                 id="prevWeekDoneStatus"
                                 text="Previous Week Submitted"
@@ -215,7 +207,6 @@
 
     <!-- ══════════════════════════════════════════════════════════════════════
          DIALOG: HR Day-Unlock Request
-         NOTE: core:ListItem (not core:Item) — ListItem supports additionalText
          ══════════════════════════════════════════════════════════════════════ -->
     <Dialog
         id="hrUnlockDialog"
@@ -231,7 +222,6 @@
                             id="hrUnlockDateDisplay"
                             editable="false"
                             value="{hrUnlockModel>/targetDate}" />
-
                         <Label text="Select HR Approver" required="true" />
                         <Select
                             id="hrApproverSelect"
@@ -243,7 +233,6 @@
                                 text="{hrListModel>employeeName}"
                                 additionalText="{hrListModel>designation}" />
                         </Select>
-
                         <Label text="Reason for Missing" />
                         <TextArea
                             id="hrUnlockRemarks"
@@ -297,12 +286,10 @@
                         <Input
                             editable="false"
                             value="{prevWeekModel>/weekRangeLabel}" />
-
                         <Label text="Your Manager" />
                         <Input
                             editable="false"
                             value="{prevWeekModel>/managerName}" />
-
                         <Label text="Reason (optional)" />
                         <TextArea
                             id="prevWeekRemarks"
