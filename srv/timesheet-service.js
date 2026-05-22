@@ -134,6 +134,103 @@ class EmployeeService extends cds.ApplicationService {
             };
         });
 
+        // ── Upload Profile Photo ─────────────────────────────────────────────
+        // Accepts a base64 data-URL string from the frontend, strips the
+        // "data:<mime>;base64," prefix, converts to a Buffer, and stores it
+        // in EmployeeMaster.profilePhoto + profilePhotoMimeType.
+        // The employee is resolved from the JWT email — no employeeId param
+        // needed, so users can never overwrite each other's photos.
+        this.on('uploadProfilePhoto', async (req) => {
+            const { dataBase64 } = req.data;
+            if (!dataBase64) return req.error(400, 'dataBase64 is required.');
+ 
+            // Resolve the caller from their JWT email
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            if (!email) return req.error(401, 'Cannot identify user — no email in token.');
+ 
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId')
+                .where`lower(email) = ${email.toLowerCase()}`;
+            if (!emp) return req.error(404, 'Employee record not found for this login.');
+ 
+            // Parse "data:image/jpeg;base64,<data>" or plain base64
+            let mimeType = 'image/jpeg';
+            let rawBase64 = dataBase64;
+            const match = dataBase64.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+                mimeType = match[1];
+                rawBase64 = match[2];
+            }
+ 
+            // Validate it's an image
+            if (!mimeType.startsWith('image/')) {
+                return req.error(400, 'Only image files are allowed for profile photos.');
+            }
+ 
+            let buf;
+            try {
+                buf = Buffer.from(rawBase64, 'base64');
+            } catch (e) {
+                return req.error(400, 'dataBase64 is not valid base64.');
+            }
+ 
+            // Reject files over 2 MB
+            if (buf.length > 2 * 1024 * 1024) {
+                return req.error(400, 'Profile photo must be under 2 MB.');
+            }
+ 
+            await UPDATE(EMPLOYEE)
+                .set({ profilePhoto: buf, profilePhotoMimeType: mimeType })
+                .where({ employeeId: emp.employeeId });
+ 
+            cds.log('profile').info(
+                `Profile photo updated for ${emp.employeeId} (${buf.length} bytes, ${mimeType})`
+            );
+ 
+            return { success: true, message: 'Profile photo saved successfully.' };
+        });
+ 
+        // ── Get Profile Photo ────────────────────────────────────────────────
+        // Returns the stored photo as a base64 data-URL string.
+        // Frontend uses this on login to restore the photo in the Avatar.
+        this.on('getProfilePhoto', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+ 
+            if (!email) return { dataBase64: '', mimeType: '' };
+ 
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId', 'profilePhoto', 'profilePhotoMimeType')
+                .where`lower(email) = ${email.toLowerCase()}`;
+ 
+            if (!emp || !emp.profilePhoto) {
+                return { dataBase64: '', mimeType: '' };
+            }
+ 
+            let base64 = '';
+            try {
+                if (Buffer.isBuffer(emp.profilePhoto)) {
+                    base64 = emp.profilePhoto.toString('base64');
+                } else if (typeof emp.profilePhoto === 'string') {
+                    base64 = emp.profilePhoto;
+                } else if (emp.profilePhoto instanceof Uint8Array) {
+                    base64 = Buffer.from(emp.profilePhoto).toString('base64');
+                } else {
+                    base64 = Buffer.from(emp.profilePhoto).toString('base64');
+                }
+            } catch (e) {
+                cds.log('profile').error('Could not encode profile photo:', e.message || e);
+                return { dataBase64: '', mimeType: '' };
+            }
+ 
+            const mimeType = emp.profilePhotoMimeType || 'image/jpeg';
+            return {
+                dataBase64: `data:${mimeType};base64,${base64}`,
+                mimeType
+            };
+        });
+
         this.on('submitTimesheet', async (req) => {
             const { timesheetId } = req.data;
 

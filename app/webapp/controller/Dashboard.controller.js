@@ -122,20 +122,20 @@ sap.ui.define([
         // ─────────────────────────────────────────────────────────────────────
         // Greeting
         // ─────────────────────────────────────────────────────────────────────
-_loadGreeting() {
-    const oComp = this.getOwnerComponent();
-    if (!oComp) return;
+        _loadGreeting() {
+            const oComp = this.getOwnerComponent();
+            if (!oComp) return;
 
-    const hour = new Date().getHours();
-    const timeGreet = hour < 12 ? "Good Morning"
-        : hour < 17 ? "Good Afternoon"
-        : "Good Evening";
+            const hour = new Date().getHours();
+            const timeGreet = hour < 12 ? "Good Morning"
+                : hour < 17 ? "Good Afternoon"
+                    : "Good Evening";
 
-    const buildHTML = (name) => {
-        const namePart = name
-            ? `, <span style="color:black;font-style:italic;">${name}!</span>`
-            : `!`;
-        return `
+            const buildHTML = (name) => {
+                const namePart = name
+                    ? `, <span style="color:black;font-style:italic;">${name}!</span>`
+                    : `!`;
+                return `
         <div>
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
                 <span style="font-size:1.85rem;font-weight:800;color:#232823;
@@ -146,47 +146,55 @@ _loadGreeting() {
                 Here's what's happening with you today.
             </div>
         </div>`;
-    };
+            };
 
-    // Render immediately with no name so it's never blank
-    this._oDashModel.setProperty("/greetingHTML", buildHTML(""));
+            // Render immediately with no name so it's never blank
+            this._oDashModel.setProperty("/greetingHTML", buildHTML(""));
 
-    // Always wait for the real backend-resolved user — never use the
-    // localStorage fallback for the greeting, as it causes wrong names.
-    if (oComp.getCurrentUser) {
-        oComp.getCurrentUser().then(u => {
-            if (u && u.employeeName) {
-                this._oDashModel.setProperty("/greetingHTML", buildHTML(u.employeeName));
+            // Always wait for the real backend-resolved user — never use the
+            // localStorage fallback for the greeting, as it causes wrong names.
+            if (oComp.getCurrentUser) {
+                oComp.getCurrentUser().then(u => {
+                    if (u && u.employeeName) {
+                        this._oDashModel.setProperty("/greetingHTML", buildHTML(u.employeeName));
+                    }
+                });
             }
-        });
-    }
-},
+        },
 
         // ─────────────────────────────────────────────────────────────────────
         // Route match — kick off all loaders
         // ─────────────────────────────────────────────────────────────────────
         _onRouteMatched() {
+            const oComp = this.getOwnerComponent();
+
+            // Wait for backend user to resolve before loading any dashboard data
+            oComp.getCurrentUser().then(() => {
+                this._loadAllDashData();
+            }).catch(() => {
+                // Even if getCurrentUser fails, load with whatever empId we have
+                this._loadAllDashData();
+            });
+        },
+
+        _loadAllDashData() {
             const sWeekStart = this._oDashModel.getProperty("/weekStart");
             this._computeStats();
-            this._computeWeekHours(sWeekStart);   // calls _refreshDash internally
+            this._computeWeekHours(sWeekStart);
 
-            // existing loaders
             this._loadWorkAnniversary();
             this._loadLeaveBalance();
             this._loadMyTasks();
 
-            // new loaders
             this._loadAttendance();
             this._loadPerformanceRating();
             this._loadPerformanceTrend();
             this._loadTaskSummary();
 
-            //new 
             this._loadLeaveOverview();
             this._loadUpcomingCalendar();
             this._loadRecentNotifications();
             this._checkTodayAttendance();
-            // ADD this line at the end of _onRouteMatched:
             this._scheduleAttendanceBtnReset();
         },
 
@@ -428,6 +436,95 @@ _loadGreeting() {
         },
 
         _loadLeaveBalance() {
+            const MAX_BALANCE = {
+                Casual: 5, Sick: 5, Paid: 11, Maternity: 180, Paternity: 2
+            };
+
+            const oComp = this.getOwnerComponent();
+            const oModel = oComp.getModel();
+            const sEmpId = oComp.getCurrentEmployeeId
+                ? oComp.getCurrentEmployeeId() : null;
+
+            if (!oModel || !sEmpId) {
+                this._loadLeaveBalanceFallback();
+                return;
+            }
+
+            // Wait for metadata to be loaded before querying
+            oModel.getMetaModel().requestObject("/LeaveRequests").then(() => {
+
+                oModel.bindList("/LeaveRequests", null, null, [
+                    new sap.ui.model.Filter(
+                        "employee_employeeId",
+                        sap.ui.model.FilterOperator.EQ,
+                        sEmpId
+                    )
+                ], { $$groupId: "$direct" })
+                    .requestContexts(0, 200)
+                    .then(aCtx => {
+                        const history = aCtx.map(c => c.getObject()).filter(Boolean);
+                        console.log("LeaveRequests:", history);
+
+                        const used = {
+                            Casual: 0, Sick: 0, Paid: 0, Maternity: 0, Paternity: 0
+                        };
+
+                        history
+                            .filter(r => r.status !== "Rejected")
+                            .forEach(r => {
+                                const days = r.days || 0;
+                                if (!days) return;
+
+                                if (r.leaveType === "Sick") {
+                                    let remaining = days;
+                                    const sickAvail = Math.max(0, MAX_BALANCE.Sick - used.Sick);
+                                    const fromSick = Math.min(remaining, sickAvail);
+                                    used.Sick += fromSick;
+                                    remaining -= fromSick;
+
+                                    if (remaining > 0) {
+                                        const casualAvail = Math.max(0, MAX_BALANCE.Casual - used.Casual);
+                                        const fromCasual = Math.min(remaining, casualAvail);
+                                        used.Casual += fromCasual;
+                                        remaining -= fromCasual;
+                                    }
+                                    if (remaining > 0) {
+                                        const paidAvail = Math.max(0, MAX_BALANCE.Paid - used.Paid);
+                                        const fromPaid = Math.min(remaining, paidAvail);
+                                        used.Paid += fromPaid;
+                                    }
+                                } else if (used[r.leaveType] !== undefined) {
+                                    const avail = Math.max(0,
+                                        MAX_BALANCE[r.leaveType] - used[r.leaveType]);
+                                    used[r.leaveType] += Math.min(days, avail);
+                                }
+                            });
+
+                        const casual = Math.max(0, MAX_BALANCE.Casual - used.Casual);
+                        const sick = Math.max(0, MAX_BALANCE.Sick - used.Sick);
+                        const annual = Math.max(0, MAX_BALANCE.Paid - used.Paid);
+                        const total = casual + sick + annual;
+                        const usedPct = Math.min(100, Math.round(
+                            ((MAX_BALANCE.Casual + MAX_BALANCE.Sick + MAX_BALANCE.Paid - total) /
+                                (MAX_BALANCE.Casual + MAX_BALANCE.Sick + MAX_BALANCE.Paid)) * 100
+                        ));
+
+                        this._oDashModel.setProperty("/leaveBalance", {
+                            casualLeave: casual,
+                            sickLeave: sick,
+                            annualLeave: annual,
+                            total,
+                            usedPct
+                        });
+                    })
+                    .catch(() => this._loadLeaveBalanceFallback())
+                    .finally(() => this._refreshDash());
+
+            }).catch(() => this._loadLeaveBalanceFallback());
+        },
+
+        // Fallback if OData not available
+        _loadLeaveBalanceFallback() {
             this._callAction("getLeaveBalance").then(oData => {
                 const casual = oData.casualLeave || 0;
                 const sick = oData.sickLeave || 0;
@@ -436,7 +533,7 @@ _loadGreeting() {
                 this._oDashModel.setProperty("/leaveBalance", {
                     casualLeave: casual, sickLeave: sick, annualLeave: annual,
                     total,
-                    usedPct: Math.min(100, Math.round((total / 30) * 100))
+                    usedPct: Math.min(100, Math.round((total / 21) * 100))
                 });
             }).catch(() => {
                 this._oDashModel.setProperty("/leaveBalance",
@@ -444,19 +541,74 @@ _loadGreeting() {
             }).finally(() => this._refreshDash());
         },
 
-        _loadMyTasks() {   //completed
+        _loadMyTasks() {
+            const oComp = this.getOwnerComponent();
+            const oMgrModel = oComp.getModel("manager");  // ← manager model not employee
+            const sEmpId = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
+
+            if (oMgrModel && sEmpId) {
+                oMgrModel.bindList("/Tasks", null, null, null, {
+                    $$groupId: "$direct"
+                })
+                    .requestContexts(0, 200)
+                    .then(aCtx => {
+                        const allTasks = aCtx.map(c => c.getObject()).filter(Boolean);
+                        console.log("All tasks:", allTasks);
+
+                        // Filter by employee - try all possible field names
+                        const myTasks = allTasks.filter(t =>
+                            t.assignedTo_employeeId === sEmpId ||
+                            t.assignedTo_ID === sEmpId ||
+                            t.employeeId === sEmpId ||
+                            t.employee_employeeId === sEmpId
+                        );
+
+                        console.log("My tasks:", myTasks);
+
+                        const pending = myTasks.filter(t =>
+                            (t.status || "").toLowerCase() !== "completed"
+                        );
+
+                        const high = pending.filter(t =>
+                            (t.priority || "").toLowerCase() === "high").length;
+                        const medium = pending.filter(t =>
+                            (t.priority || "").toLowerCase() === "medium").length;
+                        const low = pending.filter(t =>
+                            (t.priority || "").toLowerCase() === "low").length;
+
+                        this._oDashModel.setProperty("/myTasks", {
+                            totalPending: pending.length,
+                            highPriorityCount: high,
+                            mediumPriorityCount: medium,
+                            lowPriorityCount: low
+                        });
+                    })
+                    .catch(err => {
+                        console.error("_loadMyTasks failed:", err);
+                        this._loadMyTasksFallback();
+                    })
+                    .finally(() => this._refreshDash());
+            } else {
+                this._loadMyTasksFallback();
+            }
+        },
+
+        _loadMyTasksFallback() {
             this._callAction("getMyTasks")
                 .then(oData => {
                     this._oDashModel.setProperty("/myTasks", {
                         totalPending: oData.totalPending || 0,
                         highPriorityCount: oData.highPriorityCount || 0,
-                        inProgressCount: oData.inProgressCount || 0,
-                        notStartedCount: oData.notStartedCount || 0
+                        mediumPriorityCount: oData.mediumPriorityCount || 0,
+                        lowPriorityCount: oData.lowPriorityCount || 0
                     });
                 })
                 .catch(() => {
                     this._oDashModel.setProperty("/myTasks",
-                        { totalPending: 0, highPriorityCount: 0, inProgressCount: 0, notStartedCount: 0 });
+                        {
+                            totalPending: 0, highPriorityCount: 0,
+                            mediumPriorityCount: 0, lowPriorityCount: 0
+                        });
                 })
                 .finally(() => this._refreshDash());
         },
@@ -467,6 +619,74 @@ _loadGreeting() {
 
         // Attendance: frontend-only mock (backend hook ready when needed)
         _loadAttendance() {
+            const oComp = this.getOwnerComponent();
+            const oEmpModel = oComp.getModel();
+            const sEmpId = oComp.getCurrentEmployeeId
+                ? oComp.getCurrentEmployeeId() : null;
+
+            if (!oEmpModel || !sEmpId) {
+                this._loadAttendanceFallback();
+                return;
+            }
+
+            // Get current month boundaries
+            const now = new Date();
+            const monthLabel = now.toLocaleString("en-GB", { month: "long" });
+            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+                .toISOString().split("T")[0];
+            const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+                .toISOString().split("T")[0];
+
+            oEmpModel.bindList("/Attendance", null, null, [
+                new sap.ui.model.Filter(
+                    "employee_employeeId",
+                    sap.ui.model.FilterOperator.EQ,
+                    sEmpId
+                )
+            ], { $$groupId: "$direct" })
+                .requestContexts(0, 200)
+                .then(aCtx => {
+                    const all = aCtx.map(c => c.getObject()).filter(Boolean);
+                    console.log("Attendance raw:", all);
+
+                    // Filter to current month
+                    const thisMonth = all.filter(a => {
+                        const d = a.attendanceDate || a.date || "";
+                        return d >= monthStart && d <= monthEnd;
+                    });
+
+                    const presentCount = thisMonth.filter(a =>
+                        (a.status || "").toLowerCase() === "present" ||
+                        a.attendanceTime  // if it has a time it was marked present
+                    ).length;
+
+                    // Count working days elapsed this month so far
+                    let workingDays = 0;
+                    const cur = new Date(monthStart);
+                    const today = new Date();
+                    today.setHours(23, 59, 59, 0);
+                    while (cur <= today) {
+                        const day = cur.getDay();
+                        if (day !== 0 && day !== 6) workingDays++;
+                        cur.setDate(cur.getDate() + 1);
+                    }
+
+                    const absentCount = Math.max(0, workingDays - presentCount);
+                    const pct = workingDays > 0
+                        ? Math.round((presentCount / workingDays) * 100) : 0;
+
+                    this._oDashModel.setProperty("/attendance", {
+                        attendancePercentage: pct,
+                        presentCount,
+                        absentCount,
+                        monthLabel
+                    });
+                })
+                .catch(() => this._loadAttendanceFallback())
+                .finally(() => this._refreshDash());
+        },
+
+        _loadAttendanceFallback() {
             this._callAction("getAttendance")
                 .then(oData => {
                     this._oDashModel.setProperty("/attendance", {
@@ -475,11 +695,16 @@ _loadGreeting() {
                         absentCount: oData.absentCount || 0,
                         monthLabel: oData.monthLabel || "Month"
                     });
-                    this._refreshDash();
                 })
                 .catch(() => {
-                    this._setAttendanceMock();
-                });
+                    this._oDashModel.setProperty("/attendance", {
+                        attendancePercentage: 0,
+                        presentCount: 0,
+                        absentCount: 0,
+                        monthLabel: "Month"
+                    });
+                })
+                .finally(() => this._refreshDash());
         },
         //performance trend 
 
@@ -623,6 +848,57 @@ _loadGreeting() {
 
         // Task Summary (reuses existing TaskMaster backend)
         _loadTaskSummary() {
+            const oComp = this.getOwnerComponent();
+            const oMgrModel = oComp.getModel("manager");  // ← manager model
+            const sEmpId = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
+
+            if (oMgrModel && sEmpId) {
+                oMgrModel.bindList("/Tasks", null, null, null, {
+                    $$groupId: "$direct"
+                })
+                    .requestContexts(0, 200)
+                    .then(aCtx => {
+                        const allTasks = aCtx.map(c => c.getObject()).filter(Boolean);
+
+                        // Filter by this employee
+                        const myTasks = allTasks.filter(t =>
+                            t.assignedTo_employeeId === sEmpId ||
+                            t.assignedTo_ID === sEmpId ||
+                            t.employeeId === sEmpId ||
+                            t.employee_employeeId === sEmpId
+                        );
+
+                        console.log("TaskSummary myTasks:", myTasks.map(t => ({
+                            status: t.status, priority: t.priority
+                        })));
+
+                        const normalize = (s) => (s || "").toLowerCase().trim();
+
+                        const notStarted = myTasks.filter(t =>
+                            normalize(t.status) === "not started").length;
+                        const inProgress = myTasks.filter(t =>
+                            normalize(t.status) === "in progress").length;
+                        const inReview = myTasks.filter(t =>
+                            normalize(t.status) === "in review").length;
+                        const completed = myTasks.filter(t =>
+                            normalize(t.status) === "completed").length;
+
+                        this._oDashModel.setProperty("/taskSummary", {
+                            total: myTasks.length,
+                            notStarted, inProgress, inReview, completed
+                        });
+                    })
+                    .catch(err => {
+                        console.error("_loadTaskSummary failed:", err);
+                        this._loadTaskSummaryFallback();
+                    })
+                    .finally(() => this._refreshDash());
+            } else {
+                this._loadTaskSummaryFallback();
+            }
+        },
+
+        _loadTaskSummaryFallback() {
             this._callAction("getTaskSummary")
                 .then(oData => {
                     this._oDashModel.setProperty("/taskSummary", {
@@ -638,8 +914,6 @@ _loadGreeting() {
                         { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 });
                 })
                 .finally(() => this._refreshDash());
-
-
         },
 
         // ── Leave Overview ────────────────────────────────────────────────────────
@@ -697,6 +971,57 @@ _loadGreeting() {
 
         // ── Recent Notifications ──────────────────────────────────────────────────
         _loadRecentNotifications() {
+            const oComp = this.getOwnerComponent();
+            const oMgrModel = oComp.getModel("manager");
+            const sEmpId = oComp.getCurrentEmployeeId
+                ? oComp.getCurrentEmployeeId() : null;
+
+            if (!oMgrModel || !sEmpId) {
+                this._loadNotificationsFallback();
+                return;
+            }
+
+            oMgrModel.getMetaModel().requestObject("/Notifications").then(() => {
+
+                oMgrModel.bindList("/Notifications", null, null, null, {
+                    $$groupId: "$direct"
+                })
+                    .requestContexts(0, 50)
+                    .then(aCtx => {
+                        let all = aCtx.map(c => c.getObject()).filter(Boolean);
+                        console.log("Notifications all:", all);
+
+                        let mine = all.filter(n =>
+                            n.employee_employeeId === sEmpId ||
+                            n.employeeId === sEmpId ||
+                            n.recipientId === sEmpId ||
+                            n.employee_ID === sEmpId
+                        );
+
+                        if (mine.length === 0 && all.length > 0) mine = all;
+
+                        mine.sort((a, b) =>
+                            new Date(b.notifiedAt || b.createdAt || 0) -
+                            new Date(a.notifiedAt || a.createdAt || 0)
+                        );
+
+                        const items = mine.slice(0, 5).map(n => ({
+                            type: n.type || "DEFAULT",
+                            title: n.title || "Notification",
+                            message: n.message || "",
+                            notifiedAt: n.notifiedAt || n.createdAt || null,
+                            isRead: n.isRead || false
+                        }));
+
+                        this._oDashModel.setProperty("/recentNotifications/items", items);
+                    })
+                    .catch(() => this._loadNotificationsFallback())
+                    .finally(() => this._refreshDash());
+
+            }).catch(() => this._loadNotificationsFallback());
+        },
+
+        _loadNotificationsFallback() {
             this._callAction("getRecentNotifications", {})
                 .then(oData => {
                     let items = [];
@@ -784,10 +1109,10 @@ _loadGreeting() {
                  </span>`;
 
 
-            
 
 
-            
+
+
             // ── 1. Work Anniversary ──────────────────────────────────────────
             const anniv = o.anniv || {};
             const yearsLabel = anniv.yearsLabel || "—";
@@ -826,7 +1151,7 @@ _loadGreeting() {
                     <span style="color:#d1d5db;">|</span>
                     <span>Sick: <b style="color:#374151;">${sick}</b></span>
                     <span style="color:#d1d5db;">|</span>
-                    <span>Annual: <b style="color:#374151;">${annual}</b></span>
+                    <span> Paid: <b style="color:#374151;">${annual}</b></span>
                 </div>
             `);
 

@@ -42,7 +42,8 @@ sap.ui.define([
                 userRole: ["manager", "employee", "hr"].includes(sInitRole) ? sInitRole : "employee",
                 userName: "",
                 userInitials: "JD",
-                userProfile: null
+                userProfile: null,
+                profilePhotoSrc: ""   // populated by _loadProfilePhoto() 
             });
             this.getView().setModel(this._oAppModel, "appView");
 
@@ -60,7 +61,7 @@ sap.ui.define([
                     if (bExplicit) return;
                     const sRole = u && (u.role || (u.value && u.value.role));
                     if (sRole) this._oAppModel.setProperty("/userRole", sRole.toLowerCase());
-                })
+                });
             }
 
             this.getOwnerComponent().getRouter().attachRouteMatched(this._onRouteMatched, this);
@@ -72,8 +73,6 @@ sap.ui.define([
                 // Sidebar background
                 oPage.getDomRef().style.backgroundColor = "#1e293b";
                 oPage.getDomRef().style.borderRadius = "0";
-                oPage.getDomRef().style.borderTopLeftRadius = "0";
-                oPage.getDomRef().style.borderTopRightRadius = "0";
 
                 oPage.getDomRef().querySelectorAll(".sapMPageBg, .sapMPage, .sapMList, .sapMListUl")
                     .forEach(el => {
@@ -225,6 +224,116 @@ sap.ui.define([
 
             _handleResize();
             window.addEventListener("resize", _handleResize);
+        },
+
+        // ── Upload Profile Picture ───────────────────────────────────────────
+        // Flow:
+        //   1. Hidden <input type="file"> triggers native file picker
+        //   2. FileReader converts to base64 data-URL
+        //   3. OData action /uploadProfilePhoto(...) saves it to the DB
+        //      (EmployeeMaster.profilePhoto LargeBinary column)
+        //   4. appView>/profilePhotoSrc is updated → toolbar Avatar and
+        //      popover Avatar both update instantly via binding
+        onUploadProfilePicture() {
+            let oInput = document.getElementById("__tsProfilePhotoInput");
+            if (!oInput) {
+                oInput = document.createElement("input");
+                oInput.type = "file";
+                oInput.id = "__tsProfilePhotoInput";
+                oInput.accept = "image/png, image/jpeg, image/jpg, image/webp";
+                oInput.style.display = "none";
+                document.body.appendChild(oInput);
+            }
+            oInput.value = "";
+ 
+            oInput.onchange = (oEvt) => {
+                const oFile = oEvt.target.files && oEvt.target.files[0];
+                if (!oFile) return;
+ 
+                if (oFile.size > 2 * 1024 * 1024) {
+                    MessageToast.show("Image too large. Please choose a file under 2 MB.");
+                    return;
+                }
+ 
+                const oReader = new FileReader();
+                oReader.onload = async (eRead) => {
+                    const sDataUrl = eRead.target.result;
+ 
+                    // 1. Optimistically update the UI immediately so it feels instant
+                    this._applyProfilePhoto(sDataUrl);
+ 
+                    // 2. Save to the backend database via OData action
+                    try {
+                        const oModel = this.getOwnerComponent().getModel();
+                        if (!oModel) throw new Error("OData model not available.");
+ 
+                        const oCtx = oModel.bindContext("/uploadProfilePhoto(...)");
+                        oCtx.setParameter("dataBase64", sDataUrl);
+                        await oCtx.execute();
+ 
+                        MessageToast.show("Profile picture saved successfully!");
+                    } catch (e) {
+                        // UI already updated — warn but don't revert
+                        // (next login will re-fetch from DB; if DB save failed,
+                        //  the photo will just be gone after logout which is
+                        //  the same behaviour as before)
+                        const sMsg = (e.message || "").includes("400")
+                            ? "Image rejected by server — try a smaller file."
+                            : "Photo updated locally but could not save to server.";
+                        MessageToast.show(sMsg);
+                        cds && console.warn("[ProfilePhoto] upload error:", e);
+                    }
+                };
+                oReader.readAsDataURL(oFile);
+            };
+ 
+            oInput.click();
+        },
+ 
+        // ── Load profile photo from DB ────────────────────────────────────────
+        // Called from _loadCurrentUser once the employee identity is known.
+        // Uses the /getProfilePhoto() OData action — no employeeId param needed,
+        // the backend resolves the caller from the JWT.
+        _loadProfilePhoto() {
+            const oModel = this.getOwnerComponent().getModel();
+            if (!oModel) return;
+ 
+            try {
+                const oCtx = oModel.bindContext("/getProfilePhoto(...)");
+                oCtx.execute().then(() => {
+                    const oResult = oCtx.getBoundContext().getObject();
+                    if (oResult && oResult.dataBase64) {
+                        this._applyProfilePhoto(oResult.dataBase64);
+                    }
+                }).catch(e => {
+                    // Non-fatal — avatar just shows initials
+                    console.warn("[ProfilePhoto] Could not load from server:", e.message || e);
+                });
+            } catch (e) {
+                console.warn("[ProfilePhoto] bindContext error:", e.message || e);
+            }
+        },
+ 
+        // ── Apply photo to model + any open popover ───────────────────────────
+        // Single place that updates appView>/profilePhotoSrc.
+        // The toolbar Avatar reacts through its binding automatically.
+        // If the profile popover is open, we also update it live.
+        _applyProfilePhoto(sDataUrl) {
+            this._oAppModel.setProperty("/profilePhotoSrc", sDataUrl);
+ 
+            // Refresh popover avatar if it's currently open
+            if (this._oProfilePopover) {
+                try {
+                    const oPopoverAvatar = this._oProfilePopover
+                        .getContent()[0]   // outer VBox
+                        .getItems()[0]     // oHeader HBox
+                        .getItems()[0];    // first item = Avatar
+                    if (oPopoverAvatar && oPopoverAvatar.setSrc) {
+                        oPopoverAvatar.setSrc(sDataUrl);
+                        oPopoverAvatar.setInitials("");
+                    }
+                } catch (e) { /* popover structure changed — ignore */ }
+            }
         },
 
         _onRouteMatched(oEvent) {
@@ -458,31 +567,28 @@ sap.ui.define([
             }
 
             const sInitials = this._oAppModel.getProperty("/userInitials");
+            const sPhoto    = this._oAppModel.getProperty("/profilePhotoSrc");
 
             const fieldRow = (sLabel, sValue, sIcon) => new HBox({
                 alignItems: "Center",
                 items: [
-                    new Icon({ src: "sap-icon://" + sIcon, size: "1rem", color: "#3b82f6" })
-                        .addStyleClass("sapUiTinyMarginEnd"),
-                    new VBox({
-                        items: [
-                            new Label({ text: sLabel })
-                                .addStyleClass("tsProfileFieldLabel"),
-                            new Text({ text: sValue || "—" })
-                                .addStyleClass("tsProfileFieldValue")
-                        ]
-                    })
+                    new Icon({ src: "sap-icon://" + sIcon, size: "1rem", color: "#3b82f6" }).addStyleClass("sapUiTinyMarginEnd"),
+                    new VBox({ items: [new Label({ text: sLabel }).addStyleClass("tsProfileFieldLabel"), new Text({ text: sValue || "—" }).addStyleClass("tsProfileFieldValue")] })
                 ]
             }).addStyleClass("tsProfileRow sapUiSmallMarginBottom");
 
+            // Show uploaded photo if available, otherwise show initials
+            const oPopoverAvatar = new Avatar({
+                src: sPhoto || "",
+                initials: sPhoto ? "" : sInitials,
+                displaySize: "L",
+                backgroundColor: sPhoto ? "Transparent" : "Accent6"
+            });
+            
             const oHeader = new HBox({
                 alignItems: "Center",
                 items: [
-                    new Avatar({
-                        initials: sInitials,
-                        displaySize: "L",
-                        backgroundColor: "Accent6"
-                    }),
+                    oPopoverAvatar,
                     new VBox({
                         items: [
                             new Title({ text: oProfile.employeeName, level: "H4" })
