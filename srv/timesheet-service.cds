@@ -6,29 +6,89 @@ service EmployeeService @(path: '/employee') {
     entity MyTimesheets @(requires: [
         'Employee',
         'Manager'
-    ])                        as projection on db.timesheet.TimesheetHeader;
+    ])                                               as projection on db.timesheet.TimesheetHeader;
 
     entity MyEntries @(requires: [
         'Employee',
         'Manager'
-    ])                        as projection on db.timesheet.TimesheetEntry;
+    ])                                               as projection on db.timesheet.TimesheetEntry;
 
     entity MyTasks @(requires: [
         'Employee',
         'Manager'
-    ])                        as projection on db.timesheet.TaskMaster;
+    ])                                               as projection on db.timesheet.TaskMaster;
 
     entity TaskUpdates @(requires: [
         'Employee',
         'Manager'
-    ])                        as projection on db.timesheet.TaskUpdate;
+    ])                                               as projection on db.timesheet.TaskUpdate;
 
     entity Employees @(requires: [
         'Employee',
         'Manager'
-    ])                        as projection on db.timesheet.EmployeeMaster;
+    ])                                               as projection on db.timesheet.EmployeeMaster;
 
-    entity PerformanceRatings as projection on db.timesheet.PerformanceRating;
+    entity PerformanceRatings                        as projection on db.timesheet.PerformanceRating;
+
+    // Expose new approval-request entities to employees
+    entity DayUnlockRequests @(requires: 'Employee') as projection on db.timesheet.TimesheetDayUnlockRequest;
+
+    entity PrevWeekRequests @(requires: 'Employee')  as projection on db.timesheet.TimesheetPrevWeekRequest;
+
+    // ── Timesheet grid data loader ────────────────────────────────────────────────
+    // Returns everything the grid needs in one call:
+    // current-week header, all entries, approval-request statuses,
+    // prev-week request status, and tasks list.
+    @(requires: 'authenticated-user')
+    action getTimesheetWeekData(weekStartDate: Date, // ISO "YYYY-MM-DD" Monday
+                                weekEndDate: Date // ISO "YYYY-MM-DD" Sunday
+    )                                                                      returns {
+        timesheetId        : String;
+        weekStatus         : String; // Draft | Submitted | Approved | Rejected | None
+        entries            : LargeString; // JSON array of TimesheetEntry rows
+        dayUnlockRequests  : LargeString; // JSON array of DayUnlockRequest rows for this week
+        prevWeekRequest    : LargeString; // JSON object of PrevWeekRequest if any
+        isPrevWeekApproved : Boolean;
+        tasks              : LargeString; // JSON array of TaskMaster for dropdown
+    };
+
+    // ── Save timesheet entries (current or approved-prev week) ────────────────────
+    @(requires: 'authenticated-user')
+    action saveTimesheetEntries(timesheetId: String,
+                                weekStartDate: Date,
+                                weekEndDate: Date,
+                                isPrevWeek: Boolean,
+                                entries: LargeString // JSON array [{taskId, workDate, hoursWorked, description}]
+    )                                                                      returns {
+        timesheetId : String;
+        saved       : Integer; // number of entries upserted
+    };
+
+    // ── Request HR approval to unlock a missed day ────────────────────────────────
+    @(requires: 'Employee')
+    action requestDayUnlock(targetDate: Date,
+                            hrApproverId: String,
+                            employeeRemarks: String)                       returns {
+        requestId : String;
+        status    : String;
+    };
+
+    // ── Request manager approval to fill previous week ───────────────────────────
+    @(requires: 'Employee')
+    action requestPrevWeekFill(weekStartDate: Date,
+                               weekEndDate: Date,
+                               employeeRemarks: String)                    returns {
+        requestId : String;
+        status    : String;
+    };
+
+    // ── Submit timesheet (current week → Pending, prev week → Saved directly) ────
+    // Replaces the old submitTimesheet; keeps backward compat via timesheetId param.
+    @(requires: 'authenticated-user')
+    action submitTimesheetWeek(timesheetId: String,
+                               isPrevWeek: Boolean // if true → status stays Approved (no manager re-approval)
+    )                                                                      returns String;
+
 
     @(requires: 'authenticated-user')
     action uploadProfilePhoto(dataBase64: LargeString) returns {
@@ -48,35 +108,35 @@ service EmployeeService @(path: '/employee') {
         'Manager',
         'HR'
     ])
-    entity LeaveRequests      as projection on db.timesheet.LeaveRequest;
+    entity LeaveRequests                             as projection on db.timesheet.LeaveRequest;
 
     @(requires: [
         'Employee',
         'Manager',
         'HR'
     ])
-    action   applyLeave(employeeId: String,
-                        leaveType: String,
-                        fromDate: Date,
-                        toDate: Date,
-                        days: Integer,
-                        reason: String,
-                        isUnpaid: Boolean)                                 returns {
+    action applyLeave(employeeId: String,
+                      leaveType: String,
+                      fromDate: Date,
+                      toDate: Date,
+                      days: Integer,
+                      reason: String,
+                      isUnpaid: Boolean)                                   returns {
         leaveId  : String;
         status   : String;
         isUnpaid : Boolean;
     };
 
     @(requires: 'authenticated-user')
-    action   submitTimesheet(timesheetId: String(15))                      returns String;
+    action submitTimesheet(timesheetId: String(15))                        returns String;
 
     @(requires: 'authenticated-user')
-    action   getUserRole()                                                 returns {
+    action getUserRole()                                                   returns {
         role : String
     };
 
     @(requires: 'authenticated-user')
-    action   getCurrentUser()                                              returns {
+    action getCurrentUser()                                                returns {
         email        : String(255);
         role         : String;
         employeeId   : String(10);
@@ -92,7 +152,7 @@ service EmployeeService @(path: '/employee') {
         'Employee',
         'Manager'
     ])
-    action   consumeTaskAttachment(taskId: String(20))                     returns {
+    action consumeTaskAttachment(taskId: String(20))                       returns {
         fileName   : String(255);
         mimeType   : String(100);
         dataBase64 : LargeString;
@@ -104,7 +164,7 @@ service EmployeeService @(path: '/employee') {
         'Employee',
         'Manager'
     ])
-    action   getWorkAnniversary()                                          returns {
+    action getWorkAnniversary()                                            returns {
         yearsCompleted : Decimal(5, 2);
         joiningDate    : Date;
         message        : String(255);
@@ -116,7 +176,7 @@ service EmployeeService @(path: '/employee') {
         'Employee',
         'Manager'
     ])
-    action   getLeaveBalance()                                             returns {
+    action getLeaveBalance()                                               returns {
         casualLeave : Integer;
         sickLeave   : Integer;
         annualLeave : Integer;
@@ -129,16 +189,16 @@ service EmployeeService @(path: '/employee') {
         'Employee',
         'Manager'
     ])
-    action   getMyTasks()                                                  returns {
-        totalPending      : Integer;
-        highPriorityCount : Integer;
+    action getMyTasks()                                                    returns {
+        totalPending        : Integer;
+        highPriorityCount   : Integer;
         mediumPriorityCount : Integer;
         lowPriorityCount    : Integer;
     };
 
-    action   markAttendance(attendanceDate: String,
-                            attendanceDay: String,
-                            attendanceTime: String)                        returns {
+    action markAttendance(attendanceDate: String,
+                          attendanceDay: String,
+                          attendanceTime: String)                          returns {
         attendanceId   : String;
         employeeId     : String;
         employeeName   : String;
@@ -148,18 +208,17 @@ service EmployeeService @(path: '/employee') {
         message        : String;
     };
 
-    action   getTodayAttendance(attendanceDate: String)                    returns {
+    action getTodayAttendance(attendanceDate: String)                      returns {
         alreadyMarked  : Boolean;
         attendanceTime : String;
         attendanceDay  : String;
     };
 
 
-    entity AttendanceRecord   as projection on db.timesheet.AttendanceRecord;
+    entity AttendanceRecord                          as projection on db.timesheet.AttendanceRecord;
 
     // Attendance card  (frontend-only for now; backend returns mock/stub data)
-    action   getAttendance()                                               
-    returns {
+    action getAttendance()                                                 returns {
         attendancePercentage : Integer;
         presentCount         : Integer;
         absentCount          : Integer;
@@ -167,8 +226,7 @@ service EmployeeService @(path: '/employee') {
     };
 
     // Performance Rating card
-    action getPerformanceRating()                                        
-    returns {
+    action getPerformanceRating()                                          returns {
         ratingValue    : Decimal(3, 1);
         ratingCategory : String(30);
         reviewMonth    : Integer;
@@ -177,13 +235,12 @@ service EmployeeService @(path: '/employee') {
     };
 
     // Performance Trend graph  (returns JSON array as a String for flexibility)
-    action getPerformanceTrend(year: Integer)                            
-    returns {
+    action getPerformanceTrend(year: Integer)                              returns {
         trendJSON : String; // JSON array: [{month,monthName,rating}, ...]
     };
 
     // Task Summary donut chart  (reuses existing TaskMaster entity)
-    action getTaskSummary()                                              returns {
+    action getTaskSummary()                                                returns {
         total      : Integer;
         notStarted : Integer;
         inProgress : Integer;
@@ -192,7 +249,7 @@ service EmployeeService @(path: '/employee') {
     };
 
     // Recent Notifications (last 5 for logged-in employee)
-    action getRecentNotifications()                                      returns array of {
+    action getRecentNotifications()                                        returns array of {
         notificationId : String(30);
         type           : String(30);
         title          : String(100);
@@ -203,12 +260,12 @@ service EmployeeService @(path: '/employee') {
     };
 
     // Upcoming Calendar events from Google Calendar
-    action getUpcomingCalendar()                                         returns {
+    action getUpcomingCalendar()                                           returns {
         eventsJSON : String; // JSON array of {id, title, start, end, timeLabel, dateLabel, isToday}
     };
 
     // My Leave Overview — yearly taken vs balance
-    action getLeaveOverview(year: Integer)                               returns {
+    action getLeaveOverview(year: Integer)                                 returns {
         casual    : Integer; // balance remaining
         sick      : Integer;
         annual    : Integer;
@@ -222,7 +279,10 @@ service EmployeeService @(path: '/employee') {
 // ── Manager Service ──────────────────────────────────────────────────────────
 service ManagerService @(path: '/manager')@(requires: 'Manager') {
 
-    entity PendingApprovals as projection on db.timesheet.TimesheetHeader where status = 'Pending';
+    entity PendingApprovals as projection on db.timesheet.TimesheetHeader
+                               where
+                                   status = 'Pending';
+
     entity ApprovalEntries  as projection on db.timesheet.TimesheetEntry;
     entity Employees        as projection on db.timesheet.EmployeeMaster;
     entity Tasks            as projection on db.timesheet.TaskMaster;
@@ -258,31 +318,38 @@ service ManagerService @(path: '/manager')@(requires: 'Manager') {
                                 dataBase64: LargeString)                   returns String;
 
 
-action submitPerformanceRating(
-    employeeId    : String,
-    ratingValue   : Decimal(3,1),
-    reviewMonth   : Integer,
-    reviewYear    : Integer,
-    reviewComment : String,
-    ratingCategory: String
-) returns {
-    ratingId : String;
-    message  : String;
-};
+    action submitPerformanceRating(employeeId: String,
+                                   ratingValue: Decimal(3, 1),
+                                   reviewMonth: Integer,
+                                   reviewYear: Integer,
+                                   reviewComment: String,
+                                   ratingCategory: String)                 returns {
+        ratingId : String;
+        message  : String;
+    };
+
+    entity PrevWeekRequests as projection on db.timesheet.TimesheetPrevWeekRequest;
+
+    action approvePrevWeekRequest(requestId: String,
+                                  approved: Boolean,
+                                  managerRemarks: String)                  returns {
+        requestId   : String;
+        status      : String;
+        timesheetId : String;
+    };
 
 }
-
 
 
 // ── HR Service ───────────────────────────────────────────────────────────────
 service HRService @(path: '/hr')@(requires: 'HR') {
 
     @odata.draft.enabled
-    entity Employees     as projection on db.timesheet.EmployeeMaster;
+    entity Employees                           as projection on db.timesheet.EmployeeMaster;
 
-    entity Documents     as projection on db.timesheet.EmployeeDocument;
+    entity Documents                           as projection on db.timesheet.EmployeeDocument;
 
-    entity LeaveRequests as projection on db.timesheet.LeaveRequest;
+    entity LeaveRequests                       as projection on db.timesheet.LeaveRequest;
 
     action nextEmployeeId()                                                returns String;
 
@@ -318,5 +385,14 @@ service HRService @(path: '/hr')@(requires: 'HR') {
         fileName   : String(255);
         mimeType   : String(100);
         dataBase64 : LargeString;
+    };
+
+    entity DayUnlockRequests @(requires: 'HR') as projection on db.timesheet.TimesheetDayUnlockRequest;
+
+    action approveDayUnlock(requestId: String,
+                            approved: Boolean,
+                            hrRemarks: String)                             returns {
+        requestId : String;
+        status    : String;
     };
 }

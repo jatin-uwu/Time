@@ -1,698 +1,1223 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// FILE: webapp/controller/Timesheet.controller.js
+// Namespace : timesheet.app  (matches manifest.json sap.app.id)
+// Backend   : /employee  (CAP OData v4 EmployeeService)
+// ─────────────────────────────────────────────────────────────────────────────
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
-    "sap/m/MessageToast",
     "sap/m/MessageBox",
-    "sap/m/Popover",
-    "sap/ui/unified/Calendar"
-], (Controller, JSONModel, MessageToast, MessageBox, Popover, Calendar) => {
+    "sap/m/MessageToast",
+    "sap/m/Input",
+    "sap/m/Select",
+    "sap/m/Text",
+    "sap/m/Button",
+    "sap/m/HBox",
+    "sap/m/VBox",
+    "sap/m/Label",
+    "sap/m/ObjectStatus",
+    "sap/ui/core/Item",
+    "sap/ui/core/HTML"
+], function (
+    Controller, JSONModel,
+    MessageBox, MessageToast,
+    Input, Select, Text, Button, HBox, VBox, Label, ObjectStatus, Item, HTML
+) {
     "use strict";
 
-    const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-    const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-    const EMPTY_APPROVED = () => ({ mon: false, tue: false, wed: false, thu: false, fri: false, sat: false, sun: false });
-
-    const EMPTY_ROW = () => ({
-        projectName: "", taskName: "", taskId: "",
-        mon: "", tue: "", wed: "", thu: "", fri: "", sat: "", sun: "",
-        locked: { mon: false, tue: false, wed: false, thu: false, fri: false, sat: false, sun: false },
-        approved: EMPTY_APPROVED(),
-        _rowLocked: false
-    });
-
-    function getWeekStart(date) {
-        const d = new Date(date);
-        const day = d.getDay();
-        d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
-        d.setHours(0, 0, 0, 0);
-        return d;
-    }
-
-    function toDateString(date) {
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, "0");
-        const d = String(date.getDate()).padStart(2, "0");
-        return `${y}-${m}-${d}`;
-    }
-
-    function toShortLabel(date) {
-        return `${date.getDate()} ${MONTHS[date.getMonth()]}`;
-    }
-
-    function buildDayLabels(weekStart) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        return DAY_NAMES.map((name, i) => {
-            const d = new Date(weekStart);
-            d.setDate(weekStart.getDate() + i);
-            d.setHours(0, 0, 0, 0);
-            return { name, date: toShortLabel(d), isFuture: d > today };
-        });
-    }
-
-    function getAllowedMinWeek() {
-        const prev = getWeekStart(new Date());
-        prev.setDate(prev.getDate() - 7);
-        return prev;
-    }
-
-    function getAllowedMaxWeek() {
-        return getWeekStart(new Date());
-    }
-
-    // ── Stable, unique entryId: empId + weekStart + taskId + dayIndex ────
-    // Max 15 chars to fit the schema String(15).
-    // Format: e.g. "1001270TASK0010" — empSuffix(4) + weekDay(3) + taskSuffix(7) + dayIdx(1)
-    function makeEntryId(sEmpId, sWeekStart, sTaskId, dayIndex) {
-        const emp = (sEmpId || "").replace(/\D/g, "").slice(-4).padStart(4, "0");
-        const week = (sWeekStart || "").replace(/-/g, "").slice(2, 7); // YYMMD → 5 chars
-        const task = (sTaskId || "").replace(/\D/g, "").slice(-3).padStart(3, "0");
-        const day = String(dayIndex);
-        return (emp + week + task + day).substring(0, 15);
-    }
+    const BASE_URL   = "/employee";
+    const DAYS       = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 
     return Controller.extend("timesheet.app.controller.Timesheet", {
 
-        onInit() {
-            this._oViewModel = new JSONModel({
-                weekStart: null,
-                weekStartFilter: "",
-                weekRangeLabel: "",
-                grandTotal: "0:00",
-                canSubmit: false,
-                rowCount: 1,
-                canGoPrev: false,
-                canGoNext: false,
-                days: [],
-                busy: false,
-                colTotals: {
-                    mon: "0:00", tue: "0:00", wed: "0:00", thu: "0:00",
-                    fri: "0:00", sat: "0:00", sun: "0:00", total: "0:00"
-                }
-            });
-            this.getView().setModel(this._oViewModel, "view");
-
-            this._oRowsModel = new JSONModel({ rows: [EMPTY_ROW()] });
-            this.getView().setModel(this._oRowsModel, "rows");
-
-            this._oTasksModel = new JSONModel([]);
-            this.getView().setModel(this._oTasksModel, "tasks");
-
-            this._currentTimesheetId = null;
-            this._setWeek(new Date());
-            this._loadTasks();
-
-            this.getOwnerComponent().getRouter()
-                .getRoute("timesheet")
-                .attachPatternMatched(this._onRouteMatched, this);
-        },
-
-        _onRouteMatched() {
-            const oComp = this.getOwnerComponent();
-            if (oComp._pendingWeekStart) {
-                const sFilter = oComp._pendingWeekStart;
-                oComp._pendingWeekStart = null;
-                this._setWeekByFilter(sFilter);
-            } else {
+        // ══════════════════════════════════════════════════════════════════════
+        // LIFECYCLE
+        // ══════════════════════════════════════════════════════════════════════
+        onInit: function () {
+            this._initModels();
+            this._computeWeekDates(new Date());
+            // Defer async load so UI5 lifecycle finishes first
+            setTimeout(function () {
                 this._loadTimesheetData();
+            }.bind(this), 0);
+        },
+
+        // ── Initialise all JSON models and internal state ─────────────────────
+        _initModels: function () {
+            this.getView().setModel(new JSONModel({
+                weekStatus:             "None",
+                weekStatusState:        "None",
+                weekStatusIcon:         "",
+                weekRangeLabel:         "",
+                prevWeekRangeLabel:     "",
+                isViewingPrevWeek:      false,
+                isPrevWeekApproved:     false,
+                canEdit:                false,
+                canSubmit:              false,
+                infoMessage:            "",
+                infoMessageType:        "Information",
+                showRequestPrevWeekBtn: false,
+                showPrevWeekPending:    false,
+                showFillPrevWeekBtn:    false,
+                showPrevWeekDone:       false,
+                prevWeekFillEnabled:    false
+            }), "viewModel");
+
+            // Internal state
+            this._currentEmployee  = null;
+            this._weekStartDate    = null;
+            this._weekEndDate      = null;
+            this._prevWeekStartDate = null;
+            this._prevWeekEndDate   = null;
+            this._timesheetId      = null;
+            this._tasks            = [];
+            this._rows             = [];
+            this._dayUnlockReqs    = {};
+            this._prevWeekRequest  = null;
+            this._injectedControls = [];  // tracks placeAt controls for cleanup
+            this._csrfToken        = null;
+
+            // HR unlock dialog model
+            this.getView().setModel(new JSONModel({
+                targetDate: "", selectedHrId: "", employeeRemarks: ""
+            }), "hrUnlockModel");
+
+            // HR employees list model
+            this.getView().setModel(new JSONModel({ hrEmployees: [] }), "hrListModel");
+
+            // Previous week dialog model
+            this.getView().setModel(new JSONModel({
+                weekRangeLabel: "", managerName: "", employeeRemarks: "", infoText: ""
+            }), "prevWeekModel");
+        },
+
+        // ══════════════════════════════════════════════════════════════════════
+        // DATE HELPERS
+        // NOTE: _toISODate uses local date parts (not toISOString) to avoid
+        //       UTC shift for IST (India +5:30) which causes wrong week dates
+        // ══════════════════════════════════════════════════════════════════════
+        _toISODate: function (date) {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, "0");
+            const d = String(date.getDate()).padStart(2, "0");
+            return y + "-" + m + "-" + d;
+        },
+
+        _getMondayOfWeek: function (date) {
+            const d    = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+            const day  = d.getDay();
+            const diff = day === 0 ? -6 : 1 - day;
+            d.setDate(d.getDate() + diff);
+            return d;
+        },
+
+        _formatDisplayDate: function (isoDate) {
+            const d = new Date(isoDate + "T00:00:00");
+            return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+        },
+
+        _getYesterday: function () {
+            const d = new Date();
+            d.setDate(d.getDate() - 1);
+            return this._toISODate(d);
+        },
+
+        _getTwoDaysAgo: function () {
+            const d = new Date();
+            d.setDate(d.getDate() - 2);
+            return this._toISODate(d);
+        },
+
+        _computeWeekDates: function (refDate, offset) {
+            const mon = this._getMondayOfWeek(refDate);
+            if (offset === -1) mon.setDate(mon.getDate() - 7);
+            const sun = new Date(mon);
+            sun.setDate(mon.getDate() + 6);
+
+            this._weekStartDate = this._toISODate(mon);
+            this._weekEndDate   = this._toISODate(sun);
+
+            // Always keep prev week dates for the bottom section
+            const prevMon = new Date(this._getMondayOfWeek(new Date()));
+            prevMon.setDate(prevMon.getDate() - 7);
+            const prevSun = new Date(prevMon);
+            prevSun.setDate(prevMon.getDate() + 6);
+            this._prevWeekStartDate = this._toISODate(prevMon);
+            this._prevWeekEndDate   = this._toISODate(prevSun);
+
+            const vm = this.getView().getModel("viewModel");
+            vm.setProperty("/weekRangeLabel",
+                this._formatDisplayDate(this._weekStartDate) +
+                " \u2013 " +
+                this._formatDisplayDate(this._weekEndDate));
+            vm.setProperty("/prevWeekRangeLabel",
+                this._formatDisplayDate(this._prevWeekStartDate) +
+                " \u2013 " +
+                this._formatDisplayDate(this._prevWeekEndDate));
+        },
+
+        _getWeekDays: function () {
+            const days = [];
+            const mon  = new Date(this._weekStartDate + "T00:00:00");
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(mon);
+                d.setDate(mon.getDate() + i);
+                days.push(this._toISODate(d));
             }
+            return days;
         },
 
-        _setWeekByFilter(sFilter) {
-            const minWeek = getAllowedMinWeek();
-            this._savedDays = null;  
-            const maxWeek = getAllowedMaxWeek();
-            const [y, m, d] = sFilter.split("-").map(Number);
-
-            let start = null;
-            for (let offset = 0; offset <= 1; offset++) {
-                const monday = getWeekStart(new Date(y, m - 1, d + offset));
-                if (toDateString(monday) === sFilter) { start = monday; break; }
-            }
-            if (!start) start = getWeekStart(new Date(y, m - 1, d + 1));
-            if (start.getTime() < minWeek.getTime()) start = new Date(minWeek);
-            if (start.getTime() > maxWeek.getTime()) start = new Date(maxWeek);
-
-            const end = new Date(start);
-            end.setDate(start.getDate() + 6);
-
-            this._oViewModel.setProperty("/weekStart", start);
-            this._oViewModel.setProperty("/weekStartFilter", sFilter);
-            this._oViewModel.setProperty("/weekRangeLabel", `${toShortLabel(start)} - ${toShortLabel(end)}`);
-            this._oViewModel.setProperty("/days", buildDayLabels(start));
-            this._oViewModel.setProperty("/canGoPrev", start.getTime() > minWeek.getTime());
-            this._oViewModel.setProperty("/canGoNext", start.getTime() < maxWeek.getTime());
-            this._loadTimesheetData();
-        },
-
-        onPrevWeek() {
-            const d = new Date(this._oViewModel.getProperty("/weekStart"));
-            d.setDate(d.getDate() - 7);
-            this._setWeek(d);
-        },
-
-        onNextWeek() {
-            const d = new Date(this._oViewModel.getProperty("/weekStart"));
-            d.setDate(d.getDate() + 7);
-            this._setWeek(d);
-        },
-
-        onToday() { this._setWeek(new Date()); },
-
-        _setWeek(date) {
-            const minWeek = getAllowedMinWeek();
-            this._savedDays = null;
-            const maxWeek = getAllowedMaxWeek();
-            let start = getWeekStart(date);
-            if (start.getTime() < minWeek.getTime()) start = new Date(minWeek);
-            if (start.getTime() > maxWeek.getTime()) start = new Date(maxWeek);
-
-            const end = new Date(start);
-            end.setDate(start.getDate() + 6);
-
-            this._currentTimesheetId = null; // reset for new week
-
-            this._oViewModel.setProperty("/weekStart", start);
-            this._oViewModel.setProperty("/weekStartFilter", toDateString(start));
-            this._oViewModel.setProperty("/weekRangeLabel", `${toShortLabel(start)} - ${toShortLabel(end)}`);
-            this._oViewModel.setProperty("/days", buildDayLabels(start));
-            this._oViewModel.setProperty("/canGoPrev", start.getTime() > minWeek.getTime());
-            this._oViewModel.setProperty("/canGoNext", start.getTime() < maxWeek.getTime());
-            this._loadTimesheetData();
-        },
-
-        onCalendarPress(oEvent) {
-            if (!this._oCalPopover) {
-                const minWeek = getAllowedMinWeek();
-                const maxWeekEnd = new Date(getAllowedMaxWeek());
-                maxWeekEnd.setDate(maxWeekEnd.getDate() + 6);
-
-                this._oDashCal = new Calendar({
-                    minDate: minWeek,
-                    maxDate: maxWeekEnd,
-                    select: this.onCalendarWeekSelect.bind(this)
-                });
-                this._oCalPopover = new Popover({
-                    showHeader: false,
-                    placement: "Bottom",
-                    content: [this._oDashCal]
-                });
-                this.getView().addDependent(this._oCalPopover);
-            }
-            this._oCalPopover.openBy(oEvent.getSource());
-        },
-
-        onCalendarWeekSelect(oEvent) {
-            const oCal = oEvent.getSource();
-            const aDates = oCal.getSelectedDates();
-            if (!aDates || !aDates.length) return;
-            const oStart = aDates[0].getStartDate();
-            if (!oStart) return;
-            this._oCalPopover.close();
-            this._setWeek(new Date(oStart));
-        },
-
-        // ── Load timesheet from backend ───────────────────────────────────
-        _loadTimesheetData() {
-            const sWeekStart = this._oViewModel.getProperty("/weekStartFilter");
-            const oModel = this.getOwnerComponent().getModel();
-            if (!oModel) { this._setRows([EMPTY_ROW()]); return; }
-
-            this._oViewModel.setProperty("/busy", true);
-
-            oModel.bindList("/MyTimesheets", null, null, null, {
-                $filter: `weekStartDate eq ${sWeekStart}`
-            }).requestContexts(0, 1)
-                .then(aCtx => {
-                    if (!aCtx || aCtx.length === 0) {
-                        this._currentTimesheetId = null;
-                        this._savedDays = null;
-                        this._setRows([EMPTY_ROW()]);
-                        return;
+        // ══════════════════════════════════════════════════════════════════════
+        // LOAD DATA
+        // ══════════════════════════════════════════════════════════════════════
+        _loadTimesheetData: async function () {
+            const view = this.getView();
+            view.setBusy(true);
+            try {
+                // Resolve current user once per session
+                if (!this._currentEmployee) {
+                    try {
+                        const userResp = await this._callAction(
+                            BASE_URL + "/getCurrentUser", {}
+                        );
+                        this._currentEmployee = userResp || {};
+                    } catch (e) {
+                        this._currentEmployee = {};
+                        console.warn("getCurrentUser failed:", e.message);
                     }
-                    const header = aCtx[0].getObject();
-                    this._currentTimesheetId = header.timesheetId;
-                    this._currentStatus = header.status;
-
-                    const weekStart = this._oViewModel.getProperty("/weekStart");
-                    const weekDates = DAYS.map((_, i) => {
-                        const d = new Date(weekStart);
-                        d.setDate(weekStart.getDate() + i);
-                        return toDateString(d);
-                    });
-
-                    return oModel.bindList("/MyEntries", null, null, null, {
-                        $expand: "task",
-                        $filter: `timesheet_timesheetId eq '${header.timesheetId}'`
-                    }).requestContexts(0, 200)
-                        .then(aEntries => {
-                            const entries = aEntries.map(c => c.getObject());
-                            this._setRows(entries.length > 0
-                                ? this._pivotEntries(entries, weekDates, header.status)
-                                : [EMPTY_ROW()]);
-                        });
-                })
-                .catch(() => this._setRows([EMPTY_ROW()]))
-                .finally(() => this._oViewModel.setProperty("/busy", false));
-        },
-
-        _pivotEntries(entries, weekDates, status) {
-            const rowMap = new Map();
-            const isLocked = status === "Submitted" || status === "Approved";
-
-            for (const entry of entries) {
-                const taskId = entry.task_taskId ?? "unknown";
-                const taskName = entry.task?.taskName ?? "Unknown Task";
-                const taskDesc = entry.task?.taskDescription ?? "";
-
-                if (!rowMap.has(taskId)) {
-                    rowMap.set(taskId, {
-                        taskId, projectName: taskName, taskName: taskDesc,
-                        mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, sat: 0, sun: 0
-                    });
                 }
-                const idx = weekDates.indexOf(entry.workDate);
-                if (idx >= 0) rowMap.get(taskId)[DAYS[idx]] += parseFloat(entry.hoursWorked) || 0;
+
+                // Load week data
+                const data = await this._callAction(
+                    BASE_URL + "/getTimesheetWeekData", {
+                        weekStartDate: this._weekStartDate,
+                        weekEndDate:   this._weekEndDate
+                    }
+                );
+
+                this._timesheetId   = data.timesheetId;
+                this._tasks         = JSON.parse(data.tasks || "[]");
+                this._dayUnlockReqs = {};
+
+                // Index unlock requests by date (keep most recent per date)
+                JSON.parse(data.dayUnlockRequests || "[]").forEach(function (r) {
+                    if (!this._dayUnlockReqs[r.targetDate] ||
+                        r.requestedOn > this._dayUnlockReqs[r.targetDate].requestedOn) {
+                        this._dayUnlockReqs[r.targetDate] = r;
+                    }
+                }.bind(this));
+
+                this._prevWeekRequest = JSON.parse(data.prevWeekRequest || "null");
+
+                this._buildRowsFromEntries(JSON.parse(data.entries || "[]"));
+                this._updateViewModelState(data.weekStatus, !!data.isPrevWeekApproved);
+                this._renderGrid();
+                this._renderMissedDayActions();
+
+            } catch (e) {
+                MessageBox.error("Failed to load timesheet: " + (e.message || e));
+            } finally {
+                view.setBusy(false);
             }
-
-            // ── Track which days have saved hours so new rows lock them ──
-            this._savedDays = {
-                mon: false, tue: false, wed: false,
-                thu: false, fri: false, sat: false, sun: false
-            };
-            Array.from(rowMap.values()).forEach(row => {
-                DAYS.forEach(d => {
-                    if ((row[d] || 0) > 0) this._savedDays[d] = true;
-                });
-            });
-
-            return Array.from(rowMap.values()).map(row => {
-                const r = {
-                    taskId: row.taskId, projectName: row.projectName, taskName: row.taskName,
-                    locked: {
-                        mon: isLocked, tue: isLocked, wed: isLocked, thu: isLocked,
-                        fri: isLocked, sat: isLocked, sun: isLocked
-                    },
-                    approved: EMPTY_APPROVED(),
-                    _rowLocked: isLocked
-                };
-                DAYS.forEach(d => { r[d] = row[d] > 0 ? this._toHHMM(row[d]) : ""; });
-                return r;
-            });
         },
 
-        _fallbackTasks: [
-            { taskId: "TASK001", taskName: "UI Development", taskDescription: "Build weekly timesheet UI" },
-            { taskId: "TASK002", taskName: "CAP Backend", taskDescription: "Create CAP service and entities" },
-            { taskId: "TASK003", taskName: "HR Review", taskDescription: "Employee onboarding checklist" },
-            { taskId: "TASK004", taskName: "Sales Followup", taskDescription: "Client meeting updates" }
-        ],
-
-        _loadTasks() {
-            const oModel = this.getOwnerComponent().getModel();
-            oModel.bindList("/MyTasks").requestContexts(0, 200)
-                .then(aCtx => {
-                    const tasks = aCtx.map(c => c.getObject());
-                    this._oTasksModel.setData(tasks.length > 0 ? tasks : this._fallbackTasks);
-                })
-                .catch(() => this._oTasksModel.setData(this._fallbackTasks));
-        },
-
-        onTaskSelect(oEvent) {
-            const oComboBox = oEvent.getSource();
-            const sKey = oComboBox.getSelectedKey();
-            const oContext = oComboBox.getBindingContext("rows");
-            if (!oContext) return;
-
-            const sPath = oContext.getPath();
-            if (sKey) {
-                const task = this._oTasksModel.getData().find(t => t.taskId === sKey);
-                if (task) {
-                    this._oRowsModel.setProperty(sPath + "/taskId", task.taskId);
-                    this._oRowsModel.setProperty(sPath + "/projectName", task.taskName);
-                    this._oRowsModel.setProperty(sPath + "/taskName", task.taskDescription || "");
+        // ── Build internal row array from flat DB entries ─────────────────────
+        _buildRowsFromEntries: function (entries) {
+            const rowMap = {};
+            entries.forEach(function (e) {
+                if (!rowMap[e.task_taskId]) {
+                    const task = this._tasks.find(function (t) {
+                        return t.taskId === e.task_taskId;
+                    });
+                    rowMap[e.task_taskId] = {
+                        taskId:   e.task_taskId,
+                        taskName: task ? task.taskName : e.task_taskId,
+                        entries:  {},
+                        locked:   {}
+                    };
                 }
+                rowMap[e.task_taskId].entries[e.workDate] = e.hoursWorked;
+                rowMap[e.task_taskId].locked[e.workDate]  = !!e.isLocked;
+            }.bind(this));
+
+            this._rows = Object.values(rowMap);
+            // Always have at least one empty row
+            if (this._rows.length === 0) {
+                this._rows.push({ taskId: null, taskName: null, entries: {}, locked: {} });
+            }
+        },
+
+        // ══════════════════════════════════════════════════════════════════════
+        // VIEW MODEL STATE
+        // All setProperty calls use native booleans — never strings
+        // ══════════════════════════════════════════════════════════════════════
+        _updateViewModelState: function (weekStatus, isPrevWeekApproved) {
+            const vm     = this.getView().getModel("viewModel");
+            const isView = vm.getProperty("/isViewingPrevWeek");
+
+            const stateMap = {
+                "Draft":            { state: "None",    icon: "sap-icon://edit"    },
+                "Pending":          { state: "Warning", icon: "sap-icon://pending" },
+                "Approved":         { state: "Success", icon: "sap-icon://accept"  },
+                "Rejected":         { state: "Error",   icon: "sap-icon://decline" },
+                "PrevWeekApproved": { state: "Success", icon: "sap-icon://accept"  },
+                "None":             { state: "None",    icon: ""                   }
+            };
+            const s = stateMap[weekStatus] || stateMap["None"];
+
+            vm.setProperty("/weekStatus",         weekStatus);
+            vm.setProperty("/weekStatusState",    s.state);
+            vm.setProperty("/weekStatusIcon",     s.icon);
+            vm.setProperty("/isPrevWeekApproved", !!isPrevWeekApproved);
+
+            // canEdit
+            let canEdit = false;
+            if (isView) {
+                canEdit = weekStatus === "PrevWeekApproved";
             } else {
-                this._oRowsModel.setProperty(sPath + "/taskId", "");
-                this._oRowsModel.setProperty(sPath + "/projectName", "");
-                this._oRowsModel.setProperty(sPath + "/taskName", "");
+                canEdit = ["Draft", "Rejected", "None"].includes(weekStatus);
             }
-        },
+            vm.setProperty("/canEdit", canEdit);
 
-        _setRows(rows) {
-            this._oRowsModel.setProperty("/rows", rows);
-            this._refreshTotals(rows);
-            this._updateRowCount();
-        },
+            // canSubmit
+            const hasEntries = this._rows.some(function (r) {
+                return r.taskId && Object.values(r.entries).some(function (h) { return h > 0; });
+            });
+            vm.setProperty("/canSubmit", canEdit && hasEntries);
 
-        _newLockedRow() {
-            const saved = this._savedDays || {};
-            const locked = {};
-            DAYS.forEach(d => { locked[d] = saved[d] === true; });
-            return {
-                projectName: "", taskName: "", taskId: "",
-                mon: "", tue: "", wed: "", thu: "", fri: "", sat: "", sun: "",
-                locked,
-                approved: EMPTY_APPROVED(),
-                _rowLocked: false
-            };
-        },
-
-        onAddRow() {
-            const rows = this._oRowsModel.getProperty("/rows");
-            rows.push(this._newLockedRow());  // ← was EMPTY_ROW()
-            this._oRowsModel.setProperty("/rows", rows);
-            this._updateRowCount();
-        },
-
-        onSave() {
-            const rows = this._oRowsModel.getProperty("/rows");
-            const sWeekStart = this._oViewModel.getProperty("/weekStartFilter");
-            this._oViewModel.setProperty("/busy", true);
-
-            this._saveToBackend(rows, sWeekStart, "Draft")
-                .then(() => {
-                    // ── Sync to shared models so Dashboard bar chart updates ──
-                    this._syncToDashboard(rows, sWeekStart);
-                    MessageToast.show("Draft saved.");
-                })
-                .catch(err => MessageBox.error((err && err.message) || "Save failed."))
-                .finally(() => this._oViewModel.setProperty("/busy", false));
-        },
-
-        _syncToDashboard(rows, sWeekStart) {
-            const oComp = this.getOwnerComponent();
-
-            // 1. Write to "locked" model — Dashboard reads this for bar chart
-            const oLocksModel = oComp.getModel("locked");
-            if (oLocksModel) {
-                oLocksModel.setProperty("/" + sWeekStart, rows);
-                oComp.persistLocked();
+            // Info banner
+            if (weekStatus === "Rejected") {
+                vm.setProperty("/infoMessage",
+                    "Your timesheet was rejected by the manager. Please review and resubmit.");
+                vm.setProperty("/infoMessageType", "Error");
+            } else if (weekStatus === "Pending") {
+                vm.setProperty("/infoMessage",
+                    "Timesheet submitted \u2014 awaiting manager approval.");
+                vm.setProperty("/infoMessageType", "Warning");
+            } else if (weekStatus === "Approved") {
+                vm.setProperty("/infoMessage",
+                    "Timesheet approved. Entries are locked.");
+                vm.setProperty("/infoMessageType", "Success");
+            } else {
+                vm.setProperty("/infoMessage", "");
             }
 
-            // 2. Write to "history" model — Dashboard reads this as fallback
-            const oHistModel = oComp.getModel("history");
-            if (oHistModel) {
-                const submissions = oHistModel.getProperty("/submissions") || [];
-                const existingIdx = submissions.findIndex(s => s.weekStart === sWeekStart);
+            // Prev-week section button states
+            const pr         = this._prevWeekRequest;
+            const prevStatus = pr ? pr.status : null;
 
-                const entry = {
-                    weekStart: sWeekStart,
-                    rows: rows,
-                    status: "Draft",
-                    timesheetId: this._currentTimesheetId
-                };
-
-                if (existingIdx >= 0) {
-                    submissions[existingIdx] = entry;
-                } else {
-                    submissions.push(entry);
-                }
-
-                oHistModel.setProperty("/submissions", submissions);
-                oComp.persistHistory();
-            }
-            // Update _savedDays so immediately-added rows lock saved days
-this._savedDays = { mon:false, tue:false, wed:false,
-                    thu:false, fri:false, sat:false, sun:false };
-rows.forEach(row => {
-    DAYS.forEach(d => {
-        if (this._parseHHMM(row[d]) > 0) this._savedDays[d] = true;
-    });
-});
+            vm.setProperty("/showRequestPrevWeekBtn",
+                !prevStatus || prevStatus === "Rejected");
+            vm.setProperty("/showPrevWeekPending",
+                prevStatus === "Pending");
+            vm.setProperty("/showFillPrevWeekBtn",
+                prevStatus === "Approved" && weekStatus !== "Approved");
+            vm.setProperty("/showPrevWeekDone",
+                prevStatus === "Completed" || (isView && weekStatus === "Approved"));
+            vm.setProperty("/prevWeekFillEnabled",
+                prevStatus === "Approved");
         },
 
-        onSubmit() {
-            const rows = this._oRowsModel.getProperty("/rows");
-
-            const colDec = { mon: 0, tue: 0, wed: 0, thu: 0, fri: 0 };
-            rows.forEach(r => ["mon", "tue", "wed", "thu", "fri"].forEach(d => { colDec[d] += this._parseHHMM(r[d]); }));
-            const missingDays = ["mon", "tue", "wed", "thu", "fri"].filter(d => colDec[d] === 0);
-            if (missingDays.length > 0) {
-                const names = { mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday" };
-                MessageBox.error(
-                    "Please fill hours for: " + missingDays.map(d => names[d]).join(", ") + ".",
-                    { title: "Incomplete Timesheet" }
-                );
-                return;
-            }
-
-            const invalidRows = rows.filter(r =>
-                DAYS.some(d => r[d] && r[d] !== "" && !r.locked[d]) && !r.taskId
-            );
-            if (invalidRows.length > 0) {
-                MessageBox.error(
-                    `${invalidRows.length} row(s) have hours but no task selected.`,
-                    { title: "Task Required" }
-                );
-                return;
-            }
-
-            MessageBox.confirm(
-                `Send timesheet for ${this._oViewModel.getProperty("/weekRangeLabel")} for approval?`,
-                {
-                    title: "Send for Approval",
-                    actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
-                    onClose: (sAction) => {
-                        if (sAction === MessageBox.Action.OK) this._doSubmit(rows);
-                    }
-                }
-            );
+        // ── Safely destroy a container's children ─────────────────────────────
+        _clearContainer: function (controlId) {
+            const ctrl = this.byId(controlId);
+            if (!ctrl) return null;
+            ctrl.destroyItems();
+            return ctrl;
         },
 
-        _doSubmit(rows) {
-            const sWeekStart = this._oViewModel.getProperty("/weekStartFilter");
-            this._oViewModel.setProperty("/busy", true);
-
-            this._saveToBackend(rows, sWeekStart, "Draft")
-                .then(sTimesheetId => {
-                    return fetch("/employee/submitTimesheet", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                        body: JSON.stringify({ timesheetId: sTimesheetId })
-                    }).then(r => r.ok ? r.json() : Promise.reject(new Error("Submit action failed: " + r.status)));
-                })
-                .then(() => {
-                    const updatedRows = this._oRowsModel.getProperty("/rows").map(row => {
-                        const locked = { ...row.locked };
-                        DAYS.forEach(d => { if (row[d] && row[d] !== "") locked[d] = true; });
-                        return { ...row, locked, _rowLocked: DAYS.some(d => locked[d]) };
-                    });
-                    this._setRows(updatedRows);
-                    this._syncToDashboard(updatedRows, sWeekStart);  // ← ADD THIS
-                    MessageToast.show("Sent for approval! Your manager will review your timesheet.");
-                })
-                .catch(err => {
-                    MessageBox.error(
-                        (err && err.message) || "Failed to submit timesheet.",
-                        { title: "Error" }
-                    );
-                })
-                .finally(() => this._oViewModel.setProperty("/busy", false));
-        },
-
-        // ── Save header + entries to backend ─────────────────────────────
-        // Strategy:
-        //   1. POST header (ignore 409 = already exists)
-        //   2. GET existing entryIds for this timesheet
-        //   3. DELETE each existing entry individually
-        //   4. POST new entries with stable, unique IDs
-        _saveToBackend(rows, sWeekStart, sStatus) {
-            const oComp = this.getOwnerComponent();
-            const sEmpId = oComp.getCurrentEmployeeId();
-            const weekStart = this._oViewModel.getProperty("/weekStart");
-            const weekEnd = new Date(weekStart);
-            weekEnd.setDate(weekStart.getDate() + 6);
-            const sWeekEnd = toDateString(weekEnd);
-
-            // ── Stable timesheetId: empId + weekStart (no random) ────────
-            // e.g. "EMP1002-20260511" → trimmed to 15 chars → "EMP1002-202605"
-            const sTimesheetId = this._currentTimesheetId
-                || (sEmpId + "-" + sWeekStart.replace(/-/g, "")).substring(0, 15);
-            this._currentTimesheetId = sTimesheetId;
-
-            // Build entry list — one entry per filled cell
-            const entries = [];
-            rows.forEach((row, rowIdx) => {
-                if (!row.taskId) return;
-                DAYS.forEach((day, dayIdx) => {
-                    const val = this._parseHHMM(row[day]);
-                    if (!val) return;
-                    const workDate = new Date(weekStart);
-                    workDate.setDate(weekStart.getDate() + dayIdx);
-
-                    // ── Unique, stable entryId ───────────────────────────
-                    // Uses rowIndex + dayIndex so it's always the same for
-                    // the same cell on re-save. Max 15 chars.
-                    // Format: TSIDprefix(8) + R(row,1) + D(day,1) → too short
-                    // Better: empSuffix(4) + weekCompact(6) + row(2) + day(1) = 13 chars
-                    const empNum = (sEmpId || "").replace(/\D/g, "").slice(-4).padStart(4, "0");
-                    const wk = sWeekStart.replace(/-/g, "").slice(2); // 6 chars YYMMDD
-                    const rPad = String(rowIdx).padStart(2, "0");
-                    const dPad = String(dayIdx);
-                    const entryId = (empNum + wk + rPad + dPad).substring(0, 15);
-
-                    entries.push({
-                        entryId,
-                        timesheet_timesheetId: sTimesheetId,
-                        task_taskId: row.taskId,
-                        workDate: toDateString(workDate),
-                        hoursWorked: val,
-                        description: row.projectName || "",
-                        entryStatus: "Open",
-                        isLocked: false
-                    });
+        // ── Destroy all placeAt-injected SAP controls ─────────────────────────
+        // Must be called before every _renderGrid to prevent duplicate rows
+        _destroyInjectedControls: function () {
+            if (this._injectedControls && this._injectedControls.length) {
+                this._injectedControls.forEach(function (ctrl) {
+                    try { ctrl.destroy(); } catch (e) { /* already destroyed */ }
                 });
+            }
+            this._injectedControls = [];
+        },
+
+        // ══════════════════════════════════════════════════════════════════════
+        // GRID RENDERING  — builds a real HTML <table> via sap/ui/core/HTML
+        //                   then injects SAP Select/Input via placeAt()
+        // ══════════════════════════════════════════════════════════════════════
+        _renderGrid: function () {
+            this._destroyInjectedControls(); // MUST be first
+
+            const vm         = this.getView().getModel("viewModel");
+            const canEdit    = vm.getProperty("/canEdit");
+            const today      = this._toISODate(new Date());
+            const yesterday  = this._getYesterday();
+            const twoDaysAgo = this._getTwoDaysAgo();
+            const weekDays   = this._getWeekDays();
+            const isView     = vm.getProperty("/isViewingPrevWeek");
+            const vid        = this.getView().getId();
+
+            // Clear rows container
+            const rowsContainer = this._clearContainer("timesheetRowsContainer");
+            if (!rowsContainer) return;
+
+            // Destroy old HTML control (prevents ID conflict on re-render)
+            const tableId  = vid + "--tsTable";
+            const oldTable = sap.ui.getCore().byId(tableId);
+            if (oldTable) oldTable.destroy();
+
+            // Hide static XML header/totals rows (table renders its own)
+            const dayHeaderRow   = this.byId("dayHeaderRow");
+            const dailyTotalsRow = this.byId("dailyTotalsRow");
+            if (dayHeaderRow)   dayHeaderRow.setVisible(false);
+            if (dailyTotalsRow) dailyTotalsRow.setVisible(false);
+
+            // ── <thead> ───────────────────────────────────────────────────
+            let thead = '<thead><tr style="background:#f5f6f7;border-bottom:2px solid #d9d9d9;">';
+            thead += '<th style="width:220px;padding:10px 12px;text-align:left;font-weight:700;'
+                   + 'font-size:0.9rem;color:#32363a;border-right:1px solid #e5e5e5;">'
+                   + 'Project / Task</th>';
+
+            weekDays.forEach(function (dateStr, idx) {
+                const isSun      = idx === 6;
+                const isToday    = dateStr === today    && !isView;
+                const isYest     = dateStr === yesterday  && !isView;
+                const isTwoDays  = dateStr === twoDaysAgo && !isView;
+                const bg = isToday   ? "#dbeeff"
+                         : (isYest || isTwoDays) ? "#f0faf0"
+                         : isSun     ? "#fafafa"
+                         : "transparent";
+                const col = isToday ? "#0854a0" : "#6a6d70";
+                const fw  = isToday ? "700" : "500";
+
+                thead += '<th style="width:110px;padding:10px 8px;text-align:center;background:'
+                       + bg + ';border-right:1px solid #e5e5e5;">'
+                       + '<div style="font-weight:' + fw + ';font-size:0.8rem;color:#32363a;">'
+                       + DAYS[idx] + '</div>'
+                       + '<div style="font-size:0.75rem;color:' + col + ';font-weight:' + fw + ';">'
+                       + this._formatDisplayDate(dateStr) + '</div>'
+                       + (isSun ? '<div style="font-size:0.7rem;color:#a0a0a0;margin-top:2px;">Holiday</div>' : '')
+                       + '</th>';
+            }.bind(this));
+
+            thead += '<th style="width:80px;padding:10px 8px;text-align:center;font-weight:700;'
+                   + 'font-size:0.9rem;color:#32363a;">Total</th></tr></thead>';
+
+            // ── <tbody> data rows ─────────────────────────────────────────
+            let tbody = '<tbody>';
+
+            this._rows.forEach(function (row, rowIdx) {
+                const rowTotal = this._calcRowTotal(row, weekDays);
+                tbody += '<tr style="border-bottom:1px solid #e5e5e5;">';
+
+                // Task cell — SAP Select injected after render
+                tbody += '<td style="padding:6px 8px;border-right:1px solid #e5e5e5;'
+                       + 'vertical-align:middle;min-width:220px;">'
+                       + '<span id="' + vid + '--taskCell_' + rowIdx + '"></span></td>';
+
+                weekDays.forEach(function (dateStr, dayIdx) {
+                    const isSun     = dayIdx === 6;
+                    const isToday   = dateStr === today    && !isView;
+                    const isYest    = dateStr === yesterday  && !isView;
+                    const isTwoDays = dateStr === twoDaysAgo && !isView;
+                    const bg = isToday   ? "#dbeeff"
+                             : (isYest || isTwoDays) ? "#f0faf0"
+                             : isSun     ? "#f5f5f5"
+                             : "transparent";
+
+                    tbody += '<td style="padding:4px 6px;text-align:center;background:' + bg
+                           + ';border-right:1px solid #e5e5e5;vertical-align:middle;">';
+                    if (isSun) {
+                        tbody += '<span style="color:#bbb;font-size:1rem;">\u2014</span>';
+                    } else {
+                        // SAP Input injected after render
+                        tbody += '<span id="' + vid + '--inputCell_' + rowIdx + '_' + dayIdx + '"></span>';
+                    }
+                    tbody += '</td>';
+                }.bind(this));
+
+                // Row total cell
+                tbody += '<td style="padding:6px 8px;text-align:center;font-weight:600;'
+                       + 'vertical-align:middle;color:#32363a;" id="'
+                       + vid + '--rowTotal_' + rowIdx + '">'
+                       + (rowTotal > 0 ? rowTotal : 0) + '</td>';
+                tbody += '</tr>';
+            }.bind(this));
+
+            // ── Daily totals row ──────────────────────────────────────────
+            let weekTotal = 0;
+            tbody += '<tr style="background:#f5f6f7;border-top:2px solid #d9d9d9;font-weight:700;">';
+            tbody += '<td style="padding:8px 12px;border-right:1px solid #e5e5e5;'
+                   + 'font-size:0.875rem;color:#32363a;">Daily Total</td>';
+
+            weekDays.forEach(function (dateStr, idx) {
+                const isSun = idx === 6;
+                let dayTotal = 0;
+                if (!isSun) {
+                    this._rows.forEach(function (r) {
+                        dayTotal += parseFloat(r.entries[dateStr] || 0);
+                    });
+                    dayTotal   = parseFloat(dayTotal.toFixed(2));
+                    weekTotal += dayTotal;
+                }
+                tbody += '<td style="padding:8px 6px;text-align:center;'
+                       + 'border-right:1px solid #e5e5e5;color:'
+                       + (dayTotal > 8 ? "#bb0000" : "#32363a") + ';" id="'
+                       + vid + '--dayTotal_' + idx + '">'
+                       + (isSun ? '\u2014' : dayTotal) + '</td>';
+            }.bind(this));
+
+            tbody += '<td style="padding:8px 8px;text-align:center;color:#32363a;" id="'
+                   + vid + '--weekTotal">'
+                   + parseFloat(weekTotal.toFixed(2)) + '</td>';
+            tbody += '</tr></tbody>';
+
+            // ── Assemble complete HTML ────────────────────────────────────
+            const completeHtml =
+                '<div style="width:100%;overflow-x:auto;border-radius:6px;'
+              + 'box-shadow:0 1px 4px rgba(0,0,0,0.1);">'
+              + '<table style="width:100%;border-collapse:collapse;'
+              + 'border:1px solid #d9d9d9;font-family:inherit;font-size:0.875rem;">'
+              + thead + tbody
+              + '</table></div>';
+
+            // ── HTML control with afterRendering injection guard ───────────
+            const self     = this;
+            const injected = { done: false };
+
+            const htmlControl = new HTML(tableId, {
+                content:        completeHtml,
+                afterRendering: function () {
+                    if (injected.done) return;
+                    injected.done = true;
+                    self._injectSAPControls(weekDays, canEdit, today, isView);
+                }
             });
 
-            const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+            rowsContainer.addItem(htmlControl);
+        },
 
-// Step 1 — UPSERT header: try POST, fall back to PATCH if already exists
-const headerBody = {
-    timesheetId:         sTimesheetId,
-    employee_employeeId: sEmpId,
-    weekStartDate:       sWeekStart,
-    weekEndDate:         sWeekEnd,
-    status:              "Draft",
-    submissionType:      "Weekly",
-    isAutoApproved:      false
-};
+        // ── Inject SAP Select + Input into rendered HTML table spans ──────────
+        _injectSAPControls: function (weekDays, canEdit, today, isView) {
+            const vid        = this.getView().getId();
+            const yesterday  = this._getYesterday();
+            const twoDaysAgo = this._getTwoDaysAgo();
 
-return fetch("/employee/MyTimesheets", {
-    method: "POST", headers,
-    body: JSON.stringify(headerBody)
-})
-.then(r => {
-    // 201 = created, fine
-    if (r.ok) return;
-    // 409 (HANA) or 500 with PK error (SQLite) = already exists, PATCH it
-    if (r.status === 409 || r.status === 500) {
-        return fetch(`/employee/MyTimesheets('${sTimesheetId}')`, {
-            method: "PATCH", headers,
-            body: JSON.stringify({ status: "Draft" })
-        }).then(pr => {
-            if (!pr.ok) {
-                return pr.text().then(t =>
-                    Promise.reject(new Error(`Header PATCH failed ${pr.status}: ${t}`))
-                );
-            }
-        });
-    }
-    return r.text().then(t =>
-        Promise.reject(new Error(`Header POST failed ${r.status}: ${t}`))
-    );
-})
+            this._rows.forEach(function (row, rowIdx) {
 
-                // Step 2 — Get existing entries to delete
-                .then(() => fetch(
-                    `/employee/MyEntries?$filter=timesheet_timesheetId eq '${sTimesheetId}'&$select=entryId`,
-                    { headers: { "Accept": "application/json" } }
-                ))
-                .then(r => r.ok ? r.json() : { value: [] })
+                // ── Task Select ───────────────────────────────────────────
+                const taskSpan = document.getElementById(vid + "--taskCell_" + rowIdx);
+                if (taskSpan) {
+                    const sel = new Select({
+                        width:       "100%",
+                        selectedKey: row.taskId || "",
+                        enabled:     !!canEdit,
+                        change: function (evt) {
+                            this._rows[rowIdx].taskId   = evt.getParameter("selectedItem").getKey();
+                            this._rows[rowIdx].taskName = evt.getParameter("selectedItem").getText();
+                            this._recalcTotals(weekDays);
+                        }.bind(this)
+                    });
+                    sel.addItem(new Item({ key: "", text: "-- Select Task --" }));
+                    this._tasks.forEach(function (t) {
+                        sel.addItem(new Item({ key: t.taskId, text: t.taskName }));
+                    });
+                    sel.placeAt(taskSpan);
+                    this._injectedControls.push(sel);
+                }
 
-                // Step 3 — Delete existing entries sequentially
-                .then(data => {
-                    const existing = data.value || [];
-                    return existing.reduce((chain, e) =>
-                        chain.then(() =>
-                            fetch(`/employee/MyEntries('${e.entryId}')`, { method: "DELETE" })
-                                .catch(() => { }) // ignore individual delete errors
-                        ),
-                        Promise.resolve()
+                // ── Hour Inputs ───────────────────────────────────────────
+                weekDays.forEach(function (dateStr, dayIdx) {
+                    if (dayIdx === 6) return; // Sunday — no input
+
+                    const span = document.getElementById(
+                        vid + "--inputCell_" + rowIdx + "_" + dayIdx
                     );
-                })
+                    if (!span) return;
 
-                // Step 4 — Insert new entries sequentially to avoid PK conflicts
-                .then(() => entries.reduce((chain, entry) =>
-                    chain.then(() =>
-                        fetch("/employee/MyEntries", {
-                            method: "POST", headers,
-                            body: JSON.stringify(entry)
-                        }).then(r => {
-                            if (!r.ok) {
-                                return r.text().then(t =>
-                                    Promise.reject(new Error(`Entry POST failed ${r.status}: ${t}`))
-                                );
+                    const isLocked = row.locked[dateStr] === true;
+                    let   editable = false;
+
+                    if (canEdit) {
+                        if (isView) {
+                            // Viewing prev week — all days editable
+                            editable = true;
+                        } else {
+                            // Current week: today, yesterday, 2 days ago
+                            editable = (dateStr === today ||
+                                        dateStr === yesterday ||
+                                        dateStr === twoDaysAgo);
+                            // Also editable if HR approved unlock
+                            const ur = this._dayUnlockReqs[dateStr];
+                            if (ur && ur.status === "Approved") editable = true;
+                        }
+                    }
+                    if (isLocked) editable = false;
+
+                    const existingVal = row.entries[dateStr];
+                    const inp = new Input({
+                        value:       existingVal != null ? String(existingVal) : "",
+                        editable:    !!editable,
+                        width:       "100%",
+                        type:        "Number",
+                        placeholder: editable ? "0" : "",
+                        liveChange:  function (evt) {
+                            const val = parseFloat(evt.getParameter("newValue")) || 0;
+                            if (val < 0 || val > 24) {
+                                evt.getSource().setValueState("Error");
+                                evt.getSource().setValueStateText("Enter a value between 0 and 24");
+                                return;
                             }
-                        })
-                    ),
-                    Promise.resolve()
-                ))
+                            evt.getSource().setValueState("None");
+                            if (!this._rows[rowIdx].entries) this._rows[rowIdx].entries = {};
+                            this._rows[rowIdx].entries[dateStr] = val;
+                            this._recalcTotals(weekDays);
 
-                .then(() => sTimesheetId);
+                            // Update canSubmit
+                            const vm2 = this.getView().getModel("viewModel");
+                            const has = this._rows.some(function (r) {
+                                return r.taskId &&
+                                    Object.values(r.entries).some(function (h) { return h > 0; });
+                            });
+                            vm2.setProperty("/canSubmit", !!has);
+                        }.bind(this)
+                    });
+                    inp.placeAt(span);
+                    this._injectedControls.push(inp);
+                }.bind(this));
+
+            }.bind(this));
         },
 
-        onHoursChange(oEvent) {
-            const oInput = oEvent.getSource();
-            const sRaw = oEvent.getParameter("value").trim();
-            const sDayKey = oInput.data("day");
-            const oContext = oInput.getBindingContext("rows");
-            if (!oContext) return;
+        // ── Update totals by writing directly to DOM cells ────────────────────
+        _recalcTotals: function (weekDays) {
+            const wd  = weekDays || this._getWeekDays();
+            const vid = this.getView().getId();
+            let weekTotal = 0;
 
-            const decimal = this._parseHHMM(sRaw);
-            const sFormatted = decimal > 0 ? this._toHHMM(decimal) : "";
+            wd.forEach(function (dateStr, idx) {
+                if (idx === 6) return;
+                let dayTotal = 0;
+                this._rows.forEach(function (r) {
+                    dayTotal += parseFloat(r.entries[dateStr] || 0);
+                });
+                dayTotal   = parseFloat(dayTotal.toFixed(2));
+                weekTotal += dayTotal;
 
-            this._oRowsModel.setProperty(oContext.getPath() + "/" + sDayKey, sFormatted);
-            oInput.setValue(sFormatted);
-            this._refreshTotals(this._oRowsModel.getProperty("/rows"));
+                const dc = document.getElementById(vid + "--dayTotal_" + idx);
+                if (dc) {
+                    dc.textContent = dayTotal;
+                    dc.style.color = dayTotal > 8 ? "#bb0000" : "#32363a";
+                }
+            }.bind(this));
+
+            // Row totals
+            this._rows.forEach(function (row, rowIdx) {
+                const rt   = this._calcRowTotal(row, wd);
+                const rtEl = document.getElementById(vid + "--rowTotal_" + rowIdx);
+                if (rtEl) rtEl.textContent = rt;
+            }.bind(this));
+
+            // Week total
+            const wt = document.getElementById(vid + "--weekTotal");
+            if (wt) wt.textContent = parseFloat(weekTotal.toFixed(2));
         },
 
-        _refreshTotals(rows) {
-            const colDec = { mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, sat: 0, sun: 0 };
-            rows.forEach(row => DAYS.forEach(d => { colDec[d] += this._parseHHMM(row[d]); }));
+        // Compat aliases
+        _updateTotals: function (wd) { this._recalcTotals(wd); },
+        _renderTotals: function (wd) { this._recalcTotals(wd); },
 
-            const grand = DAYS.reduce((s, d) => s + colDec[d], 0);
-            const totals = {};
-            DAYS.forEach(d => { totals[d] = this._toHHMM(colDec[d]); });
-            totals.total = this._toHHMM(grand);
-
-            this._oViewModel.setProperty("/colTotals", totals);
-            this._oViewModel.setProperty("/grandTotal", this._toHHMM(grand));
-
-            const canSubmit = ["mon", "tue", "wed", "thu", "fri"].every(d => colDec[d] > 0);
-            this._oViewModel.setProperty("/canSubmit", canSubmit);
+        _calcRowTotal: function (row, weekDays) {
+            let total = 0;
+            weekDays.forEach(function (d) { total += parseFloat(row.entries[d] || 0); });
+            return parseFloat(total.toFixed(2));
         },
 
-        _updateRowCount() {
-            const n = this._oRowsModel.getProperty("/rows").length;
-            this._oViewModel.setProperty("/rowCount", Math.max(n, 1));
+        // ══════════════════════════════════════════════════════════════════════
+        // ADD ROW
+        // Appends directly to existing table DOM — does NOT call _renderGrid
+        // (calling _renderGrid would trigger afterRendering again → duplicate rows)
+        // ══════════════════════════════════════════════════════════════════════
+        onAddRow: function () {
+            const rowIdx     = this._rows.length;
+            const weekDays   = this._getWeekDays();
+            const vm         = this.getView().getModel("viewModel");
+            const canEdit    = vm.getProperty("/canEdit");
+            const today      = this._toISODate(new Date());
+            const yesterday  = this._getYesterday();
+            const twoDaysAgo = this._getTwoDaysAgo();
+            const isView     = vm.getProperty("/isViewingPrevWeek");
+            const vid        = this.getView().getId();
+
+            // Add empty row to data model
+            this._rows.push({ taskId: null, taskName: null, entries: {}, locked: {} });
+
+            // Find tbody of existing table
+            const rowsContainerDom = this.byId("timesheetRowsContainer").getDomRef();
+            if (!rowsContainerDom) return;
+            const tbody    = rowsContainerDom.querySelector("tbody");
+            if (!tbody)    return;
+            const totalRow = tbody.querySelector("tr:last-child"); // daily totals row
+
+            // Build new <tr>
+            const tr = document.createElement("tr");
+            tr.style.borderBottom = "1px solid #e5e5e5";
+
+            // Task cell
+            const taskTd   = document.createElement("td");
+            taskTd.style.cssText =
+                "padding:6px 8px;border-right:1px solid #e5e5e5;vertical-align:middle;min-width:220px;";
+            const taskSpan = document.createElement("span");
+            taskSpan.id    = vid + "--taskCell_" + rowIdx;
+            taskTd.appendChild(taskSpan);
+            tr.appendChild(taskTd);
+
+            // Day cells
+            weekDays.forEach(function (dateStr, dayIdx) {
+                const isSun     = dayIdx === 6;
+                const isToday   = dateStr === today    && !isView;
+                const isYest    = dateStr === yesterday  && !isView;
+                const isTwoDays = dateStr === twoDaysAgo && !isView;
+                const bg = isToday   ? "#dbeeff"
+                         : (isYest || isTwoDays) ? "#f0faf0"
+                         : isSun     ? "#f5f5f5"
+                         : "transparent";
+
+                const td = document.createElement("td");
+                td.style.cssText =
+                    "padding:4px 6px;text-align:center;background:" + bg +
+                    ";border-right:1px solid #e5e5e5;vertical-align:middle;";
+
+                if (isSun) {
+                    td.innerHTML = '<span style="color:#bbb;font-size:1rem;">\u2014</span>';
+                } else {
+                    const span = document.createElement("span");
+                    span.id    = vid + "--inputCell_" + rowIdx + "_" + dayIdx;
+                    td.appendChild(span);
+                }
+                tr.appendChild(td);
+            }.bind(this));
+
+            // Row total cell
+            const totalTd         = document.createElement("td");
+            totalTd.style.cssText =
+                "padding:6px 8px;text-align:center;font-weight:600;vertical-align:middle;color:#32363a;";
+            totalTd.id            = vid + "--rowTotal_" + rowIdx;
+            totalTd.textContent   = "0";
+            tr.appendChild(totalTd);
+
+            // Insert before the daily totals row
+            tbody.insertBefore(tr, totalRow);
+
+            // ── Inject SAP Select for new row ─────────────────────────────
+            const taskSpanEl = document.getElementById(vid + "--taskCell_" + rowIdx);
+            if (taskSpanEl) {
+                const sel = new Select({
+                    width:       "100%",
+                    selectedKey: "",
+                    enabled:     !!canEdit,
+                    change: function (evt) {
+                        this._rows[rowIdx].taskId   = evt.getParameter("selectedItem").getKey();
+                        this._rows[rowIdx].taskName = evt.getParameter("selectedItem").getText();
+                        this._recalcTotals(weekDays);
+                    }.bind(this)
+                });
+                sel.addItem(new Item({ key: "", text: "-- Select Task --" }));
+                this._tasks.forEach(function (t) {
+                    sel.addItem(new Item({ key: t.taskId, text: t.taskName }));
+                }.bind(this));
+                sel.placeAt(taskSpanEl);
+                this._injectedControls.push(sel);
+            }
+
+            // ── Inject SAP Inputs for new row ─────────────────────────────
+            weekDays.forEach(function (dateStr, dayIdx) {
+                if (dayIdx === 6) return;
+                const span = document.getElementById(
+                    vid + "--inputCell_" + rowIdx + "_" + dayIdx
+                );
+                if (!span) return;
+
+                let editable = false;
+                if (canEdit) {
+                    editable = isView ? true
+                             : (dateStr === today ||
+                                dateStr === yesterday ||
+                                dateStr === twoDaysAgo);
+                    const ur = this._dayUnlockReqs[dateStr];
+                    if (ur && ur.status === "Approved") editable = true;
+                }
+
+                const inp = new Input({
+                    value:       "",
+                    editable:    !!editable,
+                    width:       "100%",
+                    type:        "Number",
+                    placeholder: editable ? "0" : "",
+                    liveChange: function (evt) {
+                        const val = parseFloat(evt.getParameter("newValue")) || 0;
+                        if (val < 0 || val > 24) {
+                            evt.getSource().setValueState("Error");
+                            evt.getSource().setValueStateText("Enter a value between 0 and 24");
+                            return;
+                        }
+                        evt.getSource().setValueState("None");
+                        if (!this._rows[rowIdx].entries) this._rows[rowIdx].entries = {};
+                        this._rows[rowIdx].entries[dateStr] = val;
+                        this._recalcTotals(weekDays);
+                        const vm2 = this.getView().getModel("viewModel");
+                        const has = this._rows.some(function (r) {
+                            return r.taskId &&
+                                Object.values(r.entries).some(function (h) { return h > 0; });
+                        });
+                        vm2.setProperty("/canSubmit", !!has);
+                    }.bind(this)
+                });
+                inp.placeAt(span);
+                this._injectedControls.push(inp);
+            }.bind(this));
         },
 
-        formatNotLocked(bLocked) { return bLocked !== true; },
-        formatDayEnabled(bLocked, bFuture) { return bLocked !== true && bFuture !== true; },
+        // ══════════════════════════════════════════════════════════════════════
+        // MISSED-DAY ACTIONS
+        // Shows HR unlock buttons for days older than 2 days within current week
+        // Yesterday and 2 days ago are directly editable — no HR needed
+        // ══════════════════════════════════════════════════════════════════════
+        _renderMissedDayActions: function () {
+            const container = this._clearContainer("missedDayActionsContainer");
+            if (!container) return;
 
-        formatRowTotal(...args) {
-            const total = args.reduce((s, v) => s + this._parseHHMM(v), 0);
-            return this._toHHMM(total);
-        },
+            const vm = this.getView().getModel("viewModel");
+            if (vm.getProperty("/isViewingPrevWeek")) return;
 
-        formatValueState(sValue) { return sValue && sValue !== "" ? "Success" : "None"; },
+            const today      = this._toISODate(new Date());
+            const yesterday  = this._getYesterday();
+            const twoDaysAgo = this._getTwoDaysAgo();
+            const weekDays   = this._getWeekDays();
+            let   hasMissed  = false;
 
-        onViewToggle(oEvent) {
-            if (oEvent.getParameter("item").getKey() === "day") {
-                MessageToast.show("Day view – coming soon.");
+            weekDays.forEach(function (dateStr, idx) {
+                if (idx === 6)        return; // skip Sunday (holiday)
+                if (dateStr >= today) return; // skip today and future days
+
+                // Yesterday and 2 days ago are directly editable — skip
+                if (dateStr === yesterday || dateStr === twoDaysAgo) return;
+
+                // Check if this day has any hours filled
+                const dayTotal = this._rows.reduce(function (sum, r) {
+                    return sum + parseFloat(r.entries[dateStr] || 0);
+                }, 0);
+                if (dayTotal > 0) return; // already filled
+
+                const req = this._dayUnlockReqs[dateStr];
+                let buttonEnabled, buttonText, buttonType;
+                let statusText = null;
+
+                if (!req) {
+                    // No request yet — show request button
+                    buttonEnabled = true;
+                    buttonText    = "Request HR Approval \u2014 " +
+                                   DAY_LABELS[idx] + ", " +
+                                   this._formatDisplayDate(dateStr);
+                    buttonType    = "Attention";
+                } else if (req.status === "Pending") {
+                    buttonEnabled = false;
+                    buttonText    = "Request Sent \u2014 " + this._formatDisplayDate(dateStr);
+                    buttonType    = "Default";
+                    statusText    = "HR Approval Pending for " + this._formatDisplayDate(dateStr);
+                } else if (req.status === "Approved") {
+                    return; // cell is now editable directly
+                } else if (req.status === "Rejected") {
+                    buttonEnabled = true;
+                    buttonText    = "Re-request HR Approval \u2014 " +
+                                   DAY_LABELS[idx] + ", " +
+                                   this._formatDisplayDate(dateStr);
+                    buttonType    = "Negative";
+                    statusText    = "HR request rejected for " + this._formatDisplayDate(dateStr);
+                } else {
+                    return;
+                }
+
+                hasMissed = true;
+
+                const rowBox = new HBox({ alignItems: "Center" });
+                rowBox.addStyleClass("sapUiSmallMarginBottom");
+
+                if (statusText) {
+                    const os = new ObjectStatus({
+                        text:  statusText,
+                        state: (req && req.status === "Rejected") ? "Error" : "Warning"
+                    });
+                    os.addStyleClass("sapUiSmallMarginEnd");
+                    rowBox.addItem(os);
+                }
+
+                const btn = new Button({
+                    text:    buttonText,
+                    type:    buttonType,
+                    icon:    "sap-icon://approvals",
+                    enabled: !!buttonEnabled,
+                    press:   (function (d) {
+                        return function () { this._openHRUnlockDialog(d); }.bind(this);
+                    }.bind(this))(dateStr)
+                });
+                rowBox.addItem(btn);
+                container.addItem(rowBox);
+            }.bind(this));
+
+            if (hasMissed) {
+                const lbl = new Label({
+                    text:   "\u26A0\uFE0F Missed Days \u2014 HR Approval Required",
+                    design: "Bold"
+                });
+                lbl.addStyleClass("sapUiSmallMarginTop sapUiSmallMarginBottom");
+                container.insertItem(lbl, 0);
             }
         },
 
-        _parseHHMM(s) {
-            if (!s || s === "") return 0;
-            if (String(s).includes(":")) {
-                const [h, m] = String(s).split(":");
-                return (parseInt(h) || 0) + (parseInt(m) || 0) / 60;
+        // ══════════════════════════════════════════════════════════════════════
+        // HR UNLOCK DIALOG
+        // ══════════════════════════════════════════════════════════════════════
+        _openHRUnlockDialog: async function (dateStr) {
+            this._hrUnlockTargetDate = dateStr;
+
+            const hrModel = this.getView().getModel("hrUnlockModel");
+            hrModel.setProperty("/targetDate",      dateStr);
+            hrModel.setProperty("/selectedHrId",    "");
+            hrModel.setProperty("/employeeRemarks", "");
+
+            // Load HR list on first open
+            const hrListModel = this.getView().getModel("hrListModel");
+            if (!hrListModel.getProperty("/hrEmployees").length) {
+                await this._loadHREmployees();
             }
-            return parseFloat(s) || 0;
+
+            this.byId("hrUnlockDialog").open();
         },
 
-        _toHHMM(decimal) {
-            const h = Math.floor(decimal);
-            const m = Math.round((decimal - h) * 60);
-            return `${h}:${String(m).padStart(2, "0")}`;
+        _loadHREmployees: async function () {
+            try {
+                const resp = await fetch(
+                    BASE_URL +
+                    "/Employees?$filter=designation eq 'HR' or department eq 'HR'&$format=json"
+                );
+                const data = await resp.json();
+                this.getView().getModel("hrListModel").setProperty(
+                    "/hrEmployees",
+                    (data.value || []).map(function (e) {
+                        return {
+                            employeeId:   e.employeeId,
+                            employeeName: e.employeeName,
+                            designation:  e.designation,
+                            department:   e.department
+                        };
+                    })
+                );
+            } catch (e) {
+                MessageBox.error("Could not load HR list: " + (e.message || e));
+            }
         },
 
-        onNavToDashboard() {
-            this.getOwnerComponent().getRouter().navTo("dashboard");
+        onSubmitHRUnlockRequest: async function () {
+            const hrId    = this.byId("hrApproverSelect").getSelectedKey();
+            const hrModel = this.getView().getModel("hrUnlockModel");
+
+            if (!hrId) {
+                MessageBox.warning("Please select an HR approver.");
+                return;
+            }
+
+            try {
+                this.getView().setBusy(true);
+                await this._callAction(BASE_URL + "/requestDayUnlock", {
+                    targetDate:      this._hrUnlockTargetDate,
+                    hrApproverId:    hrId,
+                    employeeRemarks: hrModel.getProperty("/employeeRemarks")
+                });
+                MessageToast.show("HR unlock request sent successfully!");
+                this.byId("hrUnlockDialog").close();
+                await this._loadTimesheetData();
+            } catch (e) {
+                MessageBox.error("Failed to send HR unlock request: " + (e.message || e));
+            } finally {
+                this.getView().setBusy(false);
+            }
+        },
+
+        onCloseHRUnlockDialog: function () {
+            this.byId("hrUnlockDialog").close();
+        },
+
+        // ══════════════════════════════════════════════════════════════════════
+        // PREVIOUS WEEK DIALOG
+        // ══════════════════════════════════════════════════════════════════════
+        onRequestPrevWeekFill: async function () {
+            const prevModel = this.getView().getModel("prevWeekModel");
+
+            prevModel.setProperty("/weekRangeLabel",
+                this._formatDisplayDate(this._prevWeekStartDate) +
+                " \u2013 " +
+                this._formatDisplayDate(this._prevWeekEndDate));
+            prevModel.setProperty("/employeeRemarks", "");
+            prevModel.setProperty("/infoText",
+                "This will send an approval request to your manager. " +
+                "You can fill the previous week timesheet only after manager approval.");
+
+            // Resolve manager name
+            let managerName = "(Unknown Manager)";
+            if (this._currentEmployee && this._currentEmployee.managerId) {
+                try {
+                    const r = await fetch(
+                        BASE_URL + "/Employees('" +
+                        this._currentEmployee.managerId + "')?$format=json"
+                    );
+                    const d = await r.json();
+                    managerName = d.employeeName || managerName;
+                } catch (_) { /* non-critical */ }
+            }
+            prevModel.setProperty("/managerName", managerName);
+
+            this.byId("prevWeekDialog").open();
+        },
+
+        onConfirmPrevWeekRequest: async function () {
+            const remarks = this.getView().getModel("prevWeekModel")
+                .getProperty("/employeeRemarks");
+            try {
+                this.getView().setBusy(true);
+                await this._callAction(BASE_URL + "/requestPrevWeekFill", {
+                    weekStartDate:   this._prevWeekStartDate,
+                    weekEndDate:     this._prevWeekEndDate,
+                    employeeRemarks: remarks
+                });
+                MessageToast.show("Approval request sent to your manager!");
+                this.byId("prevWeekDialog").close();
+                await this._loadTimesheetData();
+            } catch (e) {
+                MessageBox.error("Failed to send request: " + (e.message || e));
+            } finally {
+                this.getView().setBusy(false);
+            }
+        },
+
+        onClosePrevWeekDialog: function () {
+            this.byId("prevWeekDialog").close();
+        },
+
+        // ══════════════════════════════════════════════════════════════════════
+        // WEEK NAVIGATION
+        // ══════════════════════════════════════════════════════════════════════
+        onSwitchToPrevWeek: function () {
+            const vm = this.getView().getModel("viewModel");
+            vm.setProperty("/isViewingPrevWeek", true);
+            this._weekStartDate = this._prevWeekStartDate;
+            this._weekEndDate   = this._prevWeekEndDate;
+            vm.setProperty("/weekRangeLabel",
+                this._formatDisplayDate(this._weekStartDate) +
+                " \u2013 " +
+                this._formatDisplayDate(this._weekEndDate) +
+                " (Previous Week)");
+            this._loadTimesheetData();
+        },
+
+        onSwitchToCurrentWeek: function () {
+            const vm = this.getView().getModel("viewModel");
+            vm.setProperty("/isViewingPrevWeek", false);
+            this._computeWeekDates(new Date());
+            this._loadTimesheetData();
+        },
+
+        // ══════════════════════════════════════════════════════════════════════
+        // SAVE
+        // ══════════════════════════════════════════════════════════════════════
+        onSaveEntries: async function () {
+            const vm = this.getView().getModel("viewModel");
+
+            if (!vm.getProperty("/canEdit")) {
+                MessageToast.show("Timesheet is locked and cannot be edited.");
+                return;
+            }
+
+            const validEntries = this._collectValidEntries();
+            if (!validEntries.length) {
+                MessageBox.warning(
+                    "Please select a task and fill at least one day with hours before saving."
+                );
+                return;
+            }
+
+            try {
+                this.getView().setBusy(true);
+                const result = await this._callAction(
+                    BASE_URL + "/saveTimesheetEntries", {
+                        timesheetId:   this._timesheetId,
+                        weekStartDate: this._weekStartDate,
+                        weekEndDate:   this._weekEndDate,
+                        isPrevWeek:    !!vm.getProperty("/isViewingPrevWeek"),
+                        entries:       JSON.stringify(validEntries)
+                    }
+                );
+                this._timesheetId = result.timesheetId;
+                MessageToast.show("Saved " + result.saved + " entr" +
+                    (result.saved === 1 ? "y" : "ies") + " successfully.");
+                this._updateDashboardCharts();
+                await this._loadTimesheetData();
+            } catch (e) {
+                MessageBox.error("Save failed: " + (e.message || e));
+            } finally {
+                this.getView().setBusy(false);
+            }
+        },
+
+        // ══════════════════════════════════════════════════════════════════════
+        // SUBMIT — only allowed on Friday or Saturday
+        // ══════════════════════════════════════════════════════════════════════
+        onSubmitTimesheet: function () {
+            const vm            = this.getView().getModel("viewModel");
+            const isViewingPrev = vm.getProperty("/isViewingPrevWeek");
+
+            // Block submit before Friday for current week
+            if (!isViewingPrev) {
+                const dayOfWeek = new Date().getDay(); // 0=Sun ... 5=Fri ... 6=Sat
+                if (dayOfWeek < 5) {
+                    const names    = ["Sunday","Monday","Tuesday","Wednesday",
+                                      "Thursday","Friday","Saturday"];
+                    const daysLeft = 5 - dayOfWeek;
+                    MessageBox.warning(
+                        "You can only submit the weekly timesheet on Friday or later.\n\n" +
+                        "Today is " + names[dayOfWeek] + " \u2014 " +
+                        daysLeft + " day" + (daysLeft > 1 ? "s" : "") + " until Friday."
+                    );
+                    return;
+                }
+            }
+
+            const validEntries = this._collectValidEntries();
+            if (!validEntries.length) {
+                MessageBox.warning(
+                    "Please select a task and fill at least one day with hours before submitting."
+                );
+                return;
+            }
+
+            const confirmMsg = isViewingPrev
+                ? "This will save and finalise the previous week timesheet " +
+                  "(no further approval needed). Proceed?"
+                : "This will submit your timesheet to your manager for approval. Proceed?";
+
+            MessageBox.confirm(confirmMsg, {
+                actions:          [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                emphasizedAction: MessageBox.Action.OK,
+                onClose: async function (action) {
+                    if (action !== MessageBox.Action.OK) return;
+                    try {
+                        this.getView().setBusy(true);
+
+                        // Save first, then submit
+                        await this._callAction(BASE_URL + "/saveTimesheetEntries", {
+                            timesheetId:   this._timesheetId,
+                            weekStartDate: this._weekStartDate,
+                            weekEndDate:   this._weekEndDate,
+                            isPrevWeek:    !!isViewingPrev,
+                            entries:       JSON.stringify(validEntries)
+                        });
+
+                        const msg = await this._callAction(
+                            BASE_URL + "/submitTimesheetWeek", {
+                                timesheetId: this._timesheetId,
+                                isPrevWeek:  !!isViewingPrev
+                            }
+                        );
+
+                        MessageBox.success(
+                            typeof msg === "string"
+                                ? msg
+                                : "Timesheet submitted successfully!",
+                            {
+                                onClose: function () {
+                                    this._loadTimesheetData();
+                                }.bind(this)
+                            }
+                        );
+                        this._updateDashboardCharts();
+
+                    } catch (e) {
+                        MessageBox.error("Submit failed: " + (e.message || e));
+                    } finally {
+                        this.getView().setBusy(false);
+                    }
+                }.bind(this)
+            });
+        },
+
+        // ── Notify dashboard via event bus ────────────────────────────────────
+        _updateDashboardCharts: function () {
+            try {
+                sap.ui.getCore().getEventBus().publish("Timesheet", "DataChanged", {
+                    timesheetId:   this._timesheetId,
+                    weekStartDate: this._weekStartDate,
+                    weekEndDate:   this._weekEndDate
+                });
+            } catch (e) {
+                console.warn("EventBus publish failed:", e);
+            }
+        },
+
+        // ══════════════════════════════════════════════════════════════════════
+        // HELPERS
+        // ══════════════════════════════════════════════════════════════════════
+        _collectValidEntries: function () {
+            const entries = [];
+            this._rows.forEach(function (row) {
+                if (!row.taskId) return;
+                Object.entries(row.entries).forEach(function (pair) {
+                    const dateStr = pair[0];
+                    const hours   = pair[1];
+                    if (hours > 0) {
+                        entries.push({
+                            taskId:      row.taskId,
+                            workDate:    dateStr,
+                            hoursWorked: hours,
+                            description: ""
+                        });
+                    }
+                });
+            });
+            return entries;
+        },
+
+        _callAction: async function (url, payload) {
+            const resp = await fetch(url, {
+                method:  "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRF-Token": await this._fetchCSRFToken()
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (!resp.ok) {
+                let errMsg = "HTTP " + resp.status;
+                try {
+                    const errData = await resp.json();
+                    errMsg = (errData.error && errData.error.message) || errMsg;
+                } catch (_) { }
+                throw new Error(errMsg);
+            }
+
+            const data = await resp.json();
+            return data.value !== undefined ? data.value : data;
+        },
+
+        _fetchCSRFToken: async function () {
+            if (this._csrfToken) return this._csrfToken;
+            try {
+                const r = await fetch(BASE_URL, {
+                    method:  "GET",
+                    headers: { "X-CSRF-Token": "Fetch" }
+                });
+                this._csrfToken = r.headers.get("x-csrf-token") || "";
+            } catch (_) {
+                this._csrfToken = "";
+            }
+            return this._csrfToken;
         }
     });
 });

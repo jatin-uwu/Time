@@ -15,6 +15,14 @@ const PRIORITY_PREFIX = {
     'Low': '[Low Priority]'
 };
 
+const {
+    registerTimesheetHandlers,
+    registerManagerTimesheetHandlers,
+    registerHRTimesheetHandlers
+} = require('./timesheet-handler');
+
+const { startReminderCron } = require('./reminder-cron');
+
 // Lazy-load nodemailer so the service still works even if it isn't installed.
 let _mailer = null;
 function getMailer() {
@@ -91,7 +99,7 @@ class EmployeeService extends cds.ApplicationService {
             if (email) {
                 emp = await SELECT.one
                     .from(EMPLOYEE)
-                    .where`lower(email) = ${email.toLowerCase()}`;
+                    .where({ email: email });
             }
 
             if (!emp) {
@@ -456,396 +464,396 @@ class EmployeeService extends cds.ApplicationService {
         });
 
 
-    // ── Dashboard: My Leave Overview ───────────────────────────────────────────
-// Returns remaining leave balance + how much has been taken this year.
-// "Taken" is approximated from LeaveBalance initial allotment vs current.
-// Your colleague's leave-request module should decrement LeaveBalance when
-// a leave is approved — this handler just reads what's already stored.
-this.on('getLeaveOverview', async (req) => {
-    const user = req.user || {};
-    const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+        // ── Dashboard: My Leave Overview ───────────────────────────────────────────
+        // Returns remaining leave balance + how much has been taken this year.
+        // "Taken" is approximated from LeaveBalance initial allotment vs current.
+        // Your colleague's leave-request module should decrement LeaveBalance when
+        // a leave is approved — this handler just reads what's already stored.
+        this.on('getLeaveOverview', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
 
-        const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
-        if (!emp) {
-            return {
-                casual: 0, sick: 0, annual: 0, unpaid: 0, totalDays: 0,
-                takenJSON: JSON.stringify([])
-            };
-        }
-
-        const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
-        const balance = await SELECT.one.from(LEAVE_BALANCE)
-            .where({ employee_employeeId: emp.employeeId });
-
-        // Standard annual allotments (adjust to match your HR policy)
-        const ALLOTMENT = { casual: 12, sick: 8, annual: 15, unpaid: 0 };
-
-        const casual = balance ? (balance.casualLeave || 0) : ALLOTMENT.casual;
-        const sick = balance ? (balance.sickLeave || 0) : ALLOTMENT.sick;
-        const annual = balance ? (balance.annualLeave || 0) : ALLOTMENT.annual;
-        const unpaid = 0; // extend LeaveBalance entity if you track unpaid leave
-
-        // "Taken" = allotment minus remaining balance
-        const takenCasual = Math.max(0, ALLOTMENT.casual - casual);
-        const takenSick = Math.max(0, ALLOTMENT.sick - sick);
-        const takenAnnual = Math.max(0, ALLOTMENT.annual - annual);
-
-        const totalDays = casual + sick + annual + unpaid;
-
-        const takenData = [
-            { type: 'casual', label: 'Casual Leave', taken: takenCasual, balance: casual, color: '#16a34a' },
-            { type: 'sick', label: 'Sick Leave', taken: takenSick, balance: sick, color: '#3b82f6' },
-            { type: 'annual', label: 'Annual Leave', taken: takenAnnual, balance: annual, color: '#f59e0b' },
-            { type: 'unpaid', label: 'Unpaid Leave', taken: 0, balance: 0, color: '#9ca3af' }
-        ];
-
-        return { casual, sick, annual, unpaid, totalDays, takenJSON: JSON.stringify(takenData) };
-    });
-
-
-    // ── Dashboard: Work Anniversary ────────────────────────────────
-    // Calculate years completed since joining date for the logged-in employee.
-    this.on('getWorkAnniversary', async (req) => {
-        const user = req.user || {};
-        const email = (user.attr && (user.attr.email || user.attr.mail))
-            || user.id
-            || '';
-
-        const emp = await SELECT.one
-            .from(EMPLOYEE)
-            .columns('employeeId', 'employeeName', 'joiningDate')
-            .where({ email: email });
-
-        if (!emp || !emp.joiningDate) {
-            return {
-                yearsCompleted: 0,
-                joiningDate: null,
-                message: 'No joining date found.'
-            };
-        }
-
-        const joining = new Date(emp.joiningDate);
-        const today = new Date();
-        const years = today.getFullYear() - joining.getFullYear();
-        const months = today.getMonth() - joining.getMonth();
-        const days = today.getDate() - joining.getDate();
-
-        // Calculate exact years with decimal precision
-        let yearsCompleted = years;
-        if (months < 0 || (months === 0 && days < 0)) {
-            yearsCompleted = years - 1;
-        }
-        const totalDays = (today - joining) / (1000 * 60 * 60 * 24);
-        yearsCompleted = Math.max(0, totalDays / 365.25);
-
-        const message = yearsCompleted >= 1
-            ? `Congratulations! You have completed ${Math.floor(yearsCompleted)} years with us.`
-            : `Welcome! You joined on ${joining.toLocaleDateString()}`;
-
-        return {
-            yearsCompleted: parseFloat(yearsCompleted.toFixed(2)),
-            joiningDate: emp.joiningDate,
-            message: message
-        };
-    });
-
-
-    // ── Dashboard: Performance Rating ─────────────────────────────────────────
-    // Fetches the most-recent PerformanceRating row for the logged-in employee.
-    this.on('getPerformanceRating', async (req) => {
-        const user = req.user || {};
-        const email = (user.attr && (user.attr.email || user.attr.mail))
-            || user.id || '';
-
-        const emp = await SELECT.one.from(EMPLOYEE)
-            .columns('employeeId')
-            .where({ email });
-
-        if (!emp) {
-            return {
-                ratingValue: 0,
-                ratingCategory: 'N/A',
-                reviewMonth: 0,
-                reviewYear: 0,
-                reviewComment: ''
-            };
-        }
-
-        const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
-
-        // Get the most recent rating — highest year then month
-        const ratings = await SELECT.from(PERF)
-            .where({ employee_employeeId: emp.employeeId })
-            .orderBy('reviewYear desc', 'reviewMonth desc')
-            .limit(1);
-
-        if (!ratings || ratings.length === 0) {
-            return {
-                ratingValue: 0,
-                ratingCategory: 'N/A',
-                reviewMonth: 0,
-                reviewYear: 0,
-                reviewComment: ''
-            };
-        }
-
-        const r = ratings[0];
-        const val = parseFloat(r.ratingValue) || 0;
-        const category = val >= 4.5 ? 'Excellent'
-            : val >= 3.5 ? 'Good'
-                : val >= 2.5 ? 'Average'
-                    : val > 0 ? 'Needs Improvement'
-                        : 'N/A';
-
-        return {
-            ratingValue: val,
-            ratingCategory: category,
-            reviewMonth: r.reviewMonth || 0,
-            reviewYear: r.reviewYear || 0,
-            reviewComment: r.reviewComment || ''
-        };
-    });
-
-
-
-    // ── Dashboard: Performance Trend ──────────────────────────────────────────
-    // Returns all monthly ratings for the current (or requested) year,
-    // sorted Jan→Dec, so the frontend can draw a line chart.
-    this.on('getPerformanceTrend', async (req) => {
-        const user = req.user || {};
-        const email = (user.attr && (user.attr.email || user.attr.mail))
-            || user.id || '';
-        const year = req.data.year || new Date().getFullYear();
-
-        const emp = await SELECT.one.from(EMPLOYEE)
-            .columns('employeeId')
-            .where({ email });
-
-        if (!emp) {
-            return { trendJSON: JSON.stringify(Array(12).fill(null)) };
-        }
-
-        const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
-
-        const ratings = await SELECT.from(PERF)
-            .where({
-                employee_employeeId: emp.employeeId,
-                reviewYear: year
-            })
-            .orderBy('reviewMonth asc');
-
-        // Build 12-slot array — null for months with no rating
-        const MONTH_NAMES = [
-            'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-        ];
-
-        const slots = Array(12).fill(null);
-        ratings.forEach(r => {
-            const idx = (r.reviewMonth || 1) - 1;
-            if (idx >= 0 && idx < 12) {
-                slots[idx] = parseFloat(r.ratingValue) || null;
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            if (!emp) {
+                return {
+                    casual: 0, sick: 0, annual: 0, unpaid: 0, totalDays: 0,
+                    takenJSON: JSON.stringify([])
+                };
             }
+
+            const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
+            const balance = await SELECT.one.from(LEAVE_BALANCE)
+                .where({ employee_employeeId: emp.employeeId });
+
+            // Standard annual allotments (adjust to match your HR policy)
+            const ALLOTMENT = { casual: 12, sick: 8, annual: 15, unpaid: 0 };
+
+            const casual = balance ? (balance.casualLeave || 0) : ALLOTMENT.casual;
+            const sick = balance ? (balance.sickLeave || 0) : ALLOTMENT.sick;
+            const annual = balance ? (balance.annualLeave || 0) : ALLOTMENT.annual;
+            const unpaid = 0; // extend LeaveBalance entity if you track unpaid leave
+
+            // "Taken" = allotment minus remaining balance
+            const takenCasual = Math.max(0, ALLOTMENT.casual - casual);
+            const takenSick = Math.max(0, ALLOTMENT.sick - sick);
+            const takenAnnual = Math.max(0, ALLOTMENT.annual - annual);
+
+            const totalDays = casual + sick + annual + unpaid;
+
+            const takenData = [
+                { type: 'casual', label: 'Casual Leave', taken: takenCasual, balance: casual, color: '#16a34a' },
+                { type: 'sick', label: 'Sick Leave', taken: takenSick, balance: sick, color: '#3b82f6' },
+                { type: 'annual', label: 'Annual Leave', taken: takenAnnual, balance: annual, color: '#f59e0b' },
+                { type: 'unpaid', label: 'Unpaid Leave', taken: 0, balance: 0, color: '#9ca3af' }
+            ];
+
+            return { casual, sick, annual, unpaid, totalDays, takenJSON: JSON.stringify(takenData) };
         });
 
-        // Return as array directly — controller reads oData directly
-        // Also return as trendJSON string for backward compatibility
-        return {
-            trendJSON: JSON.stringify(slots)
-        };
-    });
 
+        // ── Dashboard: Work Anniversary ────────────────────────────────
+        // Calculate years completed since joining date for the logged-in employee.
+        this.on('getWorkAnniversary', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id
+                || '';
 
-    // ── Dashboard: Task Summary ────────────────────────────────────────────────
-    // Reuses existing TaskMaster entity.  Counts tasks by status for the
-    // logged-in employee.  No duplicate entity or service is created.
-    this.on('getTaskSummary', async (req) => {
-        const user = req.user || {};
-        const email = (user.attr && (user.attr.email || user.attr.mail))
-            || user.id || '';
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .columns('employeeId', 'employeeName', 'joiningDate')
+                .where({ email: email });
 
-        const emp = await SELECT.one
-            .from(EMPLOYEE)
-            .columns('employeeId')
-            .where({ email: email });
-
-        if (!emp) {
-            return { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 };
-        }
-
-        const tasks = await SELECT
-            .from(TASK)
-            .where({ assignedTo_employeeId: emp.employeeId });
-
-        let notStarted = 0, inProgress = 0, inReview = 0, completed = 0;
-
-        (tasks || []).forEach(t => {
-            const s = (t.status || '').toLowerCase().replace(/\s+/g, '');
-            if (s === 'notstarted') notStarted++;
-            else if (s === 'inprogress') inProgress++;
-            else if (s === 'inreview') inReview++;
-            else if (s === 'completed') completed++;
-            // 'closed' intentionally omitted from chart — adjust if needed
-        });
-
-        return {
-            total: notStarted + inProgress + inReview + completed,
-            notStarted: notStarted,
-            inProgress: inProgress,
-            inReview: inReview,
-            completed: completed
-        };
-    });
-
-    // ── Dashboard: Leave Balance ───────────────────────────────────
-    // Get leave balance for the logged-in employee.
-    // Fetches or creates default balance data.
-    this.on('getLeaveBalance', async (req) => {
-        const user = req.user || {};
-        const email = (user.attr && (user.attr.email || user.attr.mail))
-            || user.id
-            || '';
-
-        const emp = await SELECT.one
-            .from(EMPLOYEE)
-            .columns('employeeId')
-            .where({ email: email });
-
-        if (!emp) {
-            return {
-                casualLeave: 0,
-                sickLeave: 0,
-                annualLeave: 0,
-                total: 0
-            };
-        }
-
-        // Try to fetch the balance; if it doesn't exist, return defaults
-        const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
-        const balance = await SELECT.one
-            .from(LEAVE_BALANCE)
-            .where({ employee_employeeId: emp.employeeId });
-
-        if (balance) {
-            const total = (balance.casualLeave || 0) + (balance.sickLeave || 0) + (balance.annualLeave || 0);
-            return {
-                casualLeave: balance.casualLeave || 0,
-                sickLeave: balance.sickLeave || 0,
-                annualLeave: balance.annualLeave || 0,
-                total: total
-            };
-        }
-
-        // Return default values if no balance record exists
-        return {
-            casualLeave: 6,
-            sickLeave: 4,
-            annualLeave: 8,
-            total: 18
-        };
-    });
-
-    // ── Dashboard: My Tasks ────────────────────────────────────────
-    // Get summary of tasks assigned to the logged-in employee.
-    // Returns counts of pending and high-priority tasks.
-    this.on('getMyTasks', async (req) => {
-        const user = req.user || {};
-        const email = (user.attr && (user.attr.email || user.attr.mail))
-            || user.id || '';
-
-        const emp = await SELECT.one
-            .from(EMPLOYEE)
-            .columns('employeeId')
-            .where({ email: email });
-
-        if (!emp) {
-            return {
-                totalPending: 0,
-                highPriorityCount: 0,
-                mediumPriorityCount: 0,
-                lowPriorityCount: 0
-            };
-        }
-
-        const tasks = await SELECT.from(TASK)
-            .where({ assignedTo_employeeId: emp.employeeId });
-
-        let totalPending = 0;
-        let highPriorityCount = 0;
-        let mediumPriorityCount = 0;
-        let lowPriorityCount = 0;
-
-        tasks.forEach(t => {
-            if (t.status && t.status !== 'Completed' && t.status !== 'Closed') {
-                totalPending++;
-                if (t.priority === 'High') highPriorityCount++;
-                else if (t.priority === 'Medium') mediumPriorityCount++;
-                else if (t.priority === 'Low') lowPriorityCount++;
+            if (!emp || !emp.joiningDate) {
+                return {
+                    yearsCompleted: 0,
+                    joiningDate: null,
+                    message: 'No joining date found.'
+                };
             }
+
+            const joining = new Date(emp.joiningDate);
+            const today = new Date();
+            const years = today.getFullYear() - joining.getFullYear();
+            const months = today.getMonth() - joining.getMonth();
+            const days = today.getDate() - joining.getDate();
+
+            // Calculate exact years with decimal precision
+            let yearsCompleted = years;
+            if (months < 0 || (months === 0 && days < 0)) {
+                yearsCompleted = years - 1;
+            }
+            const totalDays = (today - joining) / (1000 * 60 * 60 * 24);
+            yearsCompleted = Math.max(0, totalDays / 365.25);
+
+            const message = yearsCompleted >= 1
+                ? `Congratulations! You have completed ${Math.floor(yearsCompleted)} years with us.`
+                : `Welcome! You joined on ${joining.toLocaleDateString()}`;
+
+            return {
+                yearsCompleted: parseFloat(yearsCompleted.toFixed(2)),
+                joiningDate: emp.joiningDate,
+                message: message
+            };
         });
 
-        return {
-            totalPending,
-            highPriorityCount,
-            mediumPriorityCount,
-            lowPriorityCount
-        };
-    });
 
-    // ── Mark Attendance ───────────────────────────────────────────────────
-    this.on('markAttendance', async (req) => {
-        const { attendanceDate, attendanceDay, attendanceTime } = req.data;
-        const user = req.user || {};
-        const email = (user.attr && (user.attr.email || user.attr.mail))
-            || user.id || '';
+        // ── Dashboard: Performance Rating ─────────────────────────────────────────
+        // Fetches the most-recent PerformanceRating row for the logged-in employee.
+        this.on('getPerformanceRating', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
 
-        if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email });
 
-        const emp = await SELECT.one.from(EMPLOYEE)
-            .columns('employeeId', 'employeeName')
-            .where({ email });
+            if (!emp) {
+                return {
+                    ratingValue: 0,
+                    ratingCategory: 'N/A',
+                    reviewMonth: 0,
+                    reviewYear: 0,
+                    reviewComment: ''
+                };
+            }
 
-        if (!emp) return req.error(404, 'Employee not found for this login.');
+            const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
 
-        // Prevent duplicate marking for the same day
-        const existing = await SELECT.one.from(ATTENDANCE)
-            .where({
-                employee_employeeId: emp.employeeId,
-                attendanceDate: attendanceDate
+            // Get the most recent rating — highest year then month
+            const ratings = await SELECT.from(PERF)
+                .where({ employee_employeeId: emp.employeeId })
+                .orderBy('reviewYear desc', 'reviewMonth desc')
+                .limit(1);
+
+            if (!ratings || ratings.length === 0) {
+                return {
+                    ratingValue: 0,
+                    ratingCategory: 'N/A',
+                    reviewMonth: 0,
+                    reviewYear: 0,
+                    reviewComment: ''
+                };
+            }
+
+            const r = ratings[0];
+            const val = parseFloat(r.ratingValue) || 0;
+            const category = val >= 4.5 ? 'Excellent'
+                : val >= 3.5 ? 'Good'
+                    : val >= 2.5 ? 'Average'
+                        : val > 0 ? 'Needs Improvement'
+                            : 'N/A';
+
+            return {
+                ratingValue: val,
+                ratingCategory: category,
+                reviewMonth: r.reviewMonth || 0,
+                reviewYear: r.reviewYear || 0,
+                reviewComment: r.reviewComment || ''
+            };
+        });
+
+
+
+        // ── Dashboard: Performance Trend ──────────────────────────────────────────
+        // Returns all monthly ratings for the current (or requested) year,
+        // sorted Jan→Dec, so the frontend can draw a line chart.
+        this.on('getPerformanceTrend', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+            const year = req.data.year || new Date().getFullYear();
+
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email });
+
+            if (!emp) {
+                return { trendJSON: JSON.stringify(Array(12).fill(null)) };
+            }
+
+            const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
+
+            const ratings = await SELECT.from(PERF)
+                .where({
+                    employee_employeeId: emp.employeeId,
+                    reviewYear: year
+                })
+                .orderBy('reviewMonth asc');
+
+            // Build 12-slot array — null for months with no rating
+            const MONTH_NAMES = [
+                'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+            ];
+
+            const slots = Array(12).fill(null);
+            ratings.forEach(r => {
+                const idx = (r.reviewMonth || 1) - 1;
+                if (idx >= 0 && idx < 12) {
+                    slots[idx] = parseFloat(r.ratingValue) || null;
+                }
             });
 
-        if (existing) {
-            return req.error(409,
-                `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`
-            );
-        }
-
-        const attendanceId = `${emp.employeeId}-${attendanceDate}`;
-
-        await INSERT.into(ATTENDANCE).entries({
-            attendanceId,
-            employee_employeeId: emp.employeeId,
-            attendanceDate,
-            attendanceDay: attendanceDay || '',
-            attendanceTime: attendanceTime || new Date().toTimeString().split(' ')[0],
-            status: 'Present'
+            // Return as array directly — controller reads oData directly
+            // Also return as trendJSON string for backward compatibility
+            return {
+                trendJSON: JSON.stringify(slots)
+            };
         });
 
-        cds.log('attend').info(
-            `Attendance marked: ${emp.employeeId} (${emp.employeeName}) ` +
-            `on ${attendanceDate} at ${attendanceTime}`
-        );
 
-        return {
-            attendanceId,
-            employeeId: emp.employeeId,
-            employeeName: emp.employeeName,
-            attendanceDate,
-            attendanceDay,
-            attendanceTime,
-            message: `Attendance recorded successfully for ${attendanceDay}, ${attendanceDate}.`
-        };
-    });
+        // ── Dashboard: Task Summary ────────────────────────────────────────────────
+        // Reuses existing TaskMaster entity.  Counts tasks by status for the
+        // logged-in employee.  No duplicate entity or service is created.
+        this.on('getTaskSummary', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email: email });
+
+            if (!emp) {
+                return { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 };
+            }
+
+            const tasks = await SELECT
+                .from(TASK)
+                .where({ assignedTo_employeeId: emp.employeeId });
+
+            let notStarted = 0, inProgress = 0, inReview = 0, completed = 0;
+
+            (tasks || []).forEach(t => {
+                const s = (t.status || '').toLowerCase().replace(/\s+/g, '');
+                if (s === 'notstarted') notStarted++;
+                else if (s === 'inprogress') inProgress++;
+                else if (s === 'inreview') inReview++;
+                else if (s === 'completed') completed++;
+                // 'closed' intentionally omitted from chart — adjust if needed
+            });
+
+            return {
+                total: notStarted + inProgress + inReview + completed,
+                notStarted: notStarted,
+                inProgress: inProgress,
+                inReview: inReview,
+                completed: completed
+            };
+        });
+
+        // ── Dashboard: Leave Balance ───────────────────────────────────
+        // Get leave balance for the logged-in employee.
+        // Fetches or creates default balance data.
+        this.on('getLeaveBalance', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id
+                || '';
+
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email: email });
+
+            if (!emp) {
+                return {
+                    casualLeave: 0,
+                    sickLeave: 0,
+                    annualLeave: 0,
+                    total: 0
+                };
+            }
+
+            // Try to fetch the balance; if it doesn't exist, return defaults
+            const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
+            const balance = await SELECT.one
+                .from(LEAVE_BALANCE)
+                .where({ employee_employeeId: emp.employeeId });
+
+            if (balance) {
+                const total = (balance.casualLeave || 0) + (balance.sickLeave || 0) + (balance.annualLeave || 0);
+                return {
+                    casualLeave: balance.casualLeave || 0,
+                    sickLeave: balance.sickLeave || 0,
+                    annualLeave: balance.annualLeave || 0,
+                    total: total
+                };
+            }
+
+            // Return default values if no balance record exists
+            return {
+                casualLeave: 6,
+                sickLeave: 4,
+                annualLeave: 8,
+                total: 18
+            };
+        });
+
+        // ── Dashboard: My Tasks ────────────────────────────────────────
+        // Get summary of tasks assigned to the logged-in employee.
+        // Returns counts of pending and high-priority tasks.
+        this.on('getMyTasks', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+
+            const emp = await SELECT.one
+                .from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email: email });
+
+            if (!emp) {
+                return {
+                    totalPending: 0,
+                    highPriorityCount: 0,
+                    mediumPriorityCount: 0,
+                    lowPriorityCount: 0
+                };
+            }
+
+            const tasks = await SELECT.from(TASK)
+                .where({ assignedTo_employeeId: emp.employeeId });
+
+            let totalPending = 0;
+            let highPriorityCount = 0;
+            let mediumPriorityCount = 0;
+            let lowPriorityCount = 0;
+
+            tasks.forEach(t => {
+                if (t.status && t.status !== 'Completed' && t.status !== 'Closed') {
+                    totalPending++;
+                    if (t.priority === 'High') highPriorityCount++;
+                    else if (t.priority === 'Medium') mediumPriorityCount++;
+                    else if (t.priority === 'Low') lowPriorityCount++;
+                }
+            });
+
+            return {
+                totalPending,
+                highPriorityCount,
+                mediumPriorityCount,
+                lowPriorityCount
+            };
+        });
+
+        // ── Mark Attendance ───────────────────────────────────────────────────
+        this.on('markAttendance', async (req) => {
+            const { attendanceDate, attendanceDay, attendanceTime } = req.data;
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
+
+            if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
+
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId', 'employeeName')
+                .where({ email });
+
+            if (!emp) return req.error(404, 'Employee not found for this login.');
+
+            // Prevent duplicate marking for the same day
+            const existing = await SELECT.one.from(ATTENDANCE)
+                .where({
+                    employee_employeeId: emp.employeeId,
+                    attendanceDate: attendanceDate
+                });
+
+            if (existing) {
+                return req.error(409,
+                    `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`
+                );
+            }
+
+            const attendanceId = `${emp.employeeId}-${attendanceDate}`;
+
+            await INSERT.into(ATTENDANCE).entries({
+                attendanceId,
+                employee_employeeId: emp.employeeId,
+                attendanceDate,
+                attendanceDay: attendanceDay || '',
+                attendanceTime: attendanceTime || new Date().toTimeString().split(' ')[0],
+                status: 'Present'
+            });
+
+            cds.log('attend').info(
+                `Attendance marked: ${emp.employeeId} (${emp.employeeName}) ` +
+                `on ${attendanceDate} at ${attendanceTime}`
+            );
+
+            return {
+                attendanceId,
+                employeeId: emp.employeeId,
+                employeeName: emp.employeeName,
+                attendanceDate,
+                attendanceDay,
+                attendanceTime,
+                message: `Attendance recorded successfully for ${attendanceDay}, ${attendanceDate}.`
+            };
+        });
 
         // ── Check Today Attendance ────────────────────────────────────────────
         this.on('getAttendance', async (req) => {
@@ -900,457 +908,471 @@ this.on('getLeaveOverview', async (req) => {
             };
         });
 
-    this.on('getTodayAttendance', async (req) => {
-        const { attendanceDate } = req.data;
-        const user = req.user || {};
-        const email = (user.attr && (user.attr.email || user.attr.mail))
-            || user.id || '';
+        this.on('getTodayAttendance', async (req) => {
+            const { attendanceDate } = req.data;
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail))
+                || user.id || '';
 
-        const emp = await SELECT.one.from(EMPLOYEE)
-            .columns('employeeId')
-            .where({ email });
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .columns('employeeId')
+                .where({ email });
 
-        if (!emp) {
-            return { alreadyMarked: false, attendanceTime: null, attendanceDay: null };
-        }
+            if (!emp) {
+                return { alreadyMarked: false, attendanceTime: null, attendanceDay: null };
+            }
 
-        const existing = await SELECT.one.from(ATTENDANCE)
-            .where({
-                employee_employeeId: emp.employeeId,
-                attendanceDate: attendanceDate
-            });
-
-        return {
-            alreadyMarked: !!existing,
-            attendanceTime: existing ? existing.attendanceTime : null,
-            attendanceDay: existing ? existing.attendanceDay : null
-        };
-    });
-
-    return super.init();
-    
-}
-};
-
-class ManagerService extends cds.ApplicationService {
-        async init() {
-
-            this.on('approveTimesheet', async (req) => {
-                const { timesheetId, remarks } = req.data;
-
-                const header = await SELECT.one.from(HEADER).where({ timesheetId });
-                if (!header) {
-                    return req.error(404, `Timesheet '${timesheetId}' not found.`);
-                }
-
-                if (header.status !== 'Pending') {
-                    return req.error(400,
-                        `Cannot approve — current status is '${header.status}'. ` +
-                        `Only 'Pending' timesheets can be approved.`
-                    );
-                }
-
-                await UPDATE(HEADER)
-                    .set({ status: 'Approved', approvedOn: new Date(), remarks: remarks || '' })
-                    .where({ timesheetId });
-
-                // Auto-notify employee
-                const hdr = await SELECT.one.from(HEADER).columns('employee_employeeId').where({ timesheetId });
-                if (hdr) await createNotification(
-                    hdr.employee_employeeId,
-                    'TIMESHEET_APPROVED',
-                    'Timesheet Approved ✓',
-                    `Your timesheet ${timesheetId} has been approved.${remarks ? ' Remarks: ' + remarks : ''}`,
-                    timesheetId
-                );
-
-                await UPDATE(ENTRY)
-                    .set({ isLocked: true, entryStatus: 'Approved' })
-                    .where({ timesheet_timesheetId: timesheetId });
-
-                return `Timesheet '${timesheetId}' approved.`;
-            });
-
-
-            this.on('submitPerformanceRating', async (req) => {
-                const {
-                    employeeId, ratingValue, reviewMonth,
-                    reviewYear, reviewComment, ratingCategory
-                } = req.data;
-
-                if (!employeeId) return req.error(400, 'employeeId is required.');
-                if (!ratingValue) return req.error(400, 'ratingValue is required.');
-                if (!reviewMonth) return req.error(400, 'reviewMonth is required.');
-                if (!reviewYear) return req.error(400, 'reviewYear is required.');
-
-                const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
-
-                // Check if rating already exists for this employee/month/year
-                const existing = await SELECT.one.from(PERF)
-                    .where({
-                        employee_employeeId: employeeId,
-                        reviewMonth: reviewMonth,
-                        reviewYear: reviewYear
-                    });
-
-                const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2, '0')}`;
-
-                if (existing) {
-                    // Update existing rating
-                    await UPDATE(PERF)
-                        .set({
-                            ratingValue: ratingValue,
-                            reviewComment: reviewComment || '',
-                            ratingCategory: ratingCategory || ''
-                        })
-                        .where({ ratingId: existing.ratingId });
-
-                    cds.log('perf').info(
-                        `Rating updated: ${employeeId} — ${reviewMonth}/${reviewYear} — ${ratingValue}`
-                    );
-                    return {
-                        ratingId: existing.ratingId,
-                        message: `Rating updated for ${employeeId} — ${reviewMonth}/${reviewYear}`
-                    };
-                }
-
-                // Insert new rating
-                await INSERT.into(PERF).entries({
-                    ratingId,
-                    employee_employeeId: employeeId,
-                    ratingValue: ratingValue,
-                    reviewMonth: reviewMonth,
-                    reviewYear: reviewYear,
-                    reviewComment: reviewComment || '',
-                    ratingCategory: ratingCategory || ''
+            const existing = await SELECT.one.from(ATTENDANCE)
+                .where({
+                    employee_employeeId: emp.employeeId,
+                    attendanceDate: attendanceDate
                 });
 
+            return {
+                alreadyMarked: !!existing,
+                attendanceTime: existing ? existing.attendanceTime : null,
+                attendanceDay: existing ? existing.attendanceDay : null
+            };
+        });
+
+        await registerTimesheetHandlers(this, getMailer, createNotification);
+
+        return super.init();
+
+    }
+}
+
+
+
+
+class ManagerService extends cds.ApplicationService {
+    async init() {
+
+        this.on('approveTimesheet', async (req) => {
+            const { timesheetId, remarks } = req.data;
+
+            const header = await SELECT.one.from(HEADER).where({ timesheetId });
+            if (!header) {
+                return req.error(404, `Timesheet '${timesheetId}' not found.`);
+            }
+
+            if (header.status !== 'Pending') {
+                return req.error(400,
+                    `Cannot approve — current status is '${header.status}'. ` +
+                    `Only 'Pending' timesheets can be approved.`
+                );
+            }
+
+            await UPDATE(HEADER)
+                .set({ status: 'Approved', approvedOn: new Date(), remarks: remarks || '' })
+                .where({ timesheetId });
+
+            // Auto-notify employee
+            const hdr = await SELECT.one.from(HEADER).columns('employee_employeeId').where({ timesheetId });
+            if (hdr) await createNotification(
+                hdr.employee_employeeId,
+                'TIMESHEET_APPROVED',
+                'Timesheet Approved ✓',
+                `Your timesheet ${timesheetId} has been approved.${remarks ? ' Remarks: ' + remarks : ''}`,
+                timesheetId
+            );
+
+            await UPDATE(ENTRY)
+                .set({ isLocked: true, entryStatus: 'Approved' })
+                .where({ timesheet_timesheetId: timesheetId });
+
+            return `Timesheet '${timesheetId}' approved.`;
+        });
+
+
+        this.on('submitPerformanceRating', async (req) => {
+            const {
+                employeeId, ratingValue, reviewMonth,
+                reviewYear, reviewComment, ratingCategory
+            } = req.data;
+
+            if (!employeeId) return req.error(400, 'employeeId is required.');
+            if (!ratingValue) return req.error(400, 'ratingValue is required.');
+            if (!reviewMonth) return req.error(400, 'reviewMonth is required.');
+            if (!reviewYear) return req.error(400, 'reviewYear is required.');
+
+            const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
+
+            // Check if rating already exists for this employee/month/year
+            const existing = await SELECT.one.from(PERF)
+                .where({
+                    employee_employeeId: employeeId,
+                    reviewMonth: reviewMonth,
+                    reviewYear: reviewYear
+                });
+
+            const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2, '0')}`;
+
+            if (existing) {
+                // Update existing rating
+                await UPDATE(PERF)
+                    .set({
+                        ratingValue: ratingValue,
+                        reviewComment: reviewComment || '',
+                        ratingCategory: ratingCategory || ''
+                    })
+                    .where({ ratingId: existing.ratingId });
+
                 cds.log('perf').info(
-                    `Rating added: ${employeeId} — ${reviewMonth}/${reviewYear} — ${ratingValue}`
+                    `Rating updated: ${employeeId} — ${reviewMonth}/${reviewYear} — ${ratingValue}`
                 );
                 return {
-                    ratingId,
-                    message: `Rating submitted for ${employeeId} — ${reviewMonth}/${reviewYear}`
+                    ratingId: existing.ratingId,
+                    message: `Rating updated for ${employeeId} — ${reviewMonth}/${reviewYear}`
                 };
+            }
+
+            // Insert new rating
+            await INSERT.into(PERF).entries({
+                ratingId,
+                employee_employeeId: employeeId,
+                ratingValue: ratingValue,
+                reviewMonth: reviewMonth,
+                reviewYear: reviewYear,
+                reviewComment: reviewComment || '',
+                ratingCategory: ratingCategory || ''
             });
 
-            this.on('notifyTaskAssignment', async (req) => {
-                const {
-                    taskId, taskName, taskDescription,
-                    priority, dueDate, assigneeId
-                } = req.data;
+            cds.log('perf').info(
+                `Rating added: ${employeeId} — ${reviewMonth}/${reviewYear} — ${ratingValue}`
+            );
+            return {
+                ratingId,
+                message: `Rating submitted for ${employeeId} — ${reviewMonth}/${reviewYear}`
+            };
+        });
 
-                const employee = await SELECT.one.from(EMPLOYEE).where({ employeeId: assigneeId });
-                if (!employee) {
-                    return req.error(404, `Employee '${assigneeId}' not found.`);
+        this.on('notifyTaskAssignment', async (req) => {
+            const {
+                taskId, taskName, taskDescription,
+                priority, dueDate, assigneeId
+            } = req.data;
+
+            const employee = await SELECT.one.from(EMPLOYEE).where({ employeeId: assigneeId });
+            if (!employee) {
+                return req.error(404, `Employee '${assigneeId}' not found.`);
+            }
+            if (!employee.email) {
+                return req.error(400, `Employee '${assigneeId}' has no email on file.`);
+            }
+
+            const prefix = PRIORITY_PREFIX[priority] || `[${priority || 'Normal'} Priority]`;
+            const subject = `${prefix} New task assigned: ${taskName}`;
+            const body =
+                `Hi ${employee.employeeName || ''},\n\n` +
+                `You have been assigned a new task by your manager.\n\n` +
+                `Task ID:     ${taskId}\n` +
+                `Task:        ${taskName}\n` +
+                `Priority:    ${priority || 'Normal'}\n` +
+                (dueDate ? `Due Date:    ${dueDate}\n` : '') +
+                `\nDescription:\n${taskDescription || '(no description)'}\n\n` +
+                `Please open your Timesheet app to view the full details.\n\n` +
+                `— Timesheet System`;
+
+            const from = process.env.SMTP_FROM || 'no-reply@timesheet.local';
+            const mailer = getMailer();
+
+            if (mailer) {
+                try {
+                    await mailer.sendMail({ from, to: employee.email, subject, text: body });
+                    cds.log('mail').info(`Task-assignment email sent to ${employee.email} (${taskId})`);
+                    return { sent: true, recipient: employee.email, subject, message: 'Email sent.' };
+                } catch (e) {
+                    cds.log('mail').error('Failed to send email:', e.message || e);
+                    // fall through to logged-only mode
                 }
-                if (!employee.email) {
-                    return req.error(400, `Employee '${assigneeId}' has no email on file.`);
-                }
+            }
 
-                const prefix = PRIORITY_PREFIX[priority] || `[${priority || 'Normal'} Priority]`;
-                const subject = `${prefix} New task assigned: ${taskName}`;
-                const body =
-                    `Hi ${employee.employeeName || ''},\n\n` +
-                    `You have been assigned a new task by your manager.\n\n` +
-                    `Task ID:     ${taskId}\n` +
-                    `Task:        ${taskName}\n` +
-                    `Priority:    ${priority || 'Normal'}\n` +
-                    (dueDate ? `Due Date:    ${dueDate}\n` : '') +
-                    `\nDescription:\n${taskDescription || '(no description)'}\n\n` +
-                    `Please open your Timesheet app to view the full details.\n\n` +
-                    `— Timesheet System`;
+            await createNotification(
+                assigneeId,
+                'TASK_ASSIGNED',
+                `New Task: ${taskName}`,
+                `You have been assigned "${taskName}" (${priority || 'Normal'} priority).`,
+                taskId
+            );
 
-                const from = process.env.SMTP_FROM || 'no-reply@timesheet.local';
+            // No SMTP configured — log the message so we have a reproducible trail.
+            cds.log('mail').info(
+                `[Email simulated]\nFROM: ${from}\nTO: ${employee.email}\nSUBJECT: ${subject}\n${body}`
+            );
+            return {
+                sent: false,
+                recipient: employee.email,
+                subject,
+                message: 'SMTP not configured — email content was logged on the server.'
+            };
+        });
+
+        this.on('rejectTimesheet', async (req) => {
+            const { timesheetId, remarks } = req.data;
+
+            const header = await SELECT.one.from(HEADER).where({ timesheetId });
+            if (!header) {
+                return req.error(404, `Timesheet '${timesheetId}' not found.`);
+            }
+
+            if (header.status !== 'Pending') {
+                return req.error(400,
+                    `Cannot reject — current status is '${header.status}'. ` +
+                    `Only 'Pending' timesheets can be rejected.`
+                );
+            }
+
+            await UPDATE(HEADER)
+                .set({ status: 'Rejected', rejectedOn: new Date(), remarks: remarks || '' })
+                .where({ timesheetId });
+
+            const hdr2 = await SELECT.one.from(HEADER).columns('employee_employeeId').where({ timesheetId });
+            if (hdr2) await createNotification(
+                hdr2.employee_employeeId,
+                'TIMESHEET_REJECTED',
+                'Timesheet Returned ✗',
+                `Your timesheet ${timesheetId} was returned.${remarks ? ' Reason: ' + remarks : ''}`,
+                timesheetId
+            );
+
+            await UPDATE(ENTRY)
+                .set({ isLocked: false, entryStatus: 'Open' })
+                .where({ timesheet_timesheetId: timesheetId });
+
+            return `Timesheet '${timesheetId}' rejected. Employee can edit and resubmit.`;
+        });
+
+        // ── Manager uploads (or replaces) the task attachment ────────────
+        // Stores the binary in TaskMaster.attachment so the assigned
+        // employee can later pull it via consumeTaskAttachment.
+        this.on('uploadTaskAttachment', async (req) => {
+            const { taskId, fileName, mimeType, dataBase64 } = req.data;
+            if (!taskId) return req.error(400, 'taskId is required.');
+            if (!fileName) return req.error(400, 'fileName is required.');
+            if (!dataBase64) return req.error(400, 'dataBase64 is required.');
+
+            const exists = await SELECT.one.from(TASK).columns('taskId').where({ taskId });
+            if (!exists) return req.error(404, `Task '${taskId}' not found.`);
+
+            // Strip a "data:...;base64," prefix if the client forgot to.
+            const cleaned = String(dataBase64).replace(/^data:[^;]+;base64,/, '');
+            let buf;
+            try {
+                buf = Buffer.from(cleaned, 'base64');
+            } catch (e) {
+                return req.error(400, 'dataBase64 is not valid base64.');
+            }
+
+            await UPDATE(TASK)
+                .set({
+                    attachment: buf,
+                    attachmentName: fileName,
+                    attachmentMimeType: mimeType || 'application/octet-stream'
+                })
+                .where({ taskId });
+
+            cds.log('attach').info(`Attachment '${fileName}' (${buf.length} bytes) stored for task ${taskId}`);
+            return `Attachment uploaded for task '${taskId}'.`;
+        });
+
+        this.on('approveLeave', async (req) => {
+            const { leaveId, approved, remarks } = req.data;
+            if (!leaveId) return req.error(400, 'leaveId is required.');
+
+            const leave = await SELECT.one.from(LEAVE_REQUEST).where({ leaveId });
+            if (!leave) return req.error(404, `Leave request '${leaveId}' not found.`);
+            if (leave.status !== 'Pending') {
+                return req.error(400, `Leave is already '${leave.status}'.`);
+            }
+
+            const newStatus = approved ? 'Approved' : 'Rejected';
+
+            await UPDATE(LEAVE_REQUEST)
+                .set({
+                    status: newStatus,
+                    managerRemarks: remarks || '',
+                    approvedOn: new Date()
+                })
+                .where({ leaveId });
+
+            // Notify employee
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .where({ employeeId: leave.employee_employeeId });
+
+            if (emp && emp.email) {
                 const mailer = getMailer();
+                const subject = `Your leave request has been ${newStatus}`;
+                const body =
+                    `Hi ${emp.employeeName || ''},\n\n` +
+                    `Your leave request has been ${newStatus.toLowerCase()} by your manager.\n\n` +
+                    `Leave Type : ${leave.leaveType}\n` +
+                    `From       : ${leave.fromDate}\n` +
+                    `To         : ${leave.toDate}\n` +
+                    `Days       : ${leave.days}\n` +
+                    (remarks ? `Remarks    : ${remarks}\n` : '') +
+                    `\n— Timesheet System`;
 
                 if (mailer) {
                     try {
-                        await mailer.sendMail({ from, to: employee.email, subject, text: body });
-                        cds.log('mail').info(`Task-assignment email sent to ${employee.email} (${taskId})`);
-                        return { sent: true, recipient: employee.email, subject, message: 'Email sent.' };
+                        await mailer.sendMail({
+                            from: process.env.SMTP_FROM || 'no-reply@timesheet.local',
+                            to: emp.email,
+                            subject,
+                            text: body
+                        });
                     } catch (e) {
-                        cds.log('mail').error('Failed to send email:', e.message || e);
-                        // fall through to logged-only mode
+                        cds.log('mail').warn('Leave approval email failed:', e.message);
                     }
+                } else {
+                    cds.log('leave').info(`[Email simulated] TO: ${emp.email}\n${body}`);
                 }
+            }
 
-                await createNotification(
-                    assigneeId,
-                    'TASK_ASSIGNED',
-                    `New Task: ${taskName}`,
-                    `You have been assigned "${taskName}" (${priority || 'Normal'} priority).`,
-                    taskId
-                );
+            cds.log('leave').info(`Leave ${leaveId} ${newStatus} by manager`);
+            return { leaveId, status: newStatus };
+        });
 
-                // No SMTP configured — log the message so we have a reproducible trail.
-                cds.log('mail').info(
-                    `[Email simulated]\nFROM: ${from}\nTO: ${employee.email}\nSUBJECT: ${subject}\n${body}`
-                );
-                return {
-                    sent: false,
-                    recipient: employee.email,
-                    subject,
-                    message: 'SMTP not configured — email content was logged on the server.'
-                };
-            });
+        await registerManagerTimesheetHandlers(this, getMailer, createNotification);
 
-            this.on('rejectTimesheet', async (req) => {
-                const { timesheetId, remarks } = req.data;
 
-                const header = await SELECT.one.from(HEADER).where({ timesheetId });
-                if (!header) {
-                    return req.error(404, `Timesheet '${timesheetId}' not found.`);
-                }
-
-                if (header.status !== 'Pending') {
-                    return req.error(400,
-                        `Cannot reject — current status is '${header.status}'. ` +
-                        `Only 'Pending' timesheets can be rejected.`
-                    );
-                }
-
-                await UPDATE(HEADER)
-                    .set({ status: 'Rejected', rejectedOn: new Date(), remarks: remarks || '' })
-                    .where({ timesheetId });
-
-                const hdr2 = await SELECT.one.from(HEADER).columns('employee_employeeId').where({ timesheetId });
-                if (hdr2) await createNotification(
-                    hdr2.employee_employeeId,
-                    'TIMESHEET_REJECTED',
-                    'Timesheet Returned ✗',
-                    `Your timesheet ${timesheetId} was returned.${remarks ? ' Reason: ' + remarks : ''}`,
-                    timesheetId
-                );
-
-                await UPDATE(ENTRY)
-                    .set({ isLocked: false, entryStatus: 'Open' })
-                    .where({ timesheet_timesheetId: timesheetId });
-
-                return `Timesheet '${timesheetId}' rejected. Employee can edit and resubmit.`;
-            });
-
-            // ── Manager uploads (or replaces) the task attachment ────────────
-            // Stores the binary in TaskMaster.attachment so the assigned
-            // employee can later pull it via consumeTaskAttachment.
-            this.on('uploadTaskAttachment', async (req) => {
-                const { taskId, fileName, mimeType, dataBase64 } = req.data;
-                if (!taskId) return req.error(400, 'taskId is required.');
-                if (!fileName) return req.error(400, 'fileName is required.');
-                if (!dataBase64) return req.error(400, 'dataBase64 is required.');
-
-                const exists = await SELECT.one.from(TASK).columns('taskId').where({ taskId });
-                if (!exists) return req.error(404, `Task '${taskId}' not found.`);
-
-                // Strip a "data:...;base64," prefix if the client forgot to.
-                const cleaned = String(dataBase64).replace(/^data:[^;]+;base64,/, '');
-                let buf;
-                try {
-                    buf = Buffer.from(cleaned, 'base64');
-                } catch (e) {
-                    return req.error(400, 'dataBase64 is not valid base64.');
-                }
-
-                await UPDATE(TASK)
-                    .set({
-                        attachment: buf,
-                        attachmentName: fileName,
-                        attachmentMimeType: mimeType || 'application/octet-stream'
-                    })
-                    .where({ taskId });
-
-                cds.log('attach').info(`Attachment '${fileName}' (${buf.length} bytes) stored for task ${taskId}`);
-                return `Attachment uploaded for task '${taskId}'.`;
-            });
-
-            this.on('approveLeave', async (req) => {
-                const { leaveId, approved, remarks } = req.data;
-                if (!leaveId) return req.error(400, 'leaveId is required.');
-
-                const leave = await SELECT.one.from(LEAVE_REQUEST).where({ leaveId });
-                if (!leave) return req.error(404, `Leave request '${leaveId}' not found.`);
-                if (leave.status !== 'Pending') {
-                    return req.error(400, `Leave is already '${leave.status}'.`);
-                }
-
-                const newStatus = approved ? 'Approved' : 'Rejected';
-
-                await UPDATE(LEAVE_REQUEST)
-                    .set({
-                        status: newStatus,
-                        managerRemarks: remarks || '',
-                        approvedOn: new Date()
-                    })
-                    .where({ leaveId });
-
-                // Notify employee
-                const emp = await SELECT.one.from(EMPLOYEE)
-                    .where({ employeeId: leave.employee_employeeId });
-
-                if (emp && emp.email) {
-                    const mailer = getMailer();
-                    const subject = `Your leave request has been ${newStatus}`;
-                    const body =
-                        `Hi ${emp.employeeName || ''},\n\n` +
-                        `Your leave request has been ${newStatus.toLowerCase()} by your manager.\n\n` +
-                        `Leave Type : ${leave.leaveType}\n` +
-                        `From       : ${leave.fromDate}\n` +
-                        `To         : ${leave.toDate}\n` +
-                        `Days       : ${leave.days}\n` +
-                        (remarks ? `Remarks    : ${remarks}\n` : '') +
-                        `\n— Timesheet System`;
-
-                    if (mailer) {
-                        try {
-                            await mailer.sendMail({
-                                from: process.env.SMTP_FROM || 'no-reply@timesheet.local',
-                                to: emp.email,
-                                subject,
-                                text: body
-                            });
-                        } catch (e) {
-                            cds.log('mail').warn('Leave approval email failed:', e.message);
-                        }
-                    } else {
-                        cds.log('leave').info(`[Email simulated] TO: ${emp.email}\n${body}`);
-                    }
-                }
-
-                cds.log('leave').info(`Leave ${leaveId} ${newStatus} by manager`);
-                return { leaveId, status: newStatus };
-            });
-            return super.init();
-        }
+        return super.init();
     }
+}
 
-    // ── HR Service ───────────────────────────────────────────────────────────────
-    // Backs the HR "Add Employee" form and the "All Employees" directory.
-    const DOCUMENT = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeDocument';
+// ── HR Service ───────────────────────────────────────────────────────────────
+// Backs the HR "Add Employee" form and the "All Employees" directory.
+const DOCUMENT = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeDocument';
 class HRService extends cds.ApplicationService {
-        async init() {
+    async init() {
 
-            // Returns the next sequential employeeId (e.g. EMP1008). Logic:
-            // pick the highest existing numeric suffix and add one. Falls
-            // back to EMP1001 when the table is empty.
-            const generateEmployeeId = async () => {
-                const rows = await SELECT.from(EMPLOYEE).columns('employeeId');
-                const max = rows.reduce((m, r) => {
-                    const n = parseInt(String(r.employeeId || '').replace(/\D/g, ''), 10);
-                    return Number.isFinite(n) && n > m ? n : m;
-                }, 1000);
-                return 'EMP' + (max + 1);
+        // Returns the next sequential employeeId (e.g. EMP1008). Logic:
+        // pick the highest existing numeric suffix and add one. Falls
+        // back to EMP1001 when the table is empty.
+        const generateEmployeeId = async () => {
+            const rows = await SELECT.from(EMPLOYEE).columns('employeeId');
+            const max = rows.reduce((m, r) => {
+                const n = parseInt(String(r.employeeId || '').replace(/\D/g, ''), 10);
+                return Number.isFinite(n) && n > m ? n : m;
+            }, 1000);
+            return 'EMP' + (max + 1);
+        };
+
+        this.on('nextEmployeeId', async () => {
+            return await generateEmployeeId();
+        });
+
+        this.on('addEmployee', async (req) => {
+            const d = req.data || {};
+            if (!d.employeeName) return req.error(400, 'employeeName is required.');
+            if (!d.email) return req.error(400, 'email is required.');
+
+            // Reject if the email is already taken — keeps the
+            // EmployeeMaster.email lookup used by getCurrentUser unique.
+            const dup = await SELECT.one.from(EMPLOYEE)
+                .where({ email: d.email });
+            if (dup) {
+                return req.error(409, `An employee with email '${d.email}' already exists.`);
+            }
+
+            const newId = await generateEmployeeId();
+            const row = {
+                employeeId: newId,
+                employeeName: d.employeeName,
+                designation: d.designation || null,
+                email: d.email,
+                address: d.address || null,
+                mobileNumber: d.mobileNumber || null,
+                manager_employeeId: d.managerEmployeeId || null,
+                isActive: true,
+                dateOfBirth: d.dateOfBirth || null,
+                gender: d.gender || null,
+                department: d.department || null,
+                joiningDate: d.joiningDate || null,
+                employmentType: d.employmentType || null,
+                aadhaarNumber: d.aadhaarNumber || null,
+                panNumber: d.panNumber || null,
+                status: 'Active',
+                emergencyContact: d.emergencyContact || null,
+                bloodGroup: d.bloodGroup || null,
+                bankAccountNumber: d.bankAccountNumber || null,
+                bankName: d.bankName || null,
+                bankIfsc: d.bankIfsc || null
             };
+            await INSERT.into(EMPLOYEE).entries(row);
+            cds.log('hr').info(`HR created employee ${newId} (${d.employeeName})`);
+            return { employeeId: newId };
+        });
 
-            this.on('nextEmployeeId', async () => {
-                return await generateEmployeeId();
+        this.on('uploadEmployeeDocument', async (req) => {
+            const { employeeId, documentType, fileName, mimeType, description, dataBase64 } = req.data;
+            if (!employeeId || !fileName || !dataBase64) {
+                return req.error(400, 'employeeId, fileName and dataBase64 are required.');
+            }
+
+            // Verify the employee exists so we don't create orphan documents.
+            const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId });
+            if (!emp) return req.error(404, `Employee '${employeeId}' not found.`);
+
+            let buf;
+            try { buf = Buffer.from(dataBase64, 'base64'); }
+            catch (e) { return req.error(400, 'dataBase64 is not valid base64.'); }
+
+            // documentId = EMP1007-DOC-1700000000000 (employee + epoch ms)
+            const documentId = `${employeeId}-DOC-${Date.now()}`;
+            await INSERT.into(DOCUMENT).entries({
+                documentId,
+                employee_employeeId: employeeId,
+                documentType: documentType || 'Other',
+                fileName,
+                mimeType: mimeType || 'application/octet-stream',
+                description: description || null,
+                content: buf
             });
+            cds.log('hr').info(`Uploaded ${fileName} (${buf.length} bytes) for ${employeeId}`);
+            return documentId;
+        });
 
-            this.on('addEmployee', async (req) => {
-                const d = req.data || {};
-                if (!d.employeeName) return req.error(400, 'employeeName is required.');
-                if (!d.email) return req.error(400, 'email is required.');
+        this.on('getEmployeeDocument', async (req) => {
+            const { documentId } = req.data;
+            if (!documentId) return req.error(400, 'documentId is required.');
 
-                // Reject if the email is already taken — keeps the
-                // EmployeeMaster.email lookup used by getCurrentUser unique.
-                const dup = await SELECT.one.from(EMPLOYEE)
-                    .where({ email: d.email });
-                if (dup) {
-                    return req.error(409, `An employee with email '${d.email}' already exists.`);
+            const doc = await SELECT.one.from(DOCUMENT)
+                .columns('documentId', 'fileName', 'mimeType', 'content')
+                .where({ documentId });
+            if (!doc) return req.error(404, `Document '${documentId}' not found.`);
+            if (!doc.content) return req.error(404, 'Document has no content.');
+
+            let dataBase64 = '';
+            try {
+                if (Buffer.isBuffer(doc.content)) {
+                    dataBase64 = doc.content.toString('base64');
+                } else if (typeof doc.content === 'string') {
+                    dataBase64 = doc.content;
+                } else if (doc.content instanceof Uint8Array) {
+                    dataBase64 = Buffer.from(doc.content).toString('base64');
+                } else {
+                    dataBase64 = Buffer.from(doc.content).toString('base64');
                 }
+            } catch (e) {
+                cds.log('hr').error('Could not encode document:', e.message || e);
+                return req.error(500, 'Could not read document.');
+            }
 
-                const newId = await generateEmployeeId();
-                const row = {
-                    employeeId: newId,
-                    employeeName: d.employeeName,
-                    designation: d.designation || null,
-                    email: d.email,
-                    address: d.address || null,
-                    mobileNumber: d.mobileNumber || null,
-                    manager_employeeId: d.managerEmployeeId || null,
-                    isActive: true,
-                    dateOfBirth: d.dateOfBirth || null,
-                    gender: d.gender || null,
-                    department: d.department || null,
-                    joiningDate: d.joiningDate || null,
-                    employmentType: d.employmentType || null,
-                    aadhaarNumber: d.aadhaarNumber || null,
-                    panNumber: d.panNumber || null,
-                    status: 'Active',
-                    emergencyContact: d.emergencyContact || null,
-                    bloodGroup: d.bloodGroup || null,
-                    bankAccountNumber: d.bankAccountNumber || null,
-                    bankName: d.bankName || null,
-                    bankIfsc: d.bankIfsc || null
-                };
-                await INSERT.into(EMPLOYEE).entries(row);
-                cds.log('hr').info(`HR created employee ${newId} (${d.employeeName})`);
-                return { employeeId: newId };
-            });
+            return {
+                fileName: doc.fileName,
+                mimeType: doc.mimeType || 'application/octet-stream',
+                dataBase64
+            };
+        });
 
-            this.on('uploadEmployeeDocument', async (req) => {
-                const { employeeId, documentType, fileName, mimeType, description, dataBase64 } = req.data;
-                if (!employeeId || !fileName || !dataBase64) {
-                    return req.error(400, 'employeeId, fileName and dataBase64 are required.');
-                }
 
-                // Verify the employee exists so we don't create orphan documents.
-                const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId });
-                if (!emp) return req.error(404, `Employee '${employeeId}' not found.`);
+        await registerHRTimesheetHandlers(this, getMailer, createNotification);
 
-                let buf;
-                try { buf = Buffer.from(dataBase64, 'base64'); }
-                catch (e) { return req.error(400, 'dataBase64 is not valid base64.'); }
 
-                // documentId = EMP1007-DOC-1700000000000 (employee + epoch ms)
-                const documentId = `${employeeId}-DOC-${Date.now()}`;
-                await INSERT.into(DOCUMENT).entries({
-                    documentId,
-                    employee_employeeId: employeeId,
-                    documentType: documentType || 'Other',
-                    fileName,
-                    mimeType: mimeType || 'application/octet-stream',
-                    description: description || null,
-                    content: buf
-                });
-                cds.log('hr').info(`Uploaded ${fileName} (${buf.length} bytes) for ${employeeId}`);
-                return documentId;
-            });
-
-            this.on('getEmployeeDocument', async (req) => {
-                const { documentId } = req.data;
-                if (!documentId) return req.error(400, 'documentId is required.');
-
-                const doc = await SELECT.one.from(DOCUMENT)
-                    .columns('documentId', 'fileName', 'mimeType', 'content')
-                    .where({ documentId });
-                if (!doc) return req.error(404, `Document '${documentId}' not found.`);
-                if (!doc.content) return req.error(404, 'Document has no content.');
-
-                let dataBase64 = '';
-                try {
-                    if (Buffer.isBuffer(doc.content)) {
-                        dataBase64 = doc.content.toString('base64');
-                    } else if (typeof doc.content === 'string') {
-                        dataBase64 = doc.content;
-                    } else if (doc.content instanceof Uint8Array) {
-                        dataBase64 = Buffer.from(doc.content).toString('base64');
-                    } else {
-                        dataBase64 = Buffer.from(doc.content).toString('base64');
-                    }
-                } catch (e) {
-                    cds.log('hr').error('Could not encode document:', e.message || e);
-                    return req.error(500, 'Could not read document.');
-                }
-
-                return {
-                    fileName: doc.fileName,
-                    mimeType: doc.mimeType || 'application/octet-stream',
-                    dataBase64
-                };
-            });
-
-            return super.init();
-        }
+        return super.init();
     }
+}
 
-    module.exports = { EmployeeService, ManagerService, HRService };
+module.exports = { EmployeeService, ManagerService, HRService };
+cds.on('served', () => startReminderCron(getMailer));

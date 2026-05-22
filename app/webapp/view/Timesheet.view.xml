@@ -3,279 +3,328 @@
     xmlns:mvc="sap.ui.core.mvc"
     xmlns="sap.m"
     xmlns:f="sap.f"
-    xmlns:table="sap.ui.table"
+    xmlns:l="sap.ui.layout"
+    xmlns:form="sap.ui.layout.form"
     xmlns:core="sap.ui.core"
+    xmlns:unified="sap.ui.unified"
+    xmlns:table="sap.ui.table"
     displayBlock="true">
 
-    <Page id="timesheetPage" class="tsDashboardPage">
+    <Page
+        id="timesheetPage"
+        showNavButton="false"
+        backgroundDesign="List">
 
+        <!-- ── Header Bar ──────────────────────────────────────────────────── -->
         <customHeader>
-            <Bar class="tsPageHeader">
+            <Bar>
                 <contentLeft>
                     <VBox>
-                        <Title text="Timesheet" level="H2" />
-                        <Breadcrumbs currentLocationText="Timesheet" class="sapUiTinyMarginTop">
-                            <links><Link text="Dashboard" press=".onNavToDashboard" /></links>
-                        </Breadcrumbs>
+                        <Title text="Weekly Timesheet" level="H2" />
+                        <HBox alignItems="Center">
+                            <Button
+                                id="btnPrevWeekNav"
+                                icon="sap-icon://navigation-left-arrow"
+                                type="Transparent"
+                                visible="{viewModel>/isPrevWeekApproved}"
+                                press=".onSwitchToPrevWeek"
+                                tooltip="View Previous Week (Manager Approved)" />
+                            <Title
+                                id="weekRangeTitle"
+                                text="{viewModel>/weekRangeLabel}"
+                                level="H4"
+                                class="sapUiSmallMarginBeginEnd" />
+                            <Button
+                                id="btnCurrentWeekNav"
+                                icon="sap-icon://navigation-right-arrow"
+                                type="Transparent"
+                                visible="{= ${viewModel>/isViewingPrevWeek} === true }"
+                                press=".onSwitchToCurrentWeek"
+                                tooltip="Back to Current Week" />
+                        </HBox>
                     </VBox>
                 </contentLeft>
                 <contentRight>
-                    <SegmentedButton id="viewToggle" selectedKey="week" selectionChange=".onViewToggle">
-                        <items>
-                            <SegmentedButtonItem key="week" text="Week" />
-                        </items>
-                    </SegmentedButton>
+                    <!-- Status badge -->
+                    <ObjectStatus
+                        id="timesheetStatusBadge"
+                        text="{viewModel>/weekStatus}"
+                        state="{viewModel>/weekStatusState}"
+                        icon="{viewModel>/weekStatusIcon}"
+                        class="sapUiSmallMarginEnd" />
+                    <Button
+                        id="btnSave"
+                        text="Save"
+                        type="Default"
+                        icon="sap-icon://save"
+                        press=".onSaveEntries"
+                        enabled="{viewModel>/canEdit}" />
+                    <Button
+                        id="btnSubmit"
+                        text="{= ${viewModel>/isViewingPrevWeek} ? 'Save &amp; Submit' : 'Submit for Approval'}"
+                        type="Emphasized"
+                        icon="sap-icon://paper-plane"
+                        press=".onSubmitTimesheet"
+                        enabled="{viewModel>/canSubmit}"
+                        class="sapUiSmallMarginBegin" />
                 </contentRight>
             </Bar>
         </customHeader>
 
         <content>
+            <VBox class="sapUiSmallMargin">
 
-            <!-- Week Navigator -->
-            <Toolbar class="tsWeekNav sapUiSmallMarginBottom" style="Clear">
-                <Title id="weekRangeTitle" text="{view>/weekRangeLabel}" level="H4" />
-                <ToolbarSpacer />
-                <Button icon="sap-icon://calendar" type="Transparent"
-                    tooltip="Select week" press=".onCalendarPress" />
-                <Button icon="sap-icon://navigation-left-arrow" type="Transparent"
-                    press=".onPrevWeek" enabled="{view>/canGoPrev}" />
-                <Button text="Today" type="Transparent" press=".onToday" />
-                <Button icon="sap-icon://navigation-right-arrow" type="Transparent"
-                    press=".onNextWeek" enabled="{view>/canGoNext}" />
-            </Toolbar>
+                <!-- ── Info message strip ──────────────────────────────────── -->
+                <MessageStrip
+                    id="infoStrip"
+                    text="{viewModel>/infoMessage}"
+                    type="{viewModel>/infoMessageType}"
+                    showCloseButton="true"
+                    visible="{= !!${viewModel>/infoMessage} }"
+                    class="sapUiSmallMarginBottom" />
 
-            <!-- Timesheet Grid -->
-            <table:Table
-                id="timesheetTable"
-                rows="{rows>/rows}"
-                visibleRowCountMode="Fixed"
-                visibleRowCount="{view>/rowCount}"
-                selectionMode="None"
-                alternateRowColors="false"
-                fixedColumnCount="1"
-                class="timesheetTable"
-                width="100%"
-                rowHeight="48">
+                <!-- ── Previous week approved banner ───────────────────────── -->
+                <MessageStrip
+                    visible="{viewModel>/isPrevWeekApproved}"
+                    text="Manager has approved filling the previous week. Click the &#x2190; arrow in the header to switch."
+                    type="Success"
+                    showIcon="true"
+                    class="sapUiSmallMarginBottom" />
 
-                <table:columns>
+                <!-- ══════════════════════════════════════════════════════════
+                     TIMESHEET GRID
+                     The actual table is built dynamically in the controller
+                     using sap/ui/core/HTML and placeAt(). The containers
+                     below are the anchors the controller writes into.
+                     dayHeaderRow and dailyTotalsRow are hidden by controller
+                     because the HTML table renders its own header/footer.
+                     ══════════════════════════════════════════════════════════ -->
+                <Panel
+                    id="timesheetGridPanel"
+                    backgroundDesign="Transparent"
+                    class="sapUiNoContentPadding">
 
-                    <table:Column width="180px">
-                        <table:label><Label text="Project / Task" /></table:label>
-                        <table:template>
-                            <VBox class="tsProjectCell">
-                                <ComboBox
-                                    selectedKey="{rows>taskId}"
-                                    placeholder="Select a task..."
-                                    enabled="{path:'rows>_rowLocked', formatter:'.formatNotLocked'}"
-                                    selectionChange=".onTaskSelect"
-                                    filterSecondaryValues="true"
-                                    showSecondaryValues="true"
-                                    items="{path:'tasks>/', templateShareable:true}"
-                                    class="tsProjectInput">
-                                    <core:Item key="{tasks>taskId}" text="{tasks>taskName}"
-                                        additionalText="{tasks>taskDescription}" />
-                                </ComboBox>
-                                <Text text="{rows>taskName}" class="tsTaskName" wrapping="false" />
-                            </VBox>
-                        </table:template>
-                    </table:Column>
+                    <ScrollContainer horizontal="true" vertical="false" width="100%">
+                        <VBox id="timesheetGridContainer" width="100%">
 
-                    <table:Column hAlign="Center" width="100px">
-                        <table:label>
-                            <VBox alignItems="Center" class="tsColHeaderBox">
-                                <Text text="{view>/days/0/name}" class="tsDayName" />
-                                <Text text="{view>/days/0/date}" class="tsDayDate" />
-                            </VBox>
-                        </table:label>
-                        <table:template>
-                            <Input value="{rows>mon}"
-                                enabled="{parts:[{path:'rows>locked/mon'},{path:'view>/days/0/isFuture'}], formatter:'.formatDayEnabled'}"
-                                valueState="{path:'rows>mon', formatter:'.formatValueState'}"
-                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
-                                <customData><core:CustomData key="day" value="mon" /></customData>
-                            </Input>
-                        </table:template>
-                    </table:Column>
+                            <!-- Hidden — controller hides these; table renders its own -->
+                            <HBox id="dayHeaderRow" visible="false" class="sapUiSmallMarginBottom">
+                                <VBox width="220px" class="sapUiSmallMarginEnd">
+                                    <Label text="Project / Task" />
+                                </VBox>
+                                <HBox id="dayHeadersContainer" />
+                                <VBox width="80px" class="sapUiSmallMarginBegin">
+                                    <Label text="Total" />
+                                </VBox>
+                            </HBox>
 
-                    <table:Column hAlign="Center" width="100px">
-                        <table:label>
-                            <VBox alignItems="Center" class="tsColHeaderBox">
-                                <Text text="{view>/days/1/name}" class="tsDayName" />
-                                <Text text="{view>/days/1/date}" class="tsDayDate" />
-                            </VBox>
-                        </table:label>
-                        <table:template>
-                            <Input value="{rows>tue}"
-                                enabled="{parts:[{path:'rows>locked/tue'},{path:'view>/days/1/isFuture'}], formatter:'.formatDayEnabled'}"
-                                valueState="{path:'rows>tue', formatter:'.formatValueState'}"
-                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
-                                <customData><core:CustomData key="day" value="tue" /></customData>
-                            </Input>
-                        </table:template>
-                    </table:Column>
+                            <!-- Controller renders HTML table into this VBox -->
+                            <VBox id="timesheetRowsContainer" />
 
-                    <table:Column hAlign="Center" width="100px">
-                        <table:label>
-                            <VBox alignItems="Center" class="tsColHeaderBox">
-                                <Text text="{view>/days/2/name}" class="tsDayName" />
-                                <Text text="{view>/days/2/date}" class="tsDayDate" />
-                            </VBox>
-                        </table:label>
-                        <table:template>
-                            <Input value="{rows>wed}"
-                                enabled="{parts:[{path:'rows>locked/wed'},{path:'view>/days/2/isFuture'}], formatter:'.formatDayEnabled'}"
-                                valueState="{path:'rows>wed', formatter:'.formatValueState'}"
-                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
-                                <customData><core:CustomData key="day" value="wed" /></customData>
-                            </Input>
-                        </table:template>
-                    </table:Column>
+                            <!-- Add Row button — shown below the table -->
+                            <HBox class="sapUiSmallMarginTop" visible="{viewModel>/canEdit}">
+                                <Button
+                                    id="btnAddRow"
+                                    text="+ Add Project Row"
+                                    type="Ghost"
+                                    icon="sap-icon://add"
+                                    press=".onAddRow" />
+                            </HBox>
 
-                    <table:Column hAlign="Center" width="100px">
-                        <table:label>
-                            <VBox alignItems="Center" class="tsColHeaderBox">
-                                <Text text="{view>/days/3/name}" class="tsDayName" />
-                                <Text text="{view>/days/3/date}" class="tsDayDate" />
-                            </VBox>
-                        </table:label>
-                        <table:template>
-                            <Input value="{rows>thu}"
-                                enabled="{parts:[{path:'rows>locked/thu'},{path:'view>/days/3/isFuture'}], formatter:'.formatDayEnabled'}"
-                                valueState="{path:'rows>thu', formatter:'.formatValueState'}"
-                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
-                                <customData><core:CustomData key="day" value="thu" /></customData>
-                            </Input>
-                        </table:template>
-                    </table:Column>
+                            <!-- Hidden — controller uses DOM totals row inside the table -->
+                            <HBox id="dailyTotalsRow" visible="false">
+                                <VBox width="220px" class="sapUiSmallMarginEnd">
+                                    <Text text="Daily Total" />
+                                </VBox>
+                                <HBox id="dailyTotalsContainer" />
+                                <VBox width="80px" class="sapUiSmallMarginBegin">
+                                    <Text id="weekTotalLabel" text="0" />
+                                </VBox>
+                            </HBox>
 
-                    <table:Column hAlign="Center" width="100px">
-                        <table:label>
-                            <VBox alignItems="Center" class="tsColHeaderBox">
-                                <Text text="{view>/days/4/name}" class="tsDayName" />
-                                <Text text="{view>/days/4/date}" class="tsDayDate" />
-                            </VBox>
-                        </table:label>
-                        <table:template>
-                            <Input value="{rows>fri}"
-                                enabled="{parts:[{path:'rows>locked/fri'},{path:'view>/days/4/isFuture'}], formatter:'.formatDayEnabled'}"
-                                valueState="{path:'rows>fri', formatter:'.formatValueState'}"
-                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
-                                <customData><core:CustomData key="day" value="fri" /></customData>
-                            </Input>
-                        </table:template>
-                    </table:Column>
+                        </VBox>
+                    </ScrollContainer>
+                </Panel>
 
-                    <table:Column hAlign="Center" width="100px">
-                        <table:label>
-                            <VBox alignItems="Center" class="tsColHeaderBox">
-                                <Text text="{view>/days/5/name}" class="tsDayName" />
-                                <Text text="{view>/days/5/date}" class="tsDayDate" />
-                            </VBox>
-                        </table:label>
-                        <table:template>
-                            <Input value="{rows>sat}"
-                                enabled="{parts:[{path:'rows>locked/sat'},{path:'view>/days/5/isFuture'}], formatter:'.formatDayEnabled'}"
-                                valueState="{path:'rows>sat', formatter:'.formatValueState'}"
-                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
-                                <customData><core:CustomData key="day" value="sat" /></customData>
-                            </Input>
-                        </table:template>
-                    </table:Column>
+                <!-- ══════════════════════════════════════════════════════════
+                     MISSED DAY HR APPROVAL BUTTONS
+                     Built dynamically — one button per missed past weekday
+                     that is older than 2 days and has no HR unlock yet
+                     ══════════════════════════════════════════════════════════ -->
+                <VBox id="missedDayActionsContainer" class="sapUiSmallMarginTop" />
 
-                    <table:Column hAlign="Center" width="100px">
-                        <table:label>
-                            <VBox alignItems="Center" class="tsColHeaderBox">
-                                <Text text="{view>/days/6/name}" class="tsDayName" />
-                                <Text text="{view>/days/6/date}" class="tsDayDate" />
-                            </VBox>
-                        </table:label>
-                        <table:template>
-                            <Input value="{rows>sun}"
-                                enabled="{parts:[{path:'rows>locked/sun'},{path:'view>/days/6/isFuture'}], formatter:'.formatDayEnabled'}"
-                                valueState="{path:'rows>sun', formatter:'.formatValueState'}"
-                                textAlign="Center" change=".onHoursChange" class="timesheetInput">
-                                <customData><core:CustomData key="day" value="sun" /></customData>
-                            </Input>
-                        </table:template>
-                    </table:Column>
-
-                    <table:Column hAlign="Center" width="120px">
-                        <table:label><Label text="Week Total(Hrs)" /></table:label>
-                        <table:template>
+                <!-- ══════════════════════════════════════════════════════════
+                     PREVIOUS WEEK SECTION
+                     ══════════════════════════════════════════════════════════ -->
+                <Panel
+                    id="prevWeekPanel"
+                    backgroundDesign="Transparent"
+                    class="sapUiMediumMarginTop">
+                    <HBox
+                        justifyContent="SpaceBetween"
+                        alignItems="Center"
+                        class="sapUiSmallMargin">
+                        <VBox>
+                            <Title text="Previous Week Timesheet" level="H5" />
                             <Text
-                                text="{parts:['rows>mon','rows>tue','rows>wed','rows>thu','rows>fri','rows>sat','rows>sun'], formatter:'.formatRowTotal'}"
-                                textAlign="Center" class="tsRowTotal" />
-                        </table:template>
-                    </table:Column>
+                                text="{viewModel>/prevWeekRangeLabel}"
+                                class="sapUiSmallMarginTop" />
+                        </VBox>
+                        <HBox alignItems="Center">
+                            <!-- State 1: No request yet -->
+                            <Button
+                                id="btnRequestPrevWeek"
+                                text="Request to Fill Previous Week"
+                                type="Default"
+                                icon="sap-icon://edit"
+                                visible="{viewModel>/showRequestPrevWeekBtn}"
+                                press=".onRequestPrevWeekFill" />
 
-                </table:columns>
-            </table:Table>
+                            <!-- State 2: Request pending manager approval -->
+                            <ObjectStatus
+                                id="prevWeekPendingStatus"
+                                text="Approval Pending from Manager"
+                                state="Warning"
+                                icon="sap-icon://pending"
+                                visible="{viewModel>/showPrevWeekPending}" />
 
-<!-- Action Bar -->
-<HBox justifyContent="SpaceBetween" alignItems="Center" class="tsActionBar">
+                            <!-- State 3: Approved — can now fill previous week -->
+                            <Button
+                                id="btnFillPrevWeek"
+                                text="Fill Previous Week"
+                                type="Emphasized"
+                                icon="sap-icon://calendar"
+                                visible="{viewModel>/showFillPrevWeekBtn}"
+                                enabled="{viewModel>/prevWeekFillEnabled}"
+                                press=".onSwitchToPrevWeek" />
 
-    <!-- Add Row — hidden when Submitted or Approved -->
-    <Button text="+ Add Row" type="Emphasized" press=".onAddRow"
-        visible="{= ${view>/timesheetStatus} !== 'Submitted' 
-               &amp;&amp; ${view>/timesheetStatus} !== 'Approved' }"/>
+                            <!-- State 4: Already submitted -->
+                            <ObjectStatus
+                                id="prevWeekDoneStatus"
+                                text="Previous Week Submitted"
+                                state="Success"
+                                icon="sap-icon://accept"
+                                visible="{viewModel>/showPrevWeekDone}" />
+                        </HBox>
+                    </HBox>
+                </Panel>
 
-    <HBox alignItems="Center" renderType="Bare">
-
-        <!-- Pending Approval badge — shown when Submitted -->
-        <HBox alignItems="Center" renderType="Bare"
-            visible="{= ${view>/timesheetStatus} === 'Submitted' }"
-            class="sapUiSmallMarginEnd">
-            <core:Icon src="sap-icon://pending" color="#f59e0b"
-                size="1.2rem" class="sapUiTinyMarginEnd"/>
-            <Text text="Pending Approval"
-                class="sapUiSmallMarginEnd"
-                style="font-weight:600;color:#f59e0b;font-size:0.95rem;"/>
-        </HBox>
-
-        <!-- Approved badge — shown when Approved -->
-        <HBox alignItems="Center" renderType="Bare"
-            visible="{= ${view>/timesheetStatus} === 'Approved' }"
-            class="sapUiSmallMarginEnd">
-            <core:Icon src="sap-icon://accept" color="#16a34a"
-                size="1.2rem" class="sapUiTinyMarginEnd"/>
-            <Text text="Approved"
-                style="font-weight:600;color:#16a34a;font-size:0.95rem;"/>
-        </HBox>
-
-        <!-- Rejected badge — shown when Rejected -->
-        <HBox alignItems="Center" renderType="Bare"
-            visible="{= ${view>/timesheetStatus} === 'Rejected' }"
-            class="sapUiSmallMarginEnd">
-            <core:Icon src="sap-icon://decline" color="#dc2626"
-                size="1.2rem" class="sapUiTinyMarginEnd"/>
-            <Text text="Rejected —"
-                style="font-weight:600;color:#dc2626;font-size:0.95rem;"/>
-        </HBox>
-
-        <!-- Save — hidden when Submitted or Approved -->
-        <Button text="Save" icon="sap-icon://save" type="Default"
-            press=".onSave" class="sapUiSmallMarginEnd"
-            tooltip="Save your progress without submitting"
-            visible="{= ${view>/timesheetStatus} !== 'Submitted' 
-                   &amp;&amp; ${view>/timesheetStatus} !== 'Approved' }"/>
-
-        <!-- Submit — only for Draft or empty status -->
-        <Button text="Submit" type="Accept" press=".onSubmit"
-            enabled="{view>/canSubmit}"
-            tooltip="Fill Mon–Fri hours for all rows before submitting"
-            visible="{= ${view>/timesheetStatus} === 'Draft' 
-                   || ${view>/timesheetStatus} === '' }"/>
-
-        <!-- Edit and Resend — only for Rejected -->
-        <Button text="Edit &amp; Resend" type="Emphasized"
-            icon="sap-icon://edit"
-            press=".onEditAndResend"
-            visible="{= ${view>/timesheetStatus} === 'Rejected' }"/>
-
-    </HBox>
-</HBox>
-
+            </VBox>
         </content>
     </Page>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         DIALOG: HR Day-Unlock Request
+         NOTE: core:ListItem (not core:Item) — ListItem supports additionalText
+         ══════════════════════════════════════════════════════════════════════ -->
+    <Dialog
+        id="hrUnlockDialog"
+        title="Request HR Approval to Fill Missed Day"
+        contentWidth="480px"
+        type="Message">
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <form:SimpleForm layout="ColumnLayout" columnsL="1" columnsM="1">
+                    <form:content>
+                        <Label text="Missed Date" required="true" />
+                        <Input
+                            id="hrUnlockDateDisplay"
+                            editable="false"
+                            value="{hrUnlockModel>/targetDate}" />
+
+                        <Label text="Select HR Approver" required="true" />
+                        <Select
+                            id="hrApproverSelect"
+                            width="100%"
+                            selectedKey="{hrUnlockModel>/selectedHrId}"
+                            items="{hrListModel>/hrEmployees}">
+                            <core:ListItem
+                                key="{hrListModel>employeeId}"
+                                text="{hrListModel>employeeName}"
+                                additionalText="{hrListModel>designation}" />
+                        </Select>
+
+                        <Label text="Reason for Missing" />
+                        <TextArea
+                            id="hrUnlockRemarks"
+                            rows="3"
+                            width="100%"
+                            maxLength="255"
+                            value="{hrUnlockModel>/employeeRemarks}"
+                            placeholder="Briefly explain why this date was missed..." />
+                    </form:content>
+                </form:SimpleForm>
+                <MessageStrip
+                    text="HR will receive an email. Once approved, you can fill this date."
+                    type="Information"
+                    showIcon="true"
+                    showCloseButton="false"
+                    class="sapUiSmallMarginTop" />
+            </VBox>
+        </content>
+        <beginButton>
+            <Button
+                text="Send Request"
+                type="Emphasized"
+                icon="sap-icon://paper-plane"
+                press=".onSubmitHRUnlockRequest" />
+        </beginButton>
+        <endButton>
+            <Button text="Cancel" press=".onCloseHRUnlockDialog" />
+        </endButton>
+    </Dialog>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         DIALOG: Request Previous Week Manager Approval
+         ══════════════════════════════════════════════════════════════════════ -->
+    <Dialog
+        id="prevWeekDialog"
+        title="Request Previous Week Timesheet Approval"
+        contentWidth="460px"
+        type="Message">
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <MessageStrip
+                    id="prevWeekDialogInfo"
+                    text="{prevWeekModel>/infoText}"
+                    type="Warning"
+                    showIcon="true"
+                    showCloseButton="false"
+                    class="sapUiSmallMarginBottom" />
+                <form:SimpleForm layout="ColumnLayout" columnsL="1" columnsM="1">
+                    <form:content>
+                        <Label text="Previous Week" />
+                        <Input
+                            editable="false"
+                            value="{prevWeekModel>/weekRangeLabel}" />
+
+                        <Label text="Your Manager" />
+                        <Input
+                            editable="false"
+                            value="{prevWeekModel>/managerName}" />
+
+                        <Label text="Reason (optional)" />
+                        <TextArea
+                            id="prevWeekRemarks"
+                            rows="3"
+                            width="100%"
+                            maxLength="255"
+                            value="{prevWeekModel>/employeeRemarks}"
+                            placeholder="Explain why the previous week was not submitted..." />
+                    </form:content>
+                </form:SimpleForm>
+            </VBox>
+        </content>
+        <beginButton>
+            <Button
+                text="Send for Approval"
+                type="Emphasized"
+                icon="sap-icon://paper-plane"
+                press=".onConfirmPrevWeekRequest" />
+        </beginButton>
+        <endButton>
+            <Button text="Cancel" press=".onClosePrevWeekDialog" />
+        </endButton>
+    </Dialog>
 
 </mvc:View>
