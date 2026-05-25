@@ -16,7 +16,7 @@
 
             <VBox class="tsTaskDescWrap sapUiSmallMargin">
 
-                <!-- Header -->
+                <!-- ── Header ─────────────────────────────────────────────── -->
                 <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween">
                     <HBox alignItems="Center">
                         <core:Icon src="sap-icon://wallet" class="tsMgrToolbarIcon" />
@@ -28,12 +28,14 @@
                         icon="sap-icon://task" />
                 </HBox>
 
-                <!-- Filters -->
+                <!-- ── Filters ────────────────────────────────────────────── -->
                 <Toolbar class="sapUiSmallMarginTop">
                     <SearchField placeholder="Search tasks..."
                                  liveChange=".onSearch"
                                  width="280px" />
                     <ToolbarSpacer />
+
+                    <!-- Manager-only: preview as employee -->
                     <Select id="selEmployeeView"
                             visible="{= ${appView>/userRole} === 'manager' }"
                             selectedKey="{tdView>/viewAsEmployee}"
@@ -43,6 +45,8 @@
                             tooltip="Preview as employee">
                         <core:Item key="{tdView>employeeId}" text="{tdView>employeeName}" />
                     </Select>
+
+                    <!-- Priority filter -->
                     <SegmentedButton selectedKey="{tdView>/priorityFilter}"
                                      selectionChange=".onPriorityFilterChange">
                         <items>
@@ -54,7 +58,7 @@
                     </SegmentedButton>
                 </Toolbar>
 
-                <!-- Empty state -->
+                <!-- ── Empty state ────────────────────────────────────────── -->
                 <VBox visible="{= ${tdView>/displayTasks}.length === 0 }"
                       class="tsTaskEmpty sapUiMediumMarginTop"
                       alignItems="Center">
@@ -67,7 +71,7 @@
                           textAlign="Center" />
                 </VBox>
 
-                <!-- Task cards (sorted by priority) -->
+                <!-- ── Task cards ─────────────────────────────────────────── -->
                 <List items="{tdView>/displayTasks}"
                       mode="None"
                       showSeparators="None"
@@ -77,6 +81,7 @@
                     <CustomListItem class="tsTaskCardItem">
                         <VBox class="tsTaskCard">
 
+                            <!-- Card header: priority + name + status badge -->
                             <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsTaskCardHeader">
                                 <VBox>
                                     <HBox alignItems="Center">
@@ -102,7 +107,7 @@
                                 </HBox>
                             </HBox>
 
-                            <!-- Description block -->
+                            <!-- Description -->
                             <VBox class="tsTaskDescBlock">
                                 <Label text="What has to be done" class="tsTaskDescLabel" />
                                 <Text text="{tdView>taskDescription}" class="tsTaskDescText" />
@@ -120,6 +125,7 @@
                                       class="sapUiTinyMarginBegin" />
                             </HBox>
 
+                            <!-- Footer: assignee + due date + reviewer badge -->
                             <HBox class="tsTaskCardFooter" justifyContent="SpaceBetween" alignItems="Center" wrap="Wrap">
                                 <HBox alignItems="Center" class="sapUiTinyMarginEnd">
                                     <core:Icon src="sap-icon://employee" size="1rem" color="#6b7280" />
@@ -129,25 +135,54 @@
                                     <core:Icon src="sap-icon://date-time" size="1rem" color="#6b7280" />
                                     <Text text="{tdView>dueLabel}" class="sapUiTinyMarginBegin" />
                                 </HBox>
+                                <!-- Reviewer badge — only when a reviewer is assigned -->
+                                <HBox alignItems="Center"
+                                      visible="{= !!${tdView>reviewerName} }">
+                                    <core:Icon src="sap-icon://approvals" size="1rem" color="#6b7280" />
+                                    <Text text="Reviewer: " class="sapUiTinyMarginBegin" />
+                                    <Text text="{tdView>reviewerName}" class="sapUiTinyMarginBegin" />
+                                </HBox>
                             </HBox>
 
-                            <!-- Employee status actions -->
-                            <HBox class="tsTaskActionRow" justifyContent="End" alignItems="Center" wrap="Wrap">
+                            <!-- ══ ASSIGNEE action row ════════════════════════════════
+                                 visible="_isAssignee" is pre-computed in _applyFilter()
+                                 so a simple boolean path binding works — no inline function. -->
+                            <HBox class="tsTaskActionRow"
+                                  justifyContent="End"
+                                  alignItems="Center"
+                                  wrap="Wrap"
+                                  visible="{tdView>_isAssignee}">
+
                                 <Label text="Update status:" class="tsTaskActionLabel sapUiTinyMarginEnd" />
-                                <Button text="Open"
-                                        icon="sap-icon://circle-task-2"
-                                        type="{= ${tdView>status} === 'Open' ? 'Emphasized' : 'Transparent' }"
-                                        press=".onSetStatusOpen"
-                                        class="sapUiTinyMarginEnd" />
-                                <Button text="In Progress"
-                                        icon="sap-icon://play"
-                                        type="{= ${tdView>status} === 'In Progress' ? 'Emphasized' : 'Transparent' }"
-                                        press=".onSetStatusInProgress"
-                                        class="sapUiTinyMarginEnd" />
-                                <Button text="Completed"
+                                <Select selectedKey="{tdView>status}"
+                                        change=".onStatusChange"
+                                        width="160px">
+                                    <core:Item key="Not Started" text="Not Started" />
+                                    <core:Item key="In Progress" text="In Progress" />
+                                    <core:Item key="In Review"   text="In Review"   />
+                                    <core:Item key="Completed"   text="Completed"   />
+                                </Select>
+                            </HBox>
+
+                            <!-- ══ REVIEWER action row ════════════════════════════════
+                                 visible="_isReviewerActive" is pre-computed in _applyFilter():
+                                 true only when status === "In Review" AND reviewer === currentUser. -->
+                            <HBox class="tsTaskActionRow tsReviewerActionRow"
+                                  justifyContent="End"
+                                  alignItems="Center"
+                                  wrap="Wrap"
+                                  visible="{tdView>_isReviewerActive}">
+
+                                <Label text="Review decision:" class="tsTaskActionLabel sapUiTinyMarginEnd" />
+                                <Button text="Reviewed — Looks Good"
                                         icon="sap-icon://accept"
-                                        type="{= ${tdView>status} === 'Completed' ? 'Accept' : 'Transparent' }"
-                                        press=".onSetStatusCompleted" />
+                                        type="Accept"
+                                        press=".onMarkReviewed"
+                                        class="sapUiTinyMarginEnd" />
+                                <Button text="Reopen"
+                                        icon="sap-icon://reopen-task"
+                                        type="Reject"
+                                        press=".onReopenTask" />
                             </HBox>
 
                         </VBox>

@@ -718,78 +718,6 @@ sap.ui.define([
             }).finally(() => this._refreshDash());
         },
 
-        _loadMyTasks() {
-            const oComp = this.getOwnerComponent();
-            const oMgrModel = oComp.getModel("manager");  // ← manager model not employee
-            const sEmpId = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
-
-            if (oMgrModel && sEmpId) {
-                oMgrModel.bindList("/Tasks", null, null, null, {
-                    $$groupId: "$direct"
-                })
-                    .requestContexts(0, 200)
-                    .then(aCtx => {
-                        const allTasks = aCtx.map(c => c.getObject()).filter(Boolean);
-                        console.log("All tasks:", allTasks);
-
-                        // Filter by employee - try all possible field names
-                        const myTasks = allTasks.filter(t =>
-                            t.assignedTo_employeeId === sEmpId ||
-                            t.assignedTo_ID === sEmpId ||
-                            t.employeeId === sEmpId ||
-                            t.employee_employeeId === sEmpId
-                        );
-
-                        console.log("My tasks:", myTasks);
-
-                        const pending = myTasks.filter(t =>
-                            (t.status || "").toLowerCase() !== "completed"
-                        );
-
-                        const high = pending.filter(t =>
-                            (t.priority || "").toLowerCase() === "high").length;
-                        const medium = pending.filter(t =>
-                            (t.priority || "").toLowerCase() === "medium").length;
-                        const low = pending.filter(t =>
-                            (t.priority || "").toLowerCase() === "low").length;
-
-                        this._oDashModel.setProperty("/myTasks", {
-                            totalPending: pending.length,
-                            highPriorityCount: high,
-                            mediumPriorityCount: medium,
-                            lowPriorityCount: low
-                        });
-                    })
-                    .catch(err => {
-                        console.error("_loadMyTasks failed:", err);
-                        this._loadMyTasksFallback();
-                    })
-                    .finally(() => this._refreshDash());
-            } else {
-                this._loadMyTasksFallback();
-            }
-        },
-
-        _loadMyTasksFallback() {
-            this._callAction("getMyTasks")
-                .then(oData => {
-                    this._oDashModel.setProperty("/myTasks", {
-                        totalPending: oData.totalPending || 0,
-                        highPriorityCount: oData.highPriorityCount || 0,
-                        mediumPriorityCount: oData.mediumPriorityCount || 0,
-                        lowPriorityCount: oData.lowPriorityCount || 0
-                    });
-                })
-                .catch(() => {
-                    this._oDashModel.setProperty("/myTasks",
-                        {
-                            totalPending: 0, highPriorityCount: 0,
-                            mediumPriorityCount: 0, lowPriorityCount: 0
-                        });
-                })
-                .finally(() => this._refreshDash());
-        },
-
         // ─────────────────────────────────────────────────────────────────────
         // Loaders — new 4
         // ─────────────────────────────────────────────────────────────────────
@@ -1021,56 +949,57 @@ sap.ui.define([
             this._loadPerformanceTrend(parseInt(sYear, 10));
         },
 
+        _resyncTasksModel() {
+            try {
+                const raw = localStorage.getItem("tsTasks");
+                if (!raw) return;
+                const data = JSON.parse(raw);
+                const oModel = this.getOwnerComponent().getModel("tasks");
+                if (oModel) oModel.setData(data);
+            } catch (e) { /* silent */ }
+        },
+
         // Task Summary (reuses existing TaskMaster backend)
         _loadTaskSummary() {
-            const oComp = this.getOwnerComponent();
-            const oMgrModel = oComp.getModel("manager");  // ← manager model
-            const sEmpId = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
-
-            if (oMgrModel && sEmpId) {
-                oMgrModel.bindList("/Tasks", null, null, null, {
-                    $$groupId: "$direct"
+            // Call the CAP action — reads directly from DB, always fresh
+            this._callAction("getTaskSummary")
+                .then(oData => {
+                    this._oDashModel.setProperty("/taskSummary", {
+                        total: oData.total || 0,
+                        notStarted: oData.notStarted || 0,
+                        inProgress: oData.inProgress || 0,
+                        inReview: oData.inReview || 0,
+                        completed: oData.completed || 0
+                    });
                 })
-                    .requestContexts(0, 200)
-                    .then(aCtx => {
-                        const allTasks = aCtx.map(c => c.getObject()).filter(Boolean);
+                .catch(() => {
+                    this._oDashModel.setProperty("/taskSummary",
+                        { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 });
+                })
+                .finally(() => this._refreshDash());
+        },
 
-                        // Filter by this employee
-                        const myTasks = allTasks.filter(t =>
-                            t.assignedTo_employeeId === sEmpId ||
-                            t.assignedTo_ID === sEmpId ||
-                            t.employeeId === sEmpId ||
-                            t.employee_employeeId === sEmpId
-                        );
+        // Helper: count statuses and write to model
+        _applyTaskSummary(tasks) {
+            const n = (s) => (s || "").toLowerCase().trim();
 
-                        console.log("TaskSummary myTasks:", myTasks.map(t => ({
-                            status: t.status, priority: t.priority
-                        })));
+            const notStarted = tasks.filter(t =>
+                n(t.status) === "not started" ||
+                n(t.status) === "open" ||        // legacy value
+                n(t.status) === "pending"        // legacy value
+            ).length;
+            const inProgress = tasks.filter(t => n(t.status) === "in progress").length;
+            const inReview = tasks.filter(t => n(t.status) === "in review").length;
+            const completed = tasks.filter(t => n(t.status) === "completed").length;
 
-                        const normalize = (s) => (s || "").toLowerCase().trim();
-
-                        const notStarted = myTasks.filter(t =>
-                            normalize(t.status) === "not started").length;
-                        const inProgress = myTasks.filter(t =>
-                            normalize(t.status) === "in progress").length;
-                        const inReview = myTasks.filter(t =>
-                            normalize(t.status) === "in review").length;
-                        const completed = myTasks.filter(t =>
-                            normalize(t.status) === "completed").length;
-
-                        this._oDashModel.setProperty("/taskSummary", {
-                            total: myTasks.length,
-                            notStarted, inProgress, inReview, completed
-                        });
-                    })
-                    .catch(err => {
-                        console.error("_loadTaskSummary failed:", err);
-                        this._loadTaskSummaryFallback();
-                    })
-                    .finally(() => this._refreshDash());
-            } else {
-                this._loadTaskSummaryFallback();
-            }
+            this._oDashModel.setProperty("/taskSummary", {
+                total: tasks.length,
+                notStarted,
+                inProgress,
+                inReview,
+                completed
+            });
+            this._refreshDash();
         },
 
         _loadTaskSummaryFallback() {
@@ -1087,6 +1016,57 @@ sap.ui.define([
                 .catch(() => {
                     this._oDashModel.setProperty("/taskSummary",
                         { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 });
+                })
+                .finally(() => this._refreshDash());
+        },
+
+
+        // ── REPLACE _loadMyTasks() ────────────────────────────────────────────────────
+        _loadMyTasks() {
+            // Call the CAP action — reads directly from DB
+            this._callAction("getMyTasks")
+                .then(oData => {
+                    this._oDashModel.setProperty("/myTasks", {
+                        totalPending: oData.totalPending || 0,
+                        highPriorityCount: oData.highPriorityCount || 0,
+                        mediumPriorityCount: oData.mediumPriorityCount || 0,
+                        lowPriorityCount: oData.lowPriorityCount || 0
+                    });
+                })
+                .catch(() => {
+                    this._oDashModel.setProperty("/myTasks",
+                        { totalPending: 0, highPriorityCount: 0, mediumPriorityCount: 0, lowPriorityCount: 0 });
+                })
+                .finally(() => this._refreshDash());
+        },
+
+        // Helper: pending counts by priority
+        _applyMyTasks(tasks) {
+            const n = (s) => (s || "").toLowerCase().trim();
+            const pending = tasks.filter(t => n(t.status) !== "completed");
+
+            this._oDashModel.setProperty("/myTasks", {
+                totalPending: pending.length,
+                highPriorityCount: pending.filter(t => n(t.priority) === "high").length,
+                mediumPriorityCount: pending.filter(t => n(t.priority) === "medium").length,
+                lowPriorityCount: pending.filter(t => n(t.priority) === "low").length
+            });
+            this._refreshDash();
+        },
+
+        _loadMyTasksFallback() {
+            this._callAction("getMyTasks")
+                .then(oData => {
+                    this._oDashModel.setProperty("/myTasks", {
+                        totalPending: oData.totalPending || 0,
+                        highPriorityCount: oData.highPriorityCount || 0,
+                        mediumPriorityCount: oData.mediumPriorityCount || 0,
+                        lowPriorityCount: oData.lowPriorityCount || 0
+                    });
+                })
+                .catch(() => {
+                    this._oDashModel.setProperty("/myTasks",
+                        { totalPending: 0, highPriorityCount: 0, mediumPriorityCount: 0, lowPriorityCount: 0 });
                 })
                 .finally(() => this._refreshDash());
         },

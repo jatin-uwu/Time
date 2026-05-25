@@ -58,7 +58,7 @@
             type="Transparent"
             tooltip="Upload profile picture"
             press=".onUploadProfilePicture" />
-        <Avatar id="toolbarAvatar"
+        <Avatar id="userAvatar"
         src="{appView>/profilePhotoSrc}"
         initials="{= ${appView>/profilePhotoSrc} ? '' : (${appView>/userInitials} || 'JD') }"
         backgroundColor="{= ${appView>/profilePhotoSrc} ? 'Transparent' : 'Accent6' }"

@@ -1,2 +1,1 @@
-taskId,taskName,taskDescription,assignedTo_employeeId,priority,status,startDate,dueDate
-
+taskId, taskName, taskDescription, assignedTo_employeeId, priority, status, statusUpdatedAt, reviewer_employeeId, reviewerStatus, startDate, dueDate, attachmentName, attachmentMimeType, attachment, createdAt, modifiedAt, createdBy, modifiedBy

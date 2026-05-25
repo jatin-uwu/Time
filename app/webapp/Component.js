@@ -52,6 +52,16 @@ sap.ui.define([
         },
 
         // ── Demo seed (idempotent) ────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────────────
+        //  Component.js — PATCH for _seedDemoData()
+        //
+        //  Replace your existing _seedDemoData() method with this one.
+        //  Key changes:
+        //    1. Status values updated: "Open" → "Not Started", kept "In Progress", "Completed"
+        //    2. reviewer_employeeId and reviewerStatus fields added (null by default)
+        //    3. assignedTo_employeeId values preserved exactly as before so filtering works
+        // ─────────────────────────────────────────────────────────────────────────────
+
         _seedDemoData() {
             const oTasks = this.getModel("tasks");
             const oUpdates = this.getModel("taskUpdates");
@@ -64,9 +74,7 @@ sap.ui.define([
                 const day = String(d.getDate()).padStart(2, "0");
                 return `${d.getFullYear()}-${m}-${day}`;
             };
-            const addDays = (n) => {
-                const d = new Date(today); d.setDate(d.getDate() + n); return d;
-            };
+            const addDays = (n) => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
 
             const sampleText =
                 "Reference document for Dashboard Widget task\n" +
@@ -87,7 +95,9 @@ sap.ui.define([
                         "Use SAPUI5 sap.f cards and bind to the existing OData service. Make sure it works on tablet too.",
                     assignedTo_employeeId: "EMP1001",
                     priority: "High",
-                    status: "In Progress",
+                    status: "In Progress",       // was "In Progress" — unchanged
+                    reviewer_employeeId: null,
+                    reviewerStatus: null,
                     startDate: iso(addDays(-3)),
                     dueDate: iso(addDays(4)),
                     assignedOn: addDays(-3).toISOString(),
@@ -105,7 +115,9 @@ sap.ui.define([
                         "Include CSV seed data and write a basic integration test.",
                     assignedTo_employeeId: "EMP1001",
                     priority: "Medium",
-                    status: "Open",
+                    status: "Not Started",       // was "Open"
+                    reviewer_employeeId: null,
+                    reviewerStatus: null,
                     startDate: iso(today),
                     dueDate: iso(addDays(10)),
                     assignedOn: addDays(-1).toISOString(),
@@ -120,6 +132,8 @@ sap.ui.define([
                     assignedTo_employeeId: "EMP1002",
                     priority: "Medium",
                     status: "In Progress",
+                    reviewer_employeeId: null,
+                    reviewerStatus: null,
                     startDate: iso(addDays(-2)),
                     dueDate: iso(addDays(7)),
                     assignedOn: addDays(-2).toISOString(),
@@ -134,6 +148,8 @@ sap.ui.define([
                     assignedTo_employeeId: "EMP1003",
                     priority: "High",
                     status: "In Progress",
+                    reviewer_employeeId: null,
+                    reviewerStatus: null,
                     startDate: iso(addDays(-5)),
                     dueDate: iso(addDays(2)),
                     assignedOn: addDays(-5).toISOString(),
@@ -148,7 +164,9 @@ sap.ui.define([
                         "case study from Acme Corp. Final version due before the regional review.",
                     assignedTo_employeeId: "EMP1003",
                     priority: "Low",
-                    status: "Open",
+                    status: "Not Started",       // was "Open"
+                    reviewer_employeeId: null,
+                    reviewerStatus: null,
                     startDate: iso(today),
                     dueDate: iso(addDays(14)),
                     assignedOn: today.toISOString(),
@@ -163,6 +181,8 @@ sap.ui.define([
                     assignedTo_employeeId: "EMP1004",
                     priority: "High",
                     status: "Completed",
+                    reviewer_employeeId: null,
+                    reviewerStatus: null,
                     startDate: iso(addDays(-10)),
                     dueDate: iso(addDays(-1)),
                     assignedOn: addDays(-10).toISOString(),
@@ -177,7 +197,9 @@ sap.ui.define([
                         "summary to share with HR.",
                     assignedTo_employeeId: "EMP1004",
                     priority: "Medium",
-                    status: "Open",
+                    status: "Not Started",       // was "Open"
+                    reviewer_employeeId: null,
+                    reviewerStatus: null,
                     startDate: iso(today),
                     dueDate: iso(addDays(5)),
                     assignedOn: today.toISOString(),
@@ -185,79 +207,56 @@ sap.ui.define([
                 }
             ];
 
+            // ── Task updates (unchanged) ────────────────────────────────────────────
             const updates = {
                 "TASK001": [
                     {
-                        updateId: "TASK001-U001",
-                        task_taskId: "TASK001",
+                        updateId: "TASK001-U001", task_taskId: "TASK001",
                         updateDate: iso(addDays(-2)),
                         notes: "Set up the widget skeleton, wired the OData binding for weekly hours and validated the model in the dev console.",
-                        attachmentName: "",
-                        attachmentMimeType: "",
-                        attachmentDataUrl: "",
-                        updatedBy_employeeId: "EMP1001",
-                        createdAt: addDays(-2).toISOString()
+                        attachmentName: "", attachmentMimeType: "", attachmentDataUrl: "",
+                        updatedBy_employeeId: "EMP1001", createdAt: addDays(-2).toISOString()
                     },
                     {
-                        updateId: "TASK001-U002",
-                        task_taskId: "TASK001",
+                        updateId: "TASK001-U002", task_taskId: "TASK001",
                         updateDate: iso(addDays(-1)),
                         notes: "Implemented the bar chart and applied the design tokens. Tablet layout still has a small overflow that I'll fix tomorrow.",
-                        attachmentName: "",
-                        attachmentMimeType: "",
-                        attachmentDataUrl: "",
-                        updatedBy_employeeId: "EMP1001",
-                        createdAt: addDays(-1).toISOString()
+                        attachmentName: "", attachmentMimeType: "", attachmentDataUrl: "",
+                        updatedBy_employeeId: "EMP1001", createdAt: addDays(-1).toISOString()
                     }
                 ],
                 "TASK003": [
                     {
-                        updateId: "TASK003-U001",
-                        task_taskId: "TASK003",
+                        updateId: "TASK003-U001", task_taskId: "TASK003",
                         updateDate: iso(addDays(-1)),
                         notes: "Drafted the onboarding checklist covering laptop, badge, and account setup. Shared with HR for review.",
-                        attachmentName: "",
-                        attachmentMimeType: "",
-                        attachmentDataUrl: "",
-                        updatedBy_employeeId: "EMP1002",
-                        createdAt: addDays(-1).toISOString()
+                        attachmentName: "", attachmentMimeType: "", attachmentDataUrl: "",
+                        updatedBy_employeeId: "EMP1002", createdAt: addDays(-1).toISOString()
                     }
                 ],
                 "TASK004": [
                     {
-                        updateId: "TASK004-U001",
-                        task_taskId: "TASK004",
+                        updateId: "TASK004-U001", task_taskId: "TASK004",
                         updateDate: iso(addDays(-3)),
                         notes: "Spoke to 5 of the 12 leads. Two are hot — booking a manager call for next week. Three asked for follow-up next month.",
-                        attachmentName: "",
-                        attachmentMimeType: "",
-                        attachmentDataUrl: "",
-                        updatedBy_employeeId: "EMP1003",
-                        createdAt: addDays(-3).toISOString()
+                        attachmentName: "", attachmentMimeType: "", attachmentDataUrl: "",
+                        updatedBy_employeeId: "EMP1003", createdAt: addDays(-3).toISOString()
                     },
                     {
-                        updateId: "TASK004-U002",
-                        task_taskId: "TASK004",
+                        updateId: "TASK004-U002", task_taskId: "TASK004",
                         updateDate: iso(today),
                         notes: "Hot leads confirmed for the manager call. Sent the briefing pack and updated CRM with discovery notes.",
-                        attachmentName: "",
-                        attachmentMimeType: "",
-                        attachmentDataUrl: "",
-                        updatedBy_employeeId: "EMP1003",
-                        createdAt: today.toISOString()
+                        attachmentName: "", attachmentMimeType: "", attachmentDataUrl: "",
+                        updatedBy_employeeId: "EMP1003", createdAt: today.toISOString()
                     }
                 ],
                 "TASK006": [
                     {
-                        updateId: "TASK006-U001",
-                        task_taskId: "TASK006",
+                        updateId: "TASK006-U001", task_taskId: "TASK006",
                         updateDate: iso(addDays(-2)),
                         notes: "Reconciliation complete. Summary report drafted and saved to the shared drive. Ready for review.",
-                        attachmentName: "",
-                        attachmentMimeType: "",
-                        attachmentDataUrl: "",
-                        updatedBy_employeeId: "EMP1004",
-                        createdAt: addDays(-2).toISOString()
+                        attachmentName: "", attachmentMimeType: "", attachmentDataUrl: "",
+                        updatedBy_employeeId: "EMP1004", createdAt: addDays(-2).toISOString()
                     }
                 ]
             };
@@ -266,6 +265,40 @@ sap.ui.define([
             oUpdates.setProperty("/byTaskId", updates);
             this.persistTasks();
             this.persistTaskUpdates();
+        },
+
+        _updateDashboardTaskSummary() {
+            const sEmpId = this.getCurrentEmployeeId();
+            const items = (this.getModel("tasks").getProperty("/items")) || [];
+
+            const n = s => (s || "").toLowerCase().trim();
+            const mine = items.filter(t => {
+                const a = t.assignedTo_employeeId ||
+                    (t.assignedTo && t.assignedTo.employeeId) || t.assignedTo;
+                const r = t.reviewer_employeeId ||
+                    (t.reviewer && t.reviewer.employeeId) || t.reviewer;
+                return !sEmpId || a === sEmpId || r === sEmpId;
+            });
+
+            // Store summary on Component so dashboard picks it up on route match
+            this._cachedTaskSummary = {
+                total: mine.length,
+                notStarted: mine.filter(t => n(t.status) === "not started" || n(t.status) === "open").length,
+                inProgress: mine.filter(t => n(t.status) === "in progress").length,
+                inReview: mine.filter(t => n(t.status) === "in review").length,
+                completed: mine.filter(t => n(t.status) === "completed").length
+            };
+
+            // If dashboard view is already alive, update it immediately
+            try {
+                sap.ui.getCore().getStaticAreaRef(); // just a no-op to gate the try
+                sap.ui.getCore().byId && Object.values(sap.ui.getCore().mObjects?.view || {})
+                    .filter(v => v.getControllerName && v.getControllerName().includes("Dashboard"))
+                    .forEach(v => {
+                        const dash = v.getModel && v.getModel("dash");
+                        if (dash) dash.setProperty("/taskSummary", this._cachedTaskSummary);
+                    });
+            } catch (e) { }
         },
 
         // ── Current user identity ─────────────────────────────────────────

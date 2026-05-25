@@ -9,6 +9,7 @@
     "@sap/cds": "^9",
     "@sap/xssec": "^4",
     "google-auth-library": "^10.6.2",
+    "node-cron": "^4.2.1",
     "node-fetch": "^3.3.2",
     "nodemailer": "^8.0.7"
   },
@@ -100,6 +101,19 @@
             }
           }
         }
+      }
+    },
+    "server": {
+      "bodyParser": {
+        "limit": "10mb",
+        "type": [
+          "application/json",
+          "text/plain",
+          "*/*"
+        ]
+      },
+      "body-parser": {
+        "limit": "5mb"
       }
     }
   }

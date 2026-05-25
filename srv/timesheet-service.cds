@@ -91,15 +91,28 @@ service EmployeeService @(path: '/employee') {
 
 
     @(requires: 'authenticated-user')
-    action uploadProfilePhoto(dataBase64: LargeString) returns {
+    action uploadProfilePhoto(dataBase64: LargeString)                     returns {
         success : Boolean;
         message : String;
     };
 
     @(requires: 'authenticated-user')
-    action getProfilePhoto() returns {
+    action getProfilePhoto()                                               returns {
         dataBase64 : LargeString;
         mimeType   : String(100);
+    };
+
+    @(requires: [
+        'Employee',
+        'HR', 
+        'Manager'
+    ])
+    action updateTaskStatus(taskId: String(10),
+                            status: String(20),
+                            reviewerId: String(10),
+                            reviewerStatus: String(20))                    returns {
+        taskId : String(10);
+        status : String(20);
     };
 
     // ── Leave ────────────────────────────────────────────────────────

@@ -70,6 +70,9 @@ entity TaskMaster : managed {
     assignedTo         : Association to EmployeeMaster;
     priority           : String(20);
     status             : String(20);
+    statusUpdatedAt    : Timestamp;
+    reviewer           : Association to EmployeeMaster;   // who reviews
+    reviewerStatus     : String(20);
     startDate          : Date;
     dueDate            : Date;
 
