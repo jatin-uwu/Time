@@ -95,9 +95,12 @@ sap.ui.define([
         },
 
         _merge(local, remote) {
+            // Remote (DB) wins on conflict — same reasoning as
+            // TaskDescription._mergeTasks. Local entries only survive when
+            // remote doesn't have them (offline / first-render case).
             const map = new Map();
-            (remote || []).forEach(t => map.set(t.taskId, t));
-            (local  || []).forEach(t => map.set(t.taskId, t));
+            (local  || []).forEach(t => { if (t && t.taskId) map.set(t.taskId, t); });
+            (remote || []).forEach(t => { if (t && t.taskId) map.set(t.taskId, t); });
             return Array.from(map.values());
         },
 

@@ -7,19 +7,26 @@
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
-    <Page id="allEmpPage" title="All Employees" class="tsHrPage" showNavButton="false">
+    <Page id="allEmpPage" showHeader="false" class="tsHrPage">
         <content>
 
-            <!-- ── Toolbar with search + count + refresh ── -->
-            <Toolbar class="sapUiSmallMargin">
-                <Title text="Directory · {emp>/items/length} employees" level="H4" />
-                <ToolbarSpacer />
-                <SearchField id="empSearch"
-                             placeholder="Search by name, email, ID, dept..."
-                             liveChange=".onSearch"
-                             width="320px" />
-                <Button icon="sap-icon://add-employee" text="Add" type="Emphasized" press=".onAdd" />
-            </Toolbar>
+            <!-- ── Unified page header with search + add ── -->
+            <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone" alignItems="Center" justifyContent="SpaceBetween">
+                <HBox alignItems="Center">
+                    <core:Icon src="sap-icon://employee" class="tsPageHeaderIcon" style="color:#ffffff;font-size:1.25rem;" />
+                    <Text text="Directory · {emp>/items/length} employees"
+                          style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                </HBox>
+                <HBox alignItems="Center">
+                    <SearchField id="empSearch"
+                                 placeholder="Search by name, email, ID, dept..."
+                                 liveChange=".onSearch"
+                                 width="280px"
+                                 class="tsTeamAttSearch" />
+                    <Button icon="sap-icon://add-employee" text="Add" type="Emphasized"
+                            press=".onAdd" class="sapUiTinyMarginBegin tsTeamAttExportBtn" />
+                </HBox>
+            </HBox>
 
             <!-- ── Master/Detail split: list on the left, profile pane on the right ── -->
             <l:Splitter class="sapUiResponsiveMargin" height="calc(100vh - 200px)">

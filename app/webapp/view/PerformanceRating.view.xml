@@ -6,144 +6,140 @@
     xmlns:f="sap.f"
     displayBlock="true">
 
-    <Page id="perfRatingPage"
-          title="Performance Rating and Feedback"
-          showHeader="true"
-          showNavButton="false">
+    <Page id="perfRatingPage" showHeader="false">
 
         <content>
-            <VBox style="padding:1.5rem;gap:1rem;">
+            <VBox class="tsPerfWrap">
 
-                <!-- Header -->
-                <HBox justifyContent="SpaceBetween" alignItems="Center"
-                      style="margin-bottom:1rem;">
-                    <VBox>
-                        <Text text="Rate your team members monthly performance"
-                              style="font-size:1.20rem;color:#6b7280;margin-top:200px;"/>
-                    </VBox>
+                <!-- ── Blue page header ───────────────────────────────── -->
+                <HBox class="tsPageHeaderCard" alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center">
+                        <core:Icon src="sap-icon://survey" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                        <Text text="Performance Rating"
+                              style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                    </HBox>
+                    <Text text="Rate your team members' monthly performance"
+                          class="tsPerfHeaderSub"
+                          style="color:rgba(255,255,255,0.75);font-size:0.84rem;" />
                 </HBox>
 
-                <!-- Rating Form Card -->
-                <VBox style="background:#fff;border-radius:12px;
-                             box-shadow:0 2px 12px rgba(0,0,0,0.08);
-                             padding:24px;box-sizing:border-box;">
+                <!-- ── Two-panel layout: form left, history right ─────── -->
+                <HBox class="tsPerfLayout" alignItems="Start">
 
-                    <Title text="Add Rating"
-                           level="H2"
-                           style="font-size:50rem;font-weight:600;
-                                  color:#111827;margin-bottom:20px;"/>
+                    <!-- ── Left: Add Rating form ── -->
+                    <VBox class="tsPerfFormCard">
 
-                    <!-- Employee Selection -->
-                    <VBox style="margin-bottom:16px;">
-                        <Label text="Select Employee" required="true"
-                               style="font-size:0.85rem;font-weight:600;
-                                      color:#374151;margin-bottom:6px;"/>
-                        <Select id="empSelect"
-                                width="100%"
-                                change=".onEmployeeChange"
-                                forceSelection="false">
-                            <core:Item key="" text="-- Select Employee --"/>
-                        </Select>
+                        <HBox alignItems="Center" class="tsPerfSectionHead">
+                            <core:Icon src="sap-icon://add-activity" class="tsPerfSectionIcon" />
+                            <Title text="Add / Update Rating" level="H5"
+                                   class="sapUiSmallMarginBegin tsPerfSectionTitle" />
+                        </HBox>
+
+                        <!-- Employee -->
+                        <VBox class="tsPerfFieldGroup">
+                            <Label text="Select Employee" required="true" class="tsPerfLabel" />
+                            <Select id="empSelect"
+                                    width="100%"
+                                    change=".onEmployeeChange"
+                                    forceSelection="false">
+                                <core:Item key="" text="— Select Employee —"/>
+                            </Select>
+                        </VBox>
+
+                        <!-- Month + Year -->
+                        <HBox style="gap:12px;margin-bottom:16px;">
+                            <VBox style="flex:1;">
+                                <Label text="Month" required="true" class="tsPerfLabel" />
+                                <Select id="monthSelect" width="100%">
+                                    <core:Item key="1"  text="January"/>
+                                    <core:Item key="2"  text="February"/>
+                                    <core:Item key="3"  text="March"/>
+                                    <core:Item key="4"  text="April"/>
+                                    <core:Item key="5"  text="May"/>
+                                    <core:Item key="6"  text="June"/>
+                                    <core:Item key="7"  text="July"/>
+                                    <core:Item key="8"  text="August"/>
+                                    <core:Item key="9"  text="September"/>
+                                    <core:Item key="10" text="October"/>
+                                    <core:Item key="11" text="November"/>
+                                    <core:Item key="12" text="December"/>
+                                </Select>
+                            </VBox>
+                            <VBox style="flex:1;">
+                                <Label text="Year" required="true" class="tsPerfLabel" />
+                                <Select id="yearSelect" width="100%">
+                                    <core:Item key="2024" text="2024"/>
+                                    <core:Item key="2025" text="2025"/>
+                                    <core:Item key="2026" text="2026"/>
+                                </Select>
+                            </VBox>
+                        </HBox>
+
+                        <!-- Rating slider -->
+                        <VBox class="tsPerfFieldGroup">
+                            <Label text="Rating (1.0 – 5.0)" required="true" class="tsPerfLabel" />
+                            <Slider id="ratingSlider"
+                                    min="1" max="5" step="0.1"
+                                    value="{perfRating>/form/ratingValue}"
+                                    liveChange=".onRatingChange"
+                                    width="100%"
+                                    enableTickmarks="true"/>
+                            <VBox class="tsPerfRatingDisplay">
+                                <core:HTML id="starsDisplay"
+                                           sanitizeContent="false"
+                                           content="{perfRating>/form/starsHTML}"/>
+                                <Text text="{perfRating>/form/ratingLabel}"
+                                      class="tsPerfRatingLabel" />
+                            </VBox>
+                        </VBox>
+
+                        <!-- Comment -->
+                        <VBox class="tsPerfFieldGroup">
+                            <Label text="Review Comment" class="tsPerfLabel" />
+                            <TextArea id="commentArea"
+                                      value="{perfRating>/form/comment}"
+                                      placeholder="Enter your performance review comments..."
+                                      rows="4"
+                                      width="100%"
+                                      maxLength="500"/>
+                        </VBox>
+
+                        <!-- Submit -->
+                        <HBox justifyContent="End">
+                            <Button text="Submit Rating"
+                                    type="Emphasized"
+                                    icon="sap-icon://paper-plane"
+                                    press=".onSubmitRating"
+                                    class="tsPerfSubmitBtn" />
+                        </HBox>
+
                     </VBox>
 
-                    <!-- Month and Year row -->
-                    <HBox style="gap:16px;margin-bottom:16px;">
-                        <VBox style="flex:1;">
-                            <Label text="Month" required="true"
-                                   style="font-size:0.85rem;font-weight:600;
-                                          color:#374151;margin-bottom:6px;"/>
-                            <Select id="monthSelect" width="100%">
-                                <core:Item key="1"  text="January"/>
-                                <core:Item key="2"  text="February"/>
-                                <core:Item key="3"  text="March"/>
-                                <core:Item key="4"  text="April"/>
-                                <core:Item key="5"  text="May"/>
-                                <core:Item key="6"  text="June"/>
-                                <core:Item key="7"  text="July"/>
-                                <core:Item key="8"  text="August"/>
-                                <core:Item key="9"  text="September"/>
-                                <core:Item key="10" text="October"/>
-                                <core:Item key="11" text="November"/>
-                                <core:Item key="12" text="December"/>
-                            </Select>
-                        </VBox>
-                        <VBox style="flex:1;">
-                            <Label text="Year" required="true"
-                                   style="font-size:0.85rem;font-weight:600;
-                                          color:#374151;margin-bottom:6px;"/>
-                            <Select id="yearSelect" width="100%">
-                                <core:Item key="2024" text="2024"/>
-                                <core:Item key="2025" text="2025"/>
-                                <core:Item key="2026" text="2026"/>
-                            </Select>
-                        </VBox>
-                    </HBox>
+                    <!-- ── Right: Rating History ── -->
+                    <VBox class="tsPerfHistCard">
 
-                    <!-- Rating Input -->
-                    <VBox style="margin-bottom:16px;">
-                        <Label text="Rating (1.0 - 5.0)" required="true"
-                               style="font-size:0.85rem;font-weight:600;
-                                      color:#374151;margin-bottom:6px;"/>
-                        <Slider id="ratingSlider"
-                                min="1" max="5" step="0.1"
-                                value="{perfRating>/form/ratingValue}"
-                                liveChange=".onRatingChange"
-                                width="100%"
-                                enableTickmarks="true"/>
-                        <!-- Star display -->
-                        <core:HTML id="starsDisplay"
+                        <HBox alignItems="Center" justifyContent="SpaceBetween"
+                              class="tsPerfSectionHead">
+                            <HBox alignItems="Center">
+                                <core:Icon src="sap-icon://history" class="tsPerfSectionIcon" />
+                                <Title text="Rating History" level="H5"
+                                       class="sapUiSmallMarginBegin tsPerfSectionTitle" />
+                            </HBox>
+                            <Select id="historyEmpSelect"
+                                    width="200px"
+                                    change=".onHistoryEmployeeChange"
+                                    forceSelection="false">
+                                <core:Item key="" text="All Employees"/>
+                            </Select>
+                        </HBox>
+
+                        <core:HTML id="ratingsTableHTML"
                                    sanitizeContent="false"
-                                   content="{perfRating>/form/starsHTML}"/>
-                        <Text text="{perfRating>/form/ratingLabel}"
-                              style="font-size:1.1rem;font-weight:700;
-                                     color:#3b82f6;margin-top:4px;"/>
+                                   content="{perfRating>/ratingsTableHTML}"/>
+
                     </VBox>
 
-                    <!-- Comment -->
-                    <VBox style="margin-bottom:20px;">
-                        <Label text="Review Comment"
-                               style="font-size:0.85rem;font-weight:600;
-                                      color:#374151;margin-bottom:6px;"/>
-                        <TextArea id="commentArea"
-                                  value="{perfRating>/form/comment}"
-                                  placeholder="Enter performance review comments..."
-                                  rows="4"
-                                  width="100%"
-                                  maxLength="500"/>
-                    </VBox>
-
-                    <!-- Submit Button -->
-                    <HBox justifyContent="End">
-                        <Button text="Submit Rating"
-                                type="Emphasized"
-                                press=".onSubmitRating"
-                                style="border-radius:8px;"/>
-                    </HBox>
-
-                </VBox>
-
-                <!-- Ratings History Table -->
-                <VBox style="margin:0 1.5rem 1.5rem;background:#fff;border-radius:12px;
-                         box-shadow:0 2px 12px rgba(0,0,0,0.08);
-                         padding:28px;box-sizing:border-box;">
-
-                <HBox justifyContent="SpaceBetween" alignItems="Center"
-                      style="margin-bottom:20px;">
-                    <Title text="Rating History" level="H4"
-                           style="font-size:1.1rem;font-weight:700;color:#111827;"/>
-                    <Select id="historyEmpSelect"
-                            width="220px"
-                            change=".onHistoryEmployeeChange"
-                            forceSelection="false">
-                        <core:Item key="" text="All Employees"/>
-                    </Select>
                 </HBox>
-
-                <core:HTML id="ratingsTableHTML"
-                           sanitizeContent="false"
-                           content="{perfRating>/ratingsTableHTML}"/>
-
-            </VBox>
 
             </VBox>
         </content>

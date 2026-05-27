@@ -66,7 +66,25 @@ sap.ui.define([
             const oTasks = this.getModel("tasks");
             const oUpdates = this.getModel("taskUpdates");
 
-            if ((oTasks.getProperty("/items") || []).length > 0) return;
+            // ── Task seeding moved to the DATABASE ────────────────────────
+            // Originally we seeded TASK001–TASK007 into every user's
+            // localStorage. That caused a hard-to-spot bug: when one user
+            // assigned a reviewer to a task, the reviewer's stale local
+            // copy (with no reviewer) silently overrode the fresh remote
+            // row, so the task never appeared on the reviewer's list.
+            //
+            // The same tasks now live in the TaskMaster CSV
+            // (db/data/...-TaskMaster.csv) and are loaded by `cds deploy`,
+            // so every browser sees the same authoritative state from
+            // /MyTasks. We keep _seedDemoData around only for the
+            // taskUpdates seeds (display-only progress notes); the
+            // `tasks` model starts empty and is filled from the backend.
+            if ((oTasks.getProperty("/items") || []).length > 0) {
+                // Clear any legacy localStorage seed from older sessions —
+                // remote is now the source of truth.
+                oTasks.setProperty("/items", []);
+                this.persistTasks();
+            }
 
             const today = new Date();
             const iso = (d) => {
@@ -76,138 +94,7 @@ sap.ui.define([
             };
             const addDays = (n) => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
 
-            const sampleText =
-                "Reference document for Dashboard Widget task\n" +
-                "===========================================\n" +
-                "1. Component path: app/webapp/controller/Dashboard.controller.js\n" +
-                "2. Bind the widget to the OData '/MyTimesheets' entity.\n" +
-                "3. Use sap.f cards with the design tokens listed in the spec.\n" +
-                "4. Match the mockup attached in the project Wiki.\n";
-            const sampleDataUrl = "data:text/plain;base64," +
-                (typeof btoa === "function" ? btoa(sampleText) : "");
-
-            const tasks = [
-                {
-                    taskId: "TASK001",
-                    taskName: "Build dashboard widget",
-                    taskDescription:
-                        "Create a reusable widget for the manager dashboard that shows weekly hours per project.\n" +
-                        "Use SAPUI5 sap.f cards and bind to the existing OData service. Make sure it works on tablet too.",
-                    assignedTo_employeeId: "EMP1001",
-                    priority: "High",
-                    status: "In Progress",       // was "In Progress" — unchanged
-                    reviewer_employeeId: null,
-                    reviewerStatus: null,
-                    startDate: iso(addDays(-3)),
-                    dueDate: iso(addDays(4)),
-                    assignedOn: addDays(-3).toISOString(),
-                    createdAt: addDays(-3).toISOString(),
-                    statusUpdatedAt: addDays(-1).toISOString(),
-                    attachmentName: "dashboard-widget-spec.txt",
-                    attachmentMimeType: "text/plain",
-                    attachmentDataUrl: sampleDataUrl
-                },
-                {
-                    taskId: "TASK002",
-                    taskName: "CAP backend extension",
-                    taskDescription:
-                        "Add a new OData entity for ProjectAllocation and expose it through the EmployeeService.\n" +
-                        "Include CSV seed data and write a basic integration test.",
-                    assignedTo_employeeId: "EMP1001",
-                    priority: "Medium",
-                    status: "Not Started",       // was "Open"
-                    reviewer_employeeId: null,
-                    reviewerStatus: null,
-                    startDate: iso(today),
-                    dueDate: iso(addDays(10)),
-                    assignedOn: addDays(-1).toISOString(),
-                    createdAt: addDays(-1).toISOString()
-                },
-                {
-                    taskId: "TASK003",
-                    taskName: "HR onboarding checklist",
-                    taskDescription:
-                        "Prepare an onboarding checklist for new hires covering laptop setup, ID card, account creation,\n" +
-                        "and the first-week orientation. Share the draft with the team for review.",
-                    assignedTo_employeeId: "EMP1002",
-                    priority: "Medium",
-                    status: "In Progress",
-                    reviewer_employeeId: null,
-                    reviewerStatus: null,
-                    startDate: iso(addDays(-2)),
-                    dueDate: iso(addDays(7)),
-                    assignedOn: addDays(-2).toISOString(),
-                    createdAt: addDays(-2).toISOString()
-                },
-                {
-                    taskId: "TASK004",
-                    taskName: "Client follow-up — Q2 leads",
-                    taskDescription:
-                        "Reach out to the 12 Q2 leads from last quarter's campaign. Capture interest level and next-step\n" +
-                        "actions in the CRM. Flag any hot leads that need a manager call.",
-                    assignedTo_employeeId: "EMP1003",
-                    priority: "High",
-                    status: "In Progress",
-                    reviewer_employeeId: null,
-                    reviewerStatus: null,
-                    startDate: iso(addDays(-5)),
-                    dueDate: iso(addDays(2)),
-                    assignedOn: addDays(-5).toISOString(),
-                    createdAt: addDays(-5).toISOString(),
-                    statusUpdatedAt: addDays(-1).toISOString()
-                },
-                {
-                    taskId: "TASK005",
-                    taskName: "Sales deck refresh",
-                    taskDescription:
-                        "Refresh the Q3 sales deck — update revenue numbers, refresh customer logos, and add the new\n" +
-                        "case study from Acme Corp. Final version due before the regional review.",
-                    assignedTo_employeeId: "EMP1003",
-                    priority: "Low",
-                    status: "Not Started",       // was "Open"
-                    reviewer_employeeId: null,
-                    reviewerStatus: null,
-                    startDate: iso(today),
-                    dueDate: iso(addDays(14)),
-                    assignedOn: today.toISOString(),
-                    createdAt: today.toISOString()
-                },
-                {
-                    taskId: "TASK006",
-                    taskName: "Quarter-end reconciliation",
-                    taskDescription:
-                        "Reconcile vendor invoices for the quarter, post the missing journal entries, and prepare a short\n" +
-                        "summary report for the finance review meeting on Friday.",
-                    assignedTo_employeeId: "EMP1004",
-                    priority: "High",
-                    status: "Completed",
-                    reviewer_employeeId: null,
-                    reviewerStatus: null,
-                    startDate: iso(addDays(-10)),
-                    dueDate: iso(addDays(-1)),
-                    assignedOn: addDays(-10).toISOString(),
-                    createdAt: addDays(-10).toISOString(),
-                    statusUpdatedAt: addDays(-1).toISOString()
-                },
-                {
-                    taskId: "TASK007",
-                    taskName: "Expense audit",
-                    taskDescription:
-                        "Audit travel expenses for March and April. Flag anything above policy and prepare the variance\n" +
-                        "summary to share with HR.",
-                    assignedTo_employeeId: "EMP1004",
-                    priority: "Medium",
-                    status: "Not Started",       // was "Open"
-                    reviewer_employeeId: null,
-                    reviewerStatus: null,
-                    startDate: iso(today),
-                    dueDate: iso(addDays(5)),
-                    assignedOn: today.toISOString(),
-                    createdAt: today.toISOString()
-                }
-            ];
-
-            // ── Task updates (unchanged) ────────────────────────────────────────────
+            // ── Task updates (display-only progress notes) ──────────────────────────
             const updates = {
                 "TASK001": [
                     {
@@ -261,9 +148,10 @@ sap.ui.define([
                 ]
             };
 
-            oTasks.setProperty("/items", tasks);
+            // NOTE: tasks intentionally NOT written to the model — they
+            // live in the database now (see TaskMaster CSV). Only
+            // taskUpdates (display-only progress notes) are still seeded.
             oUpdates.setProperty("/byTaskId", updates);
-            this.persistTasks();
             this.persistTaskUpdates();
         },
 

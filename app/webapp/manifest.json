@@ -45,6 +45,11 @@
                 "sap.uxap":       {}
             }
         },
+        "resources": {
+            "css": [
+                { "uri": "css/style.css" }
+            ]
+        },
         "models": {
             "": {
                 "dataSource":  "TimesheetService",
@@ -110,7 +115,8 @@
                 { "name": "all-employees", "pattern": "all-employees", "target": "all-employees" },
                 { "name": "apply-leave", "pattern": "apply-leave", "target": "apply-leave" },
                 { "name": "leave-approvals", "pattern": "leave-approvals", "target": "leave-approvals" },
-                { "name": "performance-rating", "pattern": "performance-rating", "target": "performance-rating" }
+                { "name": "performance-rating", "pattern": "performance-rating", "target": "performance-rating" },
+                { "name": "team-attendance", "pattern": "team-attendance", "target": "team-attendance" }
             ],
             "targets": {
                 "dashboard":     { "viewName": "Dashboard"     },
@@ -126,7 +132,8 @@
                 "all-employees": { "viewName": "AllEmployees"},
                 "apply-leave": { "viewName": "ApplyLeave" },
                 "leave-approvals":{ "viewName": "LeaveApprovals"},
-                "performance-rating": { "viewName": "PerformanceRating" }
+                "performance-rating": { "viewName": "PerformanceRating" },
+                "team-attendance": { "viewName": "TeamAttendance" }
             }
         }
     }

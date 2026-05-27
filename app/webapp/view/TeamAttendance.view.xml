@@ -1,0 +1,139 @@
+<mvc:View
+    controllerName="timesheet.app.controller.TeamAttendance"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="teamAttPage"
+          showHeader="false"
+          class="tsTeamAttPage"
+          enableScrolling="true">
+
+        <content>
+
+            <VBox class="tsTeamAttWrap">
+
+                <!-- ── Header band (back + title + search + export) ──────── -->
+                <HBox class="tsTeamAttHeader" alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center" class="tsTeamAttTitleBox">
+                        <!-- <Button icon="sap-icon://nav-back"
+                                type="Transparent"
+                                press=".onNavBack"
+                                tooltip="Back to dashboard"
+                                class="tsTeamAttBackBtn" /> -->
+                        <core:Icon src="sap-icon://employee-pane" class="tsTeamAttTitleIcon" />
+                        <Title text="My team attendance" level="H4" class="sapUiSmallMarginBegin tsTeamAttTitle" />
+                    </HBox>
+
+                    <SearchField placeholder="Search for employee name"
+                                 liveChange=".onSearch"
+                                 width="320px"
+                                 class="tsTeamAttSearch" />
+
+                    <Button text="Export"
+                            icon="sap-icon://excel-attachment"
+                            press=".onExport"
+                            class="tsTeamAttExportBtn" />
+                </HBox>
+
+                <!-- ── Month navigation ───────────────────────────────────── -->
+                <HBox class="tsTeamAttMonthNav" alignItems="Center" justifyContent="Center">
+                    <Button icon="sap-icon://navigation-left-arrow"
+                            type="Default"
+                            press=".onPrevMonth"
+                            tooltip="Previous month"
+                            class="tsTeamAttArrowBtn" />
+                    <core:Icon src="sap-icon://appointment-2" class="tsTeamAttMonthIcon" />
+                    <Text text="{tav>/monthLabel}" class="tsTeamAttMonthLabel" />
+                    <Button icon="sap-icon://navigation-right-arrow"
+                            type="Default"
+                            press=".onNextMonth"
+                            tooltip="Next month"
+                            class="tsTeamAttArrowBtn" />
+                </HBox>
+
+                <!-- ── Legend ─────────────────────────────────────────────── -->
+                <HBox class="tsTeamAttLegend" alignItems="Center" wrap="Wrap">
+                    <HBox alignItems="Center" class="tsTeamAttLegendItem">
+                        <core:HTML content="&lt;span class='tsAttCellLg tsAtt-P'&gt;P&lt;/span&gt;" />
+                        <Text text="Present" class="sapUiTinyMarginBegin" />
+                    </HBox>
+                    <HBox alignItems="Center" class="tsTeamAttLegendItem">
+                        <core:HTML content="&lt;span class='tsAttCellLg tsAtt-A'&gt;A&lt;/span&gt;" />
+                        <Text text="Absent" class="sapUiTinyMarginBegin" />
+                    </HBox>
+                    <HBox alignItems="Center" class="tsTeamAttLegendItem">
+                        <core:HTML content="&lt;span class='tsAttCellLg tsAtt-H'&gt;H&lt;/span&gt;" />
+                        <Text text="Holiday" class="sapUiTinyMarginBegin" />
+                    </HBox>
+                    <HBox alignItems="Center" class="tsTeamAttLegendItem">
+                        <core:HTML content="&lt;span class='tsAttCellLg tsAtt-CL'&gt;CL&lt;/span&gt;" />
+                        <Text text="Casual Leave" class="sapUiTinyMarginBegin" />
+                    </HBox>
+                    <HBox alignItems="Center" class="tsTeamAttLegendItem">
+                        <core:HTML content="&lt;span class='tsAttCellLg tsAtt-SL'&gt;SL&lt;/span&gt;" />
+                        <Text text="Sick Leave" class="sapUiTinyMarginBegin" />
+                    </HBox>
+                    <HBox alignItems="Center" class="tsTeamAttLegendItem">
+                        <core:HTML content="&lt;span class='tsAttCellLg tsAtt-PL'&gt;PL&lt;/span&gt;" />
+                        <Text text="Paid Leave" class="sapUiTinyMarginBegin" />
+                    </HBox>
+                    <HBox alignItems="Center" class="tsTeamAttLegendItem">
+                        <core:HTML content="&lt;span class='tsAttCellLg tsAtt-W'&gt;&lt;/span&gt;" />
+                        <Text text="Weekend" class="sapUiTinyMarginBegin" />
+                    </HBox>
+                </HBox>
+
+                <!-- ── Empty state ────────────────────────────────────────── -->
+                <VBox visible="{= !${tav>/loading} &amp;&amp; ${tav>/totalCount} === 0 }"
+                      class="tsTeamAttEmpty"
+                      alignItems="Center">
+                    <core:Icon src="sap-icon://employee" size="3rem" color="#9ca3af" />
+                    <Text text="No employees report to you yet."
+                          class="sapUiSmallMarginTop"
+                          textAlign="Center" />
+                </VBox>
+
+                <!-- ── Loading state ──────────────────────────────────────── -->
+                <VBox visible="{tav>/loading}" alignItems="Center" class="tsTeamAttLoading">
+                    <BusyIndicator size="2rem" />
+                    <Text text="Loading team attendance..." class="sapUiSmallMarginTop" />
+                </VBox>
+
+                <!-- ── Grid (HTML, built in controller) ───────────────────── -->
+                <core:HTML id="attGridHtml"
+                           content="{tav>/gridHtml}"
+                           visible="{= !${tav>/loading} &amp;&amp; ${tav>/totalCount} > 0 }" />
+
+                <!-- ── Pagination footer ──────────────────────────────────── -->
+                <HBox class="tsTeamAttPager"
+                      justifyContent="End"
+                      alignItems="Center"
+                      visible="{= !${tav>/loading} &amp;&amp; ${tav>/totalCount} > 0 }">
+                    <Text text="Items per page" class="sapUiTinyMarginEnd" />
+                    <Select selectedKey="{tav>/pageSize}"
+                            change=".onPageSizeChange"
+                            width="80px">
+                        <core:Item key="5"  text="5"  />
+                        <core:Item key="10" text="10" />
+                        <core:Item key="20" text="20" />
+                        <core:Item key="50" text="50" />
+                    </Select>
+                    <Text text="{tav>/pageInfo}" class="sapUiSmallMarginBegin sapUiSmallMarginEnd" />
+                    <Button icon="sap-icon://navigation-left-arrow"
+                            type="Transparent"
+                            press=".onPrevPage"
+                            enabled="{= ${tav>/pageIndex} > 0 }" />
+                    <Button icon="sap-icon://navigation-right-arrow"
+                            type="Transparent"
+                            press=".onNextPage"
+                            enabled="{= (${tav>/pageIndex} + 1) * ${tav>/pageSize} &lt; ${tav>/filteredCount} }" />
+                </HBox>
+
+            </VBox>
+
+        </content>
+    </Page>
+
+</mvc:View>

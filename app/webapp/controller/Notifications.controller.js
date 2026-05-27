@@ -191,35 +191,37 @@ sap.ui.define([
         // ── Formatters ────────────────────────────────────────────────────────
         formatTypeIcon(sType) {
             const map = {
-                TIMESHEET_APPROVED: "sap-icon://accept",
-                TIMESHEET_REJECTED: "sap-icon://decline",
-                TASK_ASSIGNED:      "sap-icon://task",
-                PERFORMANCE_RATED:  "sap-icon://survey",
-                LEAVE_APPROVED:     "sap-icon://accept",
-                LEAVE_REJECTED:     "sap-icon://decline",
-                approved:           "sap-icon://accept",
-                rejected:           "sap-icon://decline"
+                TIMESHEET_APPROVED:     "sap-icon://accept",
+                TIMESHEET_REJECTED:     "sap-icon://decline",
+                TASK_ASSIGNED:          "sap-icon://task",
+                TASK_REVIEW_REQUESTED:  "sap-icon://approvals",
+                PERFORMANCE_RATED:      "sap-icon://survey",
+                LEAVE_APPROVED:         "sap-icon://accept",
+                LEAVE_REJECTED:         "sap-icon://decline",
+                approved:               "sap-icon://accept",
+                rejected:               "sap-icon://decline"
             };
             return map[sType] || "sap-icon://bell";
         },
 
         formatTypeColor(sType) {
-            return ["approved","TIMESHEET_APPROVED","LEAVE_APPROVED"].includes(sType)
+            return ["approved","TIMESHEET_APPROVED","LEAVE_APPROVED","TASK_REVIEW_REQUESTED","TASK_ASSIGNED"].includes(sType)
                 ? "#16a34a" : "#dc2626";
         },
 
         formatTypeLabel(sType) {
             const map = {
-                TIMESHEET_APPROVED: "Approved",  TIMESHEET_REJECTED: "Rejected",
-                TASK_ASSIGNED:      "Task",       PERFORMANCE_RATED:  "Rating",
-                LEAVE_APPROVED:     "Leave OK",   LEAVE_REJECTED:     "Leave Rejected",
-                approved:           "Approved",   rejected:           "Rejected"
+                TIMESHEET_APPROVED:    "Approved",     TIMESHEET_REJECTED: "Rejected",
+                TASK_ASSIGNED:         "Task",         PERFORMANCE_RATED:  "Rating",
+                TASK_REVIEW_REQUESTED: "Review",
+                LEAVE_APPROVED:        "Leave OK",     LEAVE_REJECTED:     "Leave Rejected",
+                approved:              "Approved",     rejected:           "Rejected"
             };
             return map[sType] || "Info";
         },
 
         formatTypeState(sType) {
-            return ["approved","TIMESHEET_APPROVED","LEAVE_APPROVED","TASK_ASSIGNED","PERFORMANCE_RATED"]
+            return ["approved","TIMESHEET_APPROVED","LEAVE_APPROVED","TASK_ASSIGNED","PERFORMANCE_RATED","TASK_REVIEW_REQUESTED"]
                 .includes(sType) ? "Success" : "Error";
         },
 

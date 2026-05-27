@@ -8,6 +8,8 @@ const TASK = 'ccentrik.employee.timesheet.schema.timesheet.TaskMaster';
 const PERFORMANCE_RATING = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
 const NOTIFICATION = 'ccentrik.employee.timesheet.schema.timesheet.Notification';
 const ATTENDANCE = 'ccentrik.employee.timesheet.schema.timesheet.AttendanceRecord';
+const TASK_REVIEW = 'ccentrik.employee.timesheet.schema.timesheet.TaskReview';
+const HOLIDAY = 'ccentrik.employee.timesheet.schema.timesheet.HolidayMaster';
 
 // SQLite table name derived from CDS namespace + entity name
 const EMPLOYEE_TABLE = 'ccentrik_employee_timesheet_schema_timesheet_EmployeeMaster';
@@ -509,19 +511,25 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('updateTaskStatus', async (req) => {
             const { taskId, status, reviewerId, reviewerStatus } = req.data;
- 
+
+            cds.log('task').info('updateTaskStatus →', { taskId, status, reviewerId, reviewerStatus });
+
             if (!taskId)  return req.error(400, 'taskId is required.');
             if (!status)  return req.error(400, 'status is required.');
- 
+
             const task = await SELECT.one.from(TASK).where({ taskId });
             if (!task)    return req.error(404, `Task '${taskId}' not found.`);
- 
-            // Build the patch object — only set fields that are provided
+
+            // Only patch reviewer fields when a real (non-empty) value is supplied.
+            // Sending an empty string would try to set reviewer_employeeId = ""
+            // which violates the FK and causes the entire UPDATE to fail.
             const patch = { status, statusUpdatedAt: new Date() };
-            if (reviewerId     !== undefined && reviewerId     !== null) patch.reviewer_employeeId = reviewerId;
-            if (reviewerStatus !== undefined && reviewerStatus !== null) patch.reviewerStatus       = reviewerStatus;
- 
+            if (reviewerId     && String(reviewerId).trim())     patch.reviewer_employeeId = reviewerId;
+            if (reviewerStatus && String(reviewerStatus).trim()) patch.reviewerStatus       = reviewerStatus;
+
+            cds.log('task').info('updateTaskStatus patch:', JSON.stringify(patch));
             await UPDATE(TASK).set(patch).where({ taskId });
+            cds.log('task').info('updateTaskStatus done for', taskId);
  
             // Notify reviewer when task is sent for review
             if (status === 'In Review' && reviewerId) {
@@ -549,6 +557,151 @@ class EmployeeService extends cds.ApplicationService {
  
             cds.log('task').info(`Task ${taskId} status → ${status} by ${req.user?.id}`);
             return { taskId, status };
+        });
+
+        // ── Review workflow: Reviewed / Issue Found ──────────────────────────
+        // Shared implementation; `decision` decides the target status.
+        const handleReviewDecision = async (req, decision) => {
+            const { taskId, remarks, fileName, mimeType, dataBase64 } = req.data;
+            if (!taskId) return req.error(400, 'taskId is required.');
+            if (!remarks || !String(remarks).trim()) {
+                return req.error(400, 'Remarks are required.');
+            }
+
+            const task = await SELECT.one.from(TASK).where({ taskId });
+            if (!task) return req.error(404, `Task '${taskId}' not found.`);
+            if (task.status !== 'In Review') {
+                return req.error(400, `Task '${taskId}' is not currently In Review (status: ${task.status}).`);
+            }
+
+            // Resolve reviewer from logged-in user
+            const user  = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const reviewer = email
+                ? await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ email })
+                : null;
+            if (!reviewer) return req.error(401, 'Cannot identify reviewer.');
+
+            // Only the assigned reviewer can submit a decision
+            if (task.reviewer_employeeId && task.reviewer_employeeId !== reviewer.employeeId) {
+                return req.error(403, 'You are not the assigned reviewer for this task.');
+            }
+
+            // Decode optional attachment
+            let attachmentBuf = null;
+            let storedName = null;
+            let storedMime = null;
+            if (dataBase64) {
+                const cleaned = String(dataBase64).replace(/^data:[^;]+;base64,/, '');
+                try {
+                    attachmentBuf = Buffer.from(cleaned, 'base64');
+                    if (attachmentBuf.length > 5 * 1024 * 1024) {
+                        return req.error(400, 'Attachment must be under 5 MB.');
+                    }
+                    storedName = fileName || 'review-attachment';
+                    storedMime = mimeType || 'application/octet-stream';
+                } catch (e) {
+                    return req.error(400, 'dataBase64 is not valid base64.');
+                }
+            }
+
+            const reviewId = `${taskId}-REV-${Date.now()}`;
+            const reviewedOn = new Date();
+            const newTaskStatus = decision === 'Reviewed' ? 'Completed' : 'In Progress';
+
+            // Persist review row
+            await INSERT.into(TASK_REVIEW).entries({
+                reviewId,
+                task_taskId:          taskId,
+                reviewer_employeeId:  reviewer.employeeId,
+                assignee_employeeId:  task.assignedTo_employeeId || null,
+                decision,
+                remarks:              String(remarks).trim(),
+                attachmentName:       storedName,
+                attachmentMimeType:   storedMime,
+                attachment:           attachmentBuf,
+                reviewedOn
+            });
+
+            // Update task status (and keep reviewerStatus in sync for legacy UI)
+            await UPDATE(TASK).set({
+                status:          newTaskStatus,
+                reviewerStatus:  decision === 'Reviewed' ? 'Reviewed' : 'Issue Found',
+                statusUpdatedAt: reviewedOn
+            }).where({ taskId });
+
+            // Notify the original assignee
+            if (task.assignedTo_employeeId) {
+                const title = decision === 'Reviewed' ? 'Task Reviewed ✓' : 'Issue Found — please rework';
+                const msg = decision === 'Reviewed'
+                    ? `"${task.taskName || taskId}" was reviewed by ${reviewer.employeeName} and marked Completed.`
+                    : `"${task.taskName || taskId}" was returned by ${reviewer.employeeName}. Reason: ${String(remarks).trim().slice(0, 200)}`;
+                await createNotification(
+                    task.assignedTo_employeeId,
+                    decision === 'Reviewed' ? 'TASK_ASSIGNED' : 'TASK_ASSIGNED',
+                    title, msg, taskId
+                );
+            }
+
+            cds.log('task').info(`Task ${taskId} review submitted: ${decision} by ${reviewer.employeeId} → status ${newTaskStatus}`);
+            return { reviewId, taskId, status: newTaskStatus };
+        };
+
+        this.on('submitReview', (req) => handleReviewDecision(req, 'Reviewed'));
+        this.on('reportIssue',  (req) => handleReviewDecision(req, 'IssueFound'));
+
+        // Fetch the latest review for a task (no attachment payload — use getReviewAttachment).
+        this.on('getTaskReview', async (req) => {
+            const { taskId } = req.data;
+            if (!taskId) return req.error(400, 'taskId is required.');
+            const reviews = await SELECT.from(TASK_REVIEW)
+                .where({ task_taskId: taskId })
+                .orderBy('reviewedOn desc')
+                .limit(1);
+            const r = reviews && reviews[0];
+            if (!r) return {};
+            let reviewerName = '';
+            if (r.reviewer_employeeId) {
+                const e = await SELECT.one.from(EMPLOYEE)
+                    .columns('employeeName')
+                    .where({ employeeId: r.reviewer_employeeId });
+                reviewerName = (e && e.employeeName) || '';
+            }
+            return {
+                reviewId:       r.reviewId || '',
+                reviewerId:     r.reviewer_employeeId || '',
+                reviewerName,
+                decision:       r.decision || '',
+                remarks:        r.remarks || '',
+                attachmentName: r.attachmentName || '',
+                reviewedOn:     r.reviewedOn ? new Date(r.reviewedOn).toISOString() : ''
+            };
+        });
+
+        // Stream a review attachment as base64 (mirrors consumeTaskAttachment pattern).
+        this.on('getReviewAttachment', async (req) => {
+            const { reviewId } = req.data;
+            if (!reviewId) return req.error(400, 'reviewId is required.');
+            const r = await SELECT.one.from(TASK_REVIEW)
+                .columns('reviewId', 'attachment', 'attachmentName', 'attachmentMimeType')
+                .where({ reviewId });
+            if (!r) return req.error(404, `Review '${reviewId}' not found.`);
+            if (!r.attachment) return req.error(404, 'No attachment on this review.');
+            let base64 = '';
+            try {
+                const a = r.attachment;
+                if (Buffer.isBuffer(a)) base64 = a.toString('base64');
+                else if (typeof a === 'string') base64 = a;
+                else if (a instanceof Uint8Array) base64 = Buffer.from(a).toString('base64');
+                else base64 = Buffer.from(a).toString('base64');
+            } catch (e) {
+                return req.error(500, 'Could not read attachment.');
+            }
+            return {
+                fileName:   r.attachmentName || 'attachment',
+                mimeType:   r.attachmentMimeType || 'application/octet-stream',
+                dataBase64: base64
+            };
         });
 
         await registerTimesheetHandlers(this, getMailer, createNotification);
@@ -657,6 +810,148 @@ class ManagerService extends cds.ApplicationService {
             }
             cds.log('leave').info(`Leave ${leaveId} ${newStatus} by manager`);
             return { leaveId, status: newStatus };
+        });
+
+        // ── Team Attendance grid ──────────────────────────────────────────
+        // Returns a per-employee, per-day status grid for the manager's team
+        // for the requested month.  Cell statuses:
+        //   P   = Present  (attendance record exists)
+        //   A   = Absent   (working day, no attendance, no leave)
+        //   H   = Holiday  (matches HolidayMaster row)
+        //   W   = Weekend  (Saturday/Sunday)
+        //   CL  = Casual Leave  (approved)
+        //   SL  = Sick Leave    (approved)
+        //   PL  = Paid Leave    (approved)
+        //   ML  = Maternity Leave (approved)
+        //   PtL = Paternity Leave (approved)
+        this.on('getTeamAttendance', async (req) => {
+            const { year, month } = req.data;
+            if (!year || !month)            return req.error(400, 'year and month are required.');
+            if (month < 1 || month > 12)    return req.error(400, 'month must be 1-12.');
+
+            // 1. Resolve the logged-in manager
+            const user  = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const manager = email
+                ? await SELECT.one.from(EMPLOYEE).where({ email })
+                : null;
+            if (!manager) return req.error(404, 'Manager record not found.');
+
+            // 2. All direct reports (active)
+            const team = await SELECT.from(EMPLOYEE)
+                .columns('employeeId', 'employeeName', 'designation', 'email')
+                .where({ manager_employeeId: manager.employeeId, isActive: true });
+            team.sort((a, b) => (a.employeeName || '').localeCompare(b.employeeName || ''));
+
+            if (!team.length) {
+                return { employees: '[]', holidays: '[]', daysInMonth: new Date(year, month, 0).getDate() };
+            }
+            const teamIds = team.map(e => e.employeeId);
+
+            // 3. Month boundaries (use UTC-aligned ISO dates so timezone never shifts a day)
+            const daysInMonth = new Date(year, month, 0).getDate();
+            const pad = (n) => String(n).padStart(2, '0');
+            const isoStart = `${year}-${pad(month)}-01`;
+            const isoEnd   = `${year}-${pad(month)}-${pad(daysInMonth)}`;
+
+            // 4. Fetch all relevant data in parallel
+            const [attendance, leaves, holidays] = await Promise.all([
+                SELECT.from(ATTENDANCE).where({ employee_employeeId: { in: teamIds } }),
+                SELECT.from(LEAVE_REQUEST).where({ employee_employeeId: { in: teamIds }, status: 'Approved' }),
+                SELECT.from(HOLIDAY)
+            ]);
+
+            // 5. Index attendance: empId → date → { time }
+            const attMap = new Map();
+            for (const a of attendance) {
+                const dt = String(a.attendanceDate || '').slice(0, 10);
+                if (dt < isoStart || dt > isoEnd) continue;
+                if (!attMap.has(a.employee_employeeId)) attMap.set(a.employee_employeeId, new Map());
+                attMap.get(a.employee_employeeId).set(dt, { time: a.attendanceTime || '' });
+            }
+
+            // 6. Index leaves: empId → date → leaveCode
+            const leaveCode = (t) => {
+                const lc = String(t || '').toLowerCase();
+                if (lc.includes('casual'))    return 'CL';
+                if (lc.includes('sick'))      return 'SL';
+                if (lc.includes('paternity')) return 'PtL';
+                if (lc.includes('maternity')) return 'ML';
+                if (lc.includes('paid'))      return 'PL';
+                return 'L';
+            };
+            const leaveMap = new Map();
+            for (const l of leaves) {
+                const code = leaveCode(l.leaveType);
+                const from = String(l.fromDate || '').slice(0, 10);
+                const to   = String(l.toDate   || '').slice(0, 10);
+                if (!from || !to) continue;
+                // Walk each calendar date in the leave range that falls in this month.
+                const startD = new Date(`${from}T00:00:00Z`);
+                const endD   = new Date(`${to}T00:00:00Z`);
+                for (let d = new Date(startD); d <= endD; d.setUTCDate(d.getUTCDate() + 1)) {
+                    const key = d.toISOString().slice(0, 10);
+                    if (key < isoStart || key > isoEnd) continue;
+                    if (!leaveMap.has(l.employee_employeeId)) leaveMap.set(l.employee_employeeId, new Map());
+                    leaveMap.get(l.employee_employeeId).set(key, code);
+                }
+            }
+
+            // 7. Index holidays: date → name (only those in this month)
+            const holidayMap = new Map();
+            for (const h of holidays) {
+                const dt = String(h.holidayDate || '').slice(0, 10);
+                if (dt >= isoStart && dt <= isoEnd) holidayMap.set(dt, h.holidayName);
+            }
+
+            // 8. Build per-employee day grid
+            // "today" is computed once per request so the grid renders
+            // future dates as a neutral "F" (no entry yet) rather than "A".
+            const todayIso = new Date().toISOString().slice(0, 10);
+
+            const result = team.map(emp => {
+                const days = [];
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const key = `${year}-${pad(month)}-${pad(d)}`;
+                    const dow = new Date(`${key}T00:00:00Z`).getUTCDay(); // 0=Sun 6=Sat
+                    let status, time = '';
+                    if (holidayMap.has(key)) {
+                        status = 'H';
+                    } else if (dow === 0 || dow === 6) {
+                        status = 'W';
+                    } else if (key > todayIso) {
+                        // Future working day — no entry yet, render as blank/grey.
+                        status = 'F';
+                    } else {
+                        const att = attMap.get(emp.employeeId) && attMap.get(emp.employeeId).get(key);
+                        if (att) {
+                            status = 'P';
+                            time = att.time || '';
+                        } else {
+                            const lv = leaveMap.get(emp.employeeId) && leaveMap.get(emp.employeeId).get(key);
+                            status = lv || 'A';
+                        }
+                    }
+                    days.push({ date: key, status, time });
+                }
+                return {
+                    employeeId:   emp.employeeId,
+                    employeeName: emp.employeeName || '',
+                    designation:  emp.designation  || '',
+                    email:        emp.email        || '',
+                    days
+                };
+            });
+
+            const holidayArr = Array.from(holidayMap.entries())
+                .map(([date, name]) => ({ date, name }))
+                .sort((a, b) => a.date.localeCompare(b.date));
+
+            return {
+                employees:   JSON.stringify(result),
+                holidays:    JSON.stringify(holidayArr),
+                daysInMonth
+            };
         });
 
         await registerManagerTimesheetHandlers(this, getMailer, createNotification);

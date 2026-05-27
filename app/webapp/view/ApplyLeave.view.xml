@@ -6,8 +6,16 @@
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
-    <Page id="applyLeavePage" title="Leave Portal" showNavButton="false">
+    <Page id="applyLeavePage" showHeader="false">
         <content>
+
+            <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone" alignItems="Center" justifyContent="SpaceBetween">
+                <HBox alignItems="Center">
+                    <core:Icon src="sap-icon://away" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                    <Text text="Leave Portal"
+                          style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                </HBox>
+            </HBox>
 
             <!-- ── Balance Cards ── -->
             <Panel headerText="My Leave Balance" expandable="false" class="sapUiSmallMargin">
