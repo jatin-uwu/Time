@@ -230,6 +230,24 @@ entity Notification : managed {
     referenceId        : String(30);    // timesheetId / taskId / ratingId etc.
     notifiedAt         : Timestamp;
 }
+// ── Task Review (Reviewer's decision + remarks + attachment) ─────────────
+// Created when a reviewer takes a decision on a task that is "In Review":
+//   decision = 'Reviewed'   → original task moves to 'Completed'
+//   decision = 'IssueFound' → original task moves back to 'In Progress'
+// Stores remarks and an optional attachment uploaded by the reviewer.
+entity TaskReview : managed {
+    key reviewId       : String(30);     // TASK001-REV-1716000000000
+    task               : Association to TaskMaster;
+    reviewer           : Association to EmployeeMaster;
+    assignee           : Association to EmployeeMaster;  // Original assignee (for filtering)
+    decision           : String(20);     // Reviewed | IssueFound
+    remarks            : String(2000);
+    attachmentName     : String(255);
+    attachmentMimeType : String(100);
+    attachment         : LargeBinary;
+    reviewedOn         : Timestamp;
+}
+
 // ── Attendance Record ─────────────────────────────────────────────────────
 entity AttendanceRecord : managed {
     key attendanceId   : String(30);     // EMP1001-2026-05-13
@@ -238,5 +256,16 @@ entity AttendanceRecord : managed {
     attendanceDay      : String(15);     // Wednesday
     attendanceTime     : Time;           // 14:32:00
     status             : String(10) default 'Present';
+}
+
+// ── Holiday Master ────────────────────────────────────────────────────────
+// HR maintains national / regional holidays here.  Team Attendance grid
+// reads this to mark "H" cells.
+entity HolidayMaster : managed {
+    key holidayId      : String(20);         // HOL-2026-001
+    holidayDate        : Date;               // 2026-08-15
+    holidayName        : String(100);        // Independence Day
+    isOptional         : Boolean default false; // optional / restricted holidays
+    description        : String(255);
 }
 }

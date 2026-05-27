@@ -7,10 +7,17 @@
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
-    <Page id="historyPage" title="Timesheet History" class="tsDashboardPage"
-          showNavButton="false" enableScrolling="false">
+    <Page id="historyPage" showHeader="false" class="tsDashboardPage"
+          enableScrolling="false">
 
         <content>
+
+            <!-- ── Compact page header ─────────────────────────────────── -->
+            <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone" alignItems="Center">
+                <core:Icon src="sap-icon://history" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                <Text text="Timesheet History"
+                      style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+            </HBox>
 
             <!-- ① No week selected yet: centered calendar -->
             <VBox visible="{= !${histView>/weekSelected} }" class="tsHistWelcome">

@@ -2,13 +2,19 @@ sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
+    "sap/m/MessageBox",
     "sap/m/Dialog",
     "sap/m/Button",
     "sap/m/Select",
     "sap/m/Label",
     "sap/m/VBox",
-    "sap/ui/core/Item"
-], (Controller, JSONModel, MessageToast, Dialog, Button, Select, Label, VBox, Item) => {
+    "sap/m/HBox",
+    "sap/m/TextArea",
+    "sap/m/Text",
+    "sap/ui/unified/FileUploader",
+    "sap/ui/core/Item",
+    "sap/ui/core/Core"
+], (Controller, JSONModel, MessageToast, MessageBox, Dialog, Button, Select, Label, VBox, HBox, TextArea, Text, FileUploader, Item, Core) => {
     "use strict";
 
     // ── Status constants ─────────────────────────────────────────────────────
@@ -113,6 +119,9 @@ sap.ui.define([
                 const merged = this._mergeTasks(local, remote || []);
                 this._oTdModel.setProperty("/allTasks", merged);
                 this._applyFilter();
+                // Fire-and-forget — fetch latest review per task in the
+                // background. Updates the model in place once resolved.
+                this._loadReviewsForTasks(merged);
             };
 
             if (!oModel) { finish([]); return; }
@@ -122,17 +131,59 @@ sap.ui.define([
                 .catch(() => finish([]));
         },
 
-        _mergeTasks(local, remote) {
-            // Remote is the base; local entries override remote ones so that
-            // any status the employee changed locally is never overwritten when
-            // the route is re-matched and the backend is re-fetched.
-            const map = new Map();
-            (remote || []).forEach(t => map.set(t.taskId, t));
-            (local  || []).forEach(t => {
-                const existing = map.get(t.taskId);
-                // Merge: keep all remote fields, override with local fields
-                map.set(t.taskId, existing ? Object.assign({}, existing, t) : t);
+        // Fetch the latest TaskReview row for every task that has a
+        // reviewerStatus set. Decorates the task with reviewRemarks /
+        // reviewDecision / reviewerName / reviewAttachmentName / reviewId so
+        // the assignee can see what the reviewer wrote.
+        _loadReviewsForTasks(tasks) {
+            const reviewable = (tasks || []).filter(t =>
+                t.reviewerStatus === "Issue Found" ||
+                t.reviewerStatus === "Reviewed" ||
+                t.status === "In Review"
+            );
+            if (!reviewable.length) return;
+
+            Promise.all(reviewable.map(t =>
+                fetch("/employee/getTaskReview", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                    body: JSON.stringify({ taskId: t.taskId }),
+                    credentials: "include"
+                })
+                    .then(r => r.ok ? r.json() : null)
+                    .then(j => ({ taskId: t.taskId, review: (j && (j.value || j)) || null }))
+                    .catch(() => ({ taskId: t.taskId, review: null }))
+            )).then((results) => {
+                const all = this._oTdModel.getProperty("/allTasks") || [];
+                const next = all.map(t => {
+                    const hit = results.find(r => r.taskId === t.taskId);
+                    if (!hit || !hit.review || !hit.review.reviewId) return t;
+                    const rv = hit.review;
+                    return Object.assign({}, t, {
+                        reviewId:             rv.reviewId || "",
+                        reviewDecision:       rv.decision || "",
+                        reviewRemarks:        rv.remarks || "",
+                        reviewerName:         rv.reviewerName || t.reviewerName || "",
+                        reviewAttachmentName: rv.attachmentName || ""
+                    });
+                });
+                this._oTdModel.setProperty("/allTasks", next);
+                this._applyFilter();
             });
+        },
+
+        _mergeTasks(local, remote) {
+            // Remote (DB) always wins. Also normalises legacy "Open" status
+            // to "Not Started" so the Select dropdown always finds a valid key.
+            const norm = t => {
+                if (!t || !t.taskId) return t;
+                return (t.status === "Open")
+                    ? Object.assign({}, t, { status: "Not Started" })
+                    : t;
+            };
+            const map = new Map();
+            (local  || []).forEach(t => { const n = norm(t); if (n && n.taskId) map.set(n.taskId, n); });
+            (remote || []).forEach(t => { const n = norm(t); if (n && n.taskId) map.set(n.taskId, n); });
             return Array.from(map.values());
         },
 
@@ -246,54 +297,334 @@ sap.ui.define([
         // ── Status change via Select dropdown ────────────────────────────────
 
         onStatusChange(oEvent) {
-            const sSelectedKey = oEvent.getParameter("selectedItem").getKey();
-            const oCtx = oEvent.getSource().getBindingContext("tdView");
+            const oSelect  = oEvent.getSource();
+            const sNewKey  = oEvent.getParameter("selectedItem").getKey();
+            const oCtx     = oSelect.getBindingContext("tdView");
             if (!oCtx) return;
             const task = oCtx.getObject();
-            if (!task || task.status === sSelectedKey) return;
+            if (!task) return;
 
-            // If moving to "In Review" → open reviewer selection dialog
-            if (sSelectedKey === "In Review") {
-                this._openReviewerDialog(task, oEvent.getSource());
-                // Reset the select back to current value (dialog will confirm)
-                oEvent.getSource().setSelectedKey(task.status);
+            // "In Review" opens the reviewer-selection dialog
+            if (sNewKey === "In Review") {
+                this._openReviewerDialog(task);
+                oSelect.setSelectedKey(task.status || "Not Started");
                 return;
             }
 
-            this._updateTaskStatus(task.taskId, sSelectedKey, null, null);
+            if (task.status === sNewKey) return;
+
+            // Open confirmation dialog — backend is called only when user clicks Save
+            this._openStatusConfirmDialog(task, sNewKey, oSelect);
         },
 
-        // ── Reviewer actions (for the person set as reviewer) ────────────────
+        // ── Status confirmation dialog ────────────────────────────────────────
+        // Opens when employee picks a non-"In Review" status from the dropdown.
+        // Backend is called only when the user explicitly clicks Save, so the
+        // DB and the UI are always in sync — no optimistic-update reverts.
 
-        onMarkReviewed(oEvent) {
-            const oCtx = oEvent.getSource().getBindingContext("tdView");
-            if (!oCtx) return;
-            const task = oCtx.getObject();
-            if (!task) return;
-            this._updateTaskStatus(task.taskId, "Completed", null, "Reviewed");
+        _openStatusConfirmDialog(task, sNewStatus, oSelect) {
+            const sOldStatus = task.status || "Not Started";
+
+            const oSaveBtn = new Button({
+                type: "Emphasized",
+                text: "Save",
+                press: () => {
+                    oDialog.setBusy(true);
+                    oSaveBtn.setEnabled(false);
+
+                    this._saveStatusToBackend(task.taskId, sNewStatus, "", "")
+                        .then(() => {
+                            const patch = {
+                                status:          sNewStatus,
+                                statusUpdatedAt: new Date().toISOString()
+                            };
+                            this._applyLocalStatusPatch(task.taskId, patch);
+                            this._publishTaskStatusChanged(task.taskId, sNewStatus);
+                            oDialog.close();
+                            const label = {
+                                "Not Started": "Task reset to Not Started.",
+                                "In Progress": "Task is now In Progress.",
+                                "Completed":   "Task marked as Completed.",
+                                "Reopened":    "Task reopened."
+                            };
+                            MessageToast.show(label[sNewStatus] || "Status updated to " + sNewStatus + ".");
+                        })
+                        .catch((oErr) => {
+                            oDialog.setBusy(false);
+                            oSaveBtn.setEnabled(true);
+                            oSelect.setSelectedKey(sOldStatus);
+                            MessageBox.error(
+                                "Could not save status: " +
+                                (oErr && oErr.message ? oErr.message : String(oErr))
+                            );
+                        });
+                }
+            });
+
+            const oDialog = new Dialog({
+                title:        "Confirm Status Change",
+                contentWidth: "380px",
+                content: [
+                    new VBox({
+                        items: [
+                            new Text({
+                                text:     "Task:  " + (task.taskName || task.taskId),
+                                wrapping: true
+                            }),
+                            new HBox({
+                                items: [
+                                    new Text({ text: sOldStatus }).addStyleClass("sapUiTinyMarginEnd"),
+                                    new Text({ text: "→"        }).addStyleClass("sapUiSmallMarginEnd"),
+                                    new Text({ text: sNewStatus })
+                                ]
+                            }).addStyleClass("sapUiSmallMarginTop")
+                        ]
+                    }).addStyleClass("sapUiSmallMargin")
+                ],
+                beginButton: oSaveBtn,
+                endButton: new Button({
+                    text:  "Cancel",
+                    press: () => {
+                        oSelect.setSelectedKey(sOldStatus);
+                        oDialog.close();
+                    }
+                }),
+                afterClose: () => oDialog.destroy()
+            });
+
+            this.getView().addDependent(oDialog);
+            oDialog.open();
         },
 
-        onReopenTask(oEvent) {
-            const oCtx = oEvent.getSource().getBindingContext("tdView");
-            if (!oCtx) return;
-            const task = oCtx.getObject();
+        // ── Reviewer actions (open dialog with remarks + optional attachment) ──
+
+        onOpenReviewedDialog(oEvent) {
+            const task = this._getTaskFromEvent(oEvent);
             if (!task) return;
-            this._updateTaskStatus(task.taskId, "In Progress", null, "Reopened");
+            this._openReviewDecisionDialog({
+                task,
+                decision: "Reviewed",
+                title:     "Mark as Reviewed",
+                subtitle:  "Confirm this task has been reviewed and is complete.",
+                buttonText: "Submit Review",
+                buttonType: "Accept",
+                action:     "submitReview"
+            });
+        },
+
+        onOpenIssueDialog(oEvent) {
+            const task = this._getTaskFromEvent(oEvent);
+            if (!task) return;
+            this._openReviewDecisionDialog({
+                task,
+                decision:  "IssueFound",
+                title:     "Report Issue",
+                subtitle:  "Describe the issue so the assignee can rework the task.",
+                buttonText: "Submit Issue",
+                buttonType: "Reject",
+                action:     "reportIssue"
+            });
+        },
+
+        _getTaskFromEvent(oEvent) {
+            const oCtx = oEvent.getSource().getBindingContext("tdView");
+            if (!oCtx) return null;
+            return oCtx.getObject();
+        },
+
+        _openReviewDecisionDialog(o) {
+            const oForm = new JSONModel({
+                taskId:     o.task.taskId,
+                taskName:   o.task.taskName,
+                remarks:    "",
+                fileName:   "",
+                mimeType:   "",
+                dataBase64: "",
+                busy:       false
+            });
+
+            const oRemarks = new TextArea({
+                width: "100%",
+                rows: 5,
+                placeholder: "Enter remarks (required)…",
+                value: "{form>/remarks}",
+                growing: false
+            });
+
+            const oFileUpload = new FileUploader({
+                width: "100%",
+                placeholder: "No file selected",
+                buttonText: "Choose File",
+                buttonOnly: false,
+                fileType: ["pdf", "png", "jpg", "jpeg", "doc", "docx", "xls", "xlsx", "txt", "zip"],
+                maximumFileSize: 5,
+                change: (oEv) => {
+                    const file = oEv.getParameter("files") && oEv.getParameter("files")[0];
+                    if (!file) {
+                        oForm.setProperty("/fileName", "");
+                        oForm.setProperty("/mimeType", "");
+                        oForm.setProperty("/dataBase64", "");
+                        return;
+                    }
+                    if (file.size > 5 * 1024 * 1024) {
+                        MessageToast.show("File must be under 5 MB.");
+                        oFileUpload.clear();
+                        return;
+                    }
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                        oForm.setProperty("/fileName", file.name);
+                        oForm.setProperty("/mimeType", file.type || "application/octet-stream");
+                        oForm.setProperty("/dataBase64", ev.target.result);
+                    };
+                    reader.readAsDataURL(file);
+                },
+                typeMissmatch: () => MessageToast.show("Unsupported file type."),
+                fileSizeExceed: () => MessageToast.show("File must be under 5 MB.")
+            });
+
+            const oSubmitBtn = new Button({
+                type: o.buttonType,
+                text: o.buttonText,
+                icon: o.decision === "Reviewed" ? "sap-icon://accept" : "sap-icon://alert",
+                enabled: "{= ${form>/busy} === false }",
+                press: () => {
+                    const sRemarks = (oForm.getProperty("/remarks") || "").trim();
+                    if (!sRemarks) {
+                        MessageToast.show("Please enter remarks.");
+                        return;
+                    }
+                    oForm.setProperty("/busy", true);
+                    oSubmitBtn.setEnabled(false);
+                    this._submitReviewDecision({
+                        action:     o.action,
+                        decision:   o.decision,
+                        taskId:     oForm.getProperty("/taskId"),
+                        remarks:    sRemarks,
+                        fileName:   oForm.getProperty("/fileName"),
+                        mimeType:   oForm.getProperty("/mimeType"),
+                        dataBase64: oForm.getProperty("/dataBase64")
+                    }).then(() => {
+                        oDialog.close();
+                    }).catch((err) => {
+                        oForm.setProperty("/busy", false);
+                        oSubmitBtn.setEnabled(true);
+                        MessageBox.error(err && err.message ? err.message : String(err));
+                    });
+                }
+            });
+
+            const oDialog = new Dialog({
+                title: o.title,
+                contentWidth: "440px",
+                content: [
+                    new VBox({
+                        items: [
+                            new Text({ text: o.subtitle }).addStyleClass("sapUiSmallMarginBottom"),
+                            new Text({ text: "Task: " + o.task.taskName,
+                                       wrapping: true }).addStyleClass("sapUiTinyMarginBottom"),
+                            new Label({ text: "Remarks *", labelFor: oRemarks.getId() })
+                                .addStyleClass("sapUiTinyMarginTop"),
+                            oRemarks,
+                            new Label({ text: "Attachment (optional)", labelFor: oFileUpload.getId() })
+                                .addStyleClass("sapUiSmallMarginTop"),
+                            oFileUpload,
+                            new Text({
+                                text: "Attach a screenshot, document, or any supporting file (max 5 MB).",
+                                wrapping: true
+                            }).addStyleClass("sapUiTinyMarginTop tsHintText")
+                        ]
+                    }).addStyleClass("sapUiSmallMargin")
+                ],
+                beginButton: oSubmitBtn,
+                endButton: new Button({
+                    text: "Cancel",
+                    press: () => oDialog.close()
+                }),
+                afterClose: () => oDialog.destroy()
+            });
+            oDialog.setModel(oForm, "form");
+            this.getView().addDependent(oDialog);
+            oDialog.open();
+        },
+
+        _submitReviewDecision({ action, decision, taskId, remarks, fileName, mimeType, dataBase64 }) {
+            const payload = {
+                taskId,
+                remarks,
+                fileName: fileName || "",
+                mimeType: mimeType || "",
+                dataBase64: dataBase64 || ""
+            };
+
+            return fetch("/employee/" + action, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify(payload),
+                credentials: "include"
+            })
+                .then(async (r) => {
+                    if (!r.ok) {
+                        const txt = await r.text();
+                        let msg = txt;
+                        try { msg = JSON.parse(txt).error?.message || txt; } catch (e) { /**/ }
+                        throw new Error(msg || ("Request failed: " + r.status));
+                    }
+                    return r.json().catch(() => ({}));
+                })
+                .then(() => {
+                    // Compute new target status locally for instant UI update
+                    const newStatus = decision === "Reviewed" ? "Completed" : "In Progress";
+                    const sReviewerStatus = decision === "Reviewed" ? "Reviewed" : "Issue Found";
+
+                    // Apply the patch to local + display models AND broadcast on the
+                    // EventBus so the Dashboard (if alive) re-fetches its summary.
+                    this._applyLocalStatusPatch(taskId, {
+                        status: newStatus,
+                        reviewerStatus: sReviewerStatus,
+                        statusUpdatedAt: new Date().toISOString()
+                    });
+                    this._publishTaskStatusChanged(taskId, newStatus);
+
+                    MessageToast.show(
+                        decision === "Reviewed"
+                            ? "Task marked as Completed."
+                            : "Issue reported — task sent back to assignee."
+                    );
+                });
         },
 
         // ── Reviewer Selection Dialog ─────────────────────────────────────────
 
         _openReviewerDialog(task) {
-            const reviewers = this._oTdModel.getProperty("/reviewerCandidates") || [];
+            // Use the full employees list — fall back to built-in directory if
+            // the OData fetch hasn't completed yet. Exclude the assignee themselves.
+            let reviewers = (this._oTdModel.getProperty("/employees") || []).slice();
             if (!reviewers.length) {
-                MessageToast.show("No reviewers available.");
+                reviewers = Object.values(
+                    this.getOwnerComponent()._builtinEmployees || {}
+                ).filter(e => e.isActive !== false);
+            }
+
+            const tAssignee = task.assignedTo_employeeId ||
+                              (task.assignedTo && task.assignedTo.employeeId) ||
+                              task.assignedTo;
+            reviewers = reviewers.filter(e => e.employeeId !== tAssignee);
+
+            if (!reviewers.length) {
+                MessageBox.error("No other employees are available to assign as reviewer.");
                 return;
             }
+
+            // Pre-select existing reviewer (if already set)
+            const existingReviewerId = task.reviewer_employeeId ||
+                                       (task.reviewer && task.reviewer.employeeId) || "";
 
             // Build select control
             const oSelect = new Select({
                 width: "100%",
-                forceSelection: false
+                forceSelection: false,
+                selectedKey: existingReviewerId
             });
             oSelect.addItem(new Item({ key: "", text: "— Select reviewer —" }));
             reviewers.forEach(e => {
@@ -323,8 +654,28 @@ sap.ui.define([
                             MessageToast.show("Please select a reviewer.");
                             return;
                         }
-                        oDialog.close();
-                        this._updateTaskStatus(task.taskId, "In Review", sReviewerId, "Pending");
+                        oDialog.setBusy(true);
+                        this._saveStatusToBackend(task.taskId, "In Review", sReviewerId, "Pending")
+                            .then(() => {
+                                const patch = {
+                                    status:              "In Review",
+                                    statusUpdatedAt:     new Date().toISOString(),
+                                    reviewer_employeeId: sReviewerId,
+                                    reviewerStatus:      "Pending"
+                                };
+                                this._applyLocalStatusPatch(task.taskId, patch);
+                                this._publishTaskStatusChanged(task.taskId, "In Review");
+                                this._notifyReviewer(task.taskId, sReviewerId);
+                                oDialog.close();
+                                MessageToast.show("Task sent for review.");
+                            })
+                            .catch((oErr) => {
+                                oDialog.setBusy(false);
+                                MessageBox.error(
+                                    "Could not send for review: " +
+                                    (oErr && oErr.message ? oErr.message : String(oErr))
+                                );
+                            });
                     }
                 }),
                 endButton: new Button({
@@ -338,23 +689,14 @@ sap.ui.define([
             oDialog.open();
         },
 
-        // ── Core status update ────────────────────────────────────────────────
 
-        _updateTaskStatus(sTaskId, sStatus, sReviewerId, sReviewerStatus) {
+        // Patch local tasks model + view model + persist to localStorage.
+        // Used both by the dropdown flow and the reviewer-dialog flow so the
+        // UI stays consistent regardless of which path triggered the change.
+        _applyLocalStatusPatch(sTaskId, patch) {
             const oTasksModel = this.getOwnerComponent().getModel("tasks");
             const items = (oTasksModel.getProperty("/items") || []).slice();
             const idx = items.findIndex(t => t.taskId === sTaskId);
-
-            const patch = {
-                status:            sStatus,
-                statusUpdatedAt:   new Date().toISOString()
-            };
-            if (sReviewerId !== undefined && sReviewerId !== null) {
-                patch.reviewer_employeeId = sReviewerId;
-            }
-            if (sReviewerStatus !== undefined && sReviewerStatus !== null) {
-                patch.reviewerStatus = sReviewerStatus;
-            }
 
             if (idx < 0) {
                 // Task lives only in the backend — pull its full record from
@@ -363,7 +705,6 @@ sap.ui.define([
                 const allRaw = this._oTdModel.getProperty("/allTasks") || [];
                 const baseTask = allRaw.find(t => t.taskId === sTaskId);
                 if (baseTask) {
-                    // Strip display-only fields added by _applyFilter before saving
                     const clean = Object.assign({}, baseTask);
                     delete clean.assigneeName;
                     delete clean.reviewerName;
@@ -379,47 +720,51 @@ sap.ui.define([
             oTasksModel.setProperty("/items", items);
             this.getOwnerComponent().persistTasks();
 
-            // Update live view immediately
+            // Update the page-local model immediately so the card re-renders
             const allUpdated = (this._oTdModel.getProperty("/allTasks") || []).map(t =>
                 t.taskId === sTaskId ? Object.assign({}, t, patch) : t
             );
             this._oTdModel.setProperty("/allTasks", allUpdated);
             this._applyFilter();
-
-            // ── Persist to OData backend ──────────────────────────────────────
-            this._patchTaskOnBackend(sTaskId, patch);
-
-            // Notify the reviewer if task sent for review
-            if (sStatus === "In Review" && sReviewerId) {
-                this._notifyReviewer(sTaskId, sReviewerId);
-            }
-
-            const msgs = {
-                "Not Started": "Task reset to Not Started.",
-                "In Progress": "Task marked as In Progress.",
-                "In Review":   "Task sent for review.",
-                "Completed":   "Task marked as Completed."
-            };
-            MessageToast.show(msgs[sStatus] || "Status updated to " + sStatus + ".");
         },
 
-        _patchTaskOnBackend(sTaskId, oPatch) {
-            // Call the dedicated CAP action — plain PATCH on MyTasks projection
-            // is blocked for the Employee role, so we use an unbound action instead.
-            fetch("/employee/updateTaskStatus", {
-                method:  "POST",
-                headers: { "Content-Type": "application/json" },
+        // Fire a global event so other views (Dashboard task-summary donut,
+        // My-Tasks card, Task-Status manager view, etc.) can refresh without
+        // waiting for a route match.
+        _publishTaskStatusChanged(sTaskId, sStatus) {
+            try {
+                const oBus = Core.getEventBus ? Core.getEventBus() : sap.ui.getCore().getEventBus();
+                oBus.publish("tasks", "statusChanged", {
+                    taskId: sTaskId,
+                    status: sStatus,
+                    at:     Date.now()
+                });
+            } catch (e) { /* never break the UX over telemetry */ }
+        },
+
+        // Pure HTTP call — returns a Promise that resolves on success or rejects
+        // with an Error on failure. Callers handle local-model updates and toasts.
+        _saveStatusToBackend(sTaskId, sStatus, sReviewerId, sReviewerStatus) {
+            return fetch("/employee/updateTaskStatus", {
+                method:      "POST",
+                credentials: "include",
+                headers:     { "Content-Type": "application/json", "Accept": "application/json" },
                 body: JSON.stringify({
                     taskId:         sTaskId,
-                    status:         oPatch.status         || null,
-                    reviewerId:     oPatch.reviewer_employeeId || null,
-                    reviewerStatus: oPatch.reviewerStatus  || null
+                    status:         sStatus,
+                    reviewerId:     sReviewerId     || "",
+                    reviewerStatus: sReviewerStatus || ""
                 })
             })
-            .then(r => {
-                if (!r.ok) r.text().then(t => console.error("updateTaskStatus failed:", r.status, t));
-            })
-            .catch(e => console.error("updateTaskStatus error:", e));
+            .then(async (r) => {
+                if (!r.ok) {
+                    const txt = await r.text();
+                    let msg = txt;
+                    try { msg = JSON.parse(txt).error?.message || txt; } catch (e) { /**/ }
+                    throw new Error("HTTP " + r.status + ": " + msg);
+                }
+                return r.json().catch(() => ({}));
+            });
         },
 
         _notifyReviewer(sTaskId, sReviewerId) {
@@ -454,6 +799,44 @@ sap.ui.define([
                     referenceId: sTaskId
                 })
             }).catch(() => {/* silent */});
+        },
+
+        // ── Download a reviewer's attachment via the dedicated action ────────
+        onDownloadReviewAttachment(oEvent) {
+            const oCtx = oEvent.getSource().getBindingContext("tdView");
+            if (!oCtx) return;
+            const task = oCtx.getObject();
+            if (!task || !task.reviewId) {
+                MessageToast.show("No review attachment available.");
+                return;
+            }
+            fetch("/employee/getReviewAttachment", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify({ reviewId: task.reviewId }),
+                credentials: "include"
+            })
+                .then(async r => {
+                    if (!r.ok) {
+                        const txt = await r.text();
+                        throw new Error(txt || ("HTTP " + r.status));
+                    }
+                    return r.json();
+                })
+                .then(data => {
+                    const v = (data && (data.value || data)) || {};
+                    if (!v.dataBase64) {
+                        MessageToast.show("Attachment is not available.");
+                        return;
+                    }
+                    const dataUrl = "data:" + (v.mimeType || "application/octet-stream") +
+                                    ";base64," + v.dataBase64;
+                    const a = document.createElement("a");
+                    a.href = dataUrl;
+                    a.download = v.fileName || "review-attachment";
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                })
+                .catch(e => MessageToast.show("Could not download attachment: " + (e.message || e)));
         },
 
         // ── Attachment download ───────────────────────────────────────────────

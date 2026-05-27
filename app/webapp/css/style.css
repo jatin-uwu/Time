@@ -1,3 +1,18 @@
+/* ── Toolbar Avatar photo overlay ───────────────────────────────────
+   The .__tsAvatarPhoto <img> is injected directly into the Avatar DOM
+   so it works regardless of SAP UI5's internal error-fallback logic.
+   These rules guarantee it sits on top and fills the circle. */
+.__tsAvatarPhoto {
+    position: absolute !important;
+    top: 0 !important; left: 0 !important;
+    width: 100% !important; height: 100% !important;
+    border-radius: 50% !important;
+    object-fit: cover !important;
+    pointer-events: none !important;
+    z-index: 10 !important;
+    display: block !important;
+}
+
 /* ── Profile Dialog (avatar press) ───────────────────────────────── */
 /* ── My-Profile dialog (avatar press) ─────────────────────────────────
    Renders as a tall side card anchored under the avatar (top-right),
@@ -28,7 +43,11 @@
 }
 
 /* ── Layout: ShellBar + SplitApp ────────────────────────────────── */
-html, body { margin: 0; overflow: hidden; height: 100%; }
+/* NOTE: html/body must remain scrollable so the Dashboard (and any other
+   page whose content exceeds the viewport) can scroll naturally via the
+   browser.  Locking body to overflow:hidden requires each interior page
+   to manage its own scroll container, which broke the dashboard. */
+html, body { margin: 0; height: 100%; }
 
 .sapMSplitContainer {
     height: calc(100vh - 48px) !important;
@@ -569,16 +588,16 @@ html, body { margin: 0; overflow: hidden; height: 100%; }
 
 /* ── Hero header ────────────────────────────────────────────────────── */
 .tsNotifHero {
-    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    background: linear-gradient(135deg, #1d4ed8 0%, #2476d8 100%);
     color: #ffffff;
-    border-radius: 16px;
-    padding: 26px 30px;
-    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+    border-radius: 10px;
+    padding: 20px 24px;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
 }
 
 .tsNotifHero .sapMTitle, .tsNotifHero .sapMText { color: #ffffff !important; }
 
-.tsNotifHeroIcon  { color: #60a5fa !important; font-size: 1.7rem; }
+.tsNotifHeroIcon  { color: #ffffff !important; font-size: 1.7rem; }
 .tsNotifHeroTitle { font-weight: 700 !important; color: #ffffff !important; font-size: 1.55rem !important; }
 .tsNotifHeroSub   {
     margin-top: 6px !important;
@@ -768,44 +787,66 @@ html, body { margin: 0; overflow: hidden; height: 100%; }
     background-color: #f3f4f6;
 }
 
-/* Inside the dashboard Page, only ONE element scrolls. UI5 normally
-   makes both <section> and the inner .sapMScrollCont scrollable,
-   which produces two adjacent scrollbars. Lock <section> to
-   overflow:hidden so only .sapMScrollCont scrolls. */
-.tsDashPage > section {
-    overflow: hidden !important;
-}
-.tsDashPage > section > .sapMScrollCont {
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    height: 100% !important;
-}
+/* Dashboard scroll is handled by UI5's native sap.m.Page scroll container
+   (enableScrolling="true" on the Page).  Custom overrides previously here
+   broke that natural behaviour — kept removed.  Don't add overflow rules
+   on .tsDashPage > section unless you've verified scroll still works. */
 
 
 
-/* ── Greeting row ───────────────────────────────────────────────────── */
+/* ── Greeting row (blue brand header) ──────────────────────────────── */
 .tsDashGreetingRow {
-    background: #ffffff;
-    border-bottom: 1px solid #e5e7eb;
+    background: linear-gradient(135deg, #1d4ed8 0%, #2476d8 100%);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
     padding: 1.25rem 1.5rem;
     min-height: 72px;
     box-sizing: border-box;
+    position: sticky;
+    top: 0;
+    z-index: 10;
 }
 .tsDashGreetTitle .sapMTitle {
     font-size: 1.4rem !important;
     font-weight: 700 !important;
-    color: #111827 !important;
+    color: #ffffff !important;
 }
 .tsDashGreetSub {
     font-size: 0.85rem !important;
-    color: #6b7280 !important;
+    color: rgba(255, 255, 255, 0.78) !important;
     margin-top: 2px !important;
 }
 .tsDashDateLabel {
     font-size: 0.82rem !important;
-    color: #9ca3af !important;
+    color: rgba(255, 255, 255, 0.70) !important;
     white-space: nowrap;
 }
+/* All text + icons in dashboard blue header → white */
+.tsDashGreetingRow .sapMBtnIcon    { color: #ffffff !important; }
+.tsDashGreetingRow .sapMText       { color: rgba(255, 255, 255, 0.82) !important; }
+.tsDashGreetingRow .sapMText span  { color: rgba(255, 255, 255, 0.82) !important; }
+
+/* Attendance button — white outline when Default, keep Accept/Success green visible */
+.tsDashAttBtn.sapMBtnDefault .sapMBtnInner {
+    background: rgba(255, 255, 255, 0.18) !important;
+    border: 1px solid rgba(255, 255, 255, 0.40) !important;
+    border-radius: 20px !important;
+    font-weight: 600 !important;
+}
+.tsDashAttBtn.sapMBtnDefault .sapMBtnText { color: #ffffff !important; }
+.tsDashAttBtn.sapMBtnDefault .sapMBtnIcon { color: #ffffff !important; }
+/* Accept type (Mark Active button) */
+.tsDashAttBtn.sapMBtnAccept .sapMBtnText,
+.tsDashAttBtn.sapMBtnAccept .sapMBtnIcon { color: #ffffff !important; }
+/* Success type (✓ Active — already marked) — same look as Timesheet Save button */
+.tsDashAttBtn.sapMBtnSuccess .sapMBtnInner {
+    background: rgba(255, 255, 255, 0.15) !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
+    border-radius: 20px !important;
+    font-weight: 600 !important;
+}
+.tsDashAttBtn.sapMBtnSuccess .sapMBtnText,
+.tsDashAttBtn.sapMBtnSuccess .sapMBtnIcon { color: #ffffff !important; }
+.tsDashAttBtn .sapMBtnInner { border-radius: 20px !important; font-weight: 600 !important; }
 
 /* ── Week nav bar ───────────────────────────────────────────────────── */
 .tsDashWeekBar {
@@ -943,6 +984,21 @@ html, body { margin: 0; overflow: hidden; height: 100%; }
     align-self: center;
 }
 
+/* Task Description filter bar */
+.tsTaskFilterBar {
+    background: #f8fafc;
+    border: 1px solid #eef2f7;
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.tsTaskFilterRight {
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
 .tsTaskStatusTable .sapMListTblHeaderCell {
     font-weight: 600;
     color: #374151;
@@ -1012,11 +1068,11 @@ html, body { margin: 0; overflow: hidden; height: 100%; }
 .tsTaskStatusWrap { padding: 16px 20px 24px; box-sizing: border-box; }
 
 .tsTaskStatusHero {
-    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    background: linear-gradient(135deg, #1d4ed8 0%, #2476d8 100%);
     color: #ffffff;
-    border-radius: 16px;
+    border-radius: 10px;
     padding: 22px 26px;
-    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
 }
 
 .tsTaskStatusHero .sapMTitle, .tsTaskStatusHero .sapMText {
@@ -1024,7 +1080,7 @@ html, body { margin: 0; overflow: hidden; height: 100%; }
 }
 
 .tsTaskStatusHeroIcon {
-    color: #60a5fa !important;
+    color: #ffffff !important;
     font-size: 1.5rem;
 }
 
@@ -1088,7 +1144,7 @@ html, body { margin: 0; overflow: hidden; height: 100%; }
     line-height: 1.1 !important;
 }
 
-.tsKpiOpen .tsKpiIcon       { color: #60a5fa !important; }
+.tsKpiOpen .tsKpiIcon       { color: #ffffff !important; }
 .tsKpiInProgress .tsKpiIcon { color: #f59e0b !important; }
 .tsKpiCompleted .tsKpiIcon  { color: #34d399 !important; }
 
@@ -1215,3 +1271,592 @@ html, body { margin: 0; overflow: hidden; height: 100%; }
 .sapMTB .sapMTBContent {
     align-items: center !important;
 }
+/* ── Reviewer feedback block (on assignee's task card) ────────────────────
+   Shown when a TaskReview exists for the assignee's task — surfaces the
+   reviewer's remarks + optional attachment so the assignee knows what to
+   fix (after "Issue Found") or that the work was signed off ("Reviewed"). */
+.tsReviewFeedback {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: #fef9c3;
+    border-left: 3px solid #f59e0b;
+}
+.tsReviewFeedbackHeader { gap: 6px; }
+.tsReviewFeedbackTitle  { font-weight: 600; color: #374151; }
+.tsReviewFeedbackBy     { color: #6b7280; font-size: 0.78rem; }
+.tsReviewFeedbackText   { color: #1f2937; font-size: 0.85rem; line-height: 1.4; }
+
+/* "For Review" badge sits next to the task name when status === In Review */
+.tsForReviewBadge { letter-spacing: 0.3px; }
+
+/* Reviewer dialog hint */
+.tsHintText { font-size: 0.75rem; color: #6b7280; font-style: italic; }
+
+/* App-level loading screen (visible until the backend resolves the user) */
+.tsAppLoading {
+    background: #f8fafc;
+    width: 100%;
+}
+.tsAppLoadingText {
+    color: #475569;
+    font-size: 0.95rem;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Unified page-header card  — blue brand header matching Team Attendance
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsPageHeaderCard {
+    background: linear-gradient(135deg, #1d4ed8 0%, #2476d8 100%);
+    padding: 14px 18px;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+    border: none;
+    margin-bottom: 12px;
+    min-height: 56px;
+    box-sizing: border-box;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+/* Standalone — used on pages where the header isn't already inside a wrap VBox */
+.tsPageHeaderCardStandalone {
+    margin: 12px 16px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+.tsPageHeaderIcon {
+    color: #ffffff;
+    font-size: 1.25rem;
+}
+.tsPageHeaderTitle .sapMTitleInner {
+    font-weight: 600 !important;
+    color: #ffffff !important;
+    font-size: 1.05rem !important;
+    letter-spacing: 0.1px;
+}
+/* ── All text inside blue header → white (comprehensive override) ── */
+
+/* Base: inherit white for anything that relies on cascade */
+.tsPageHeaderCard { color: #ffffff; }
+
+/* Title — mirror the exact pattern that works for Team Attendance:
+   target the SAP class on the root element AND the inner span */
+.tsPageHeaderCard .sapMTitle,
+.tsPageHeaderTitle {
+    color: #ffffff !important;
+}
+.tsPageHeaderCard .sapMTitleInner,
+.tsPageHeaderCard .sapMTitle .sapMTitleInner,
+.tsPageHeaderCard .sapMTitle span.sapMTitleInner,
+.tsPageHeaderTitle span.sapMTitleInner,
+.tsPageHeaderTitle .sapMTitleInner {
+    color: #ffffff !important;
+    font-weight: 600 !important;
+}
+
+/* ObjectStatus text + icon — all states forced white */
+.tsPageHeaderCard .sapMObjectStatusText,
+.tsPageHeaderCard .sapMObjectStatus .sapMObjectStatusText,
+.tsPageHeaderCard .sapMObjectStatus span.sapMObjectStatusText,
+.tsPageHeaderCard .sapMObjectStatusStateInformation .sapMObjectStatusText,
+.tsPageHeaderCard .sapMObjectStatusStateWarning    .sapMObjectStatusText,
+.tsPageHeaderCard .sapMObjectStatusStateSuccess    .sapMObjectStatusText,
+.tsPageHeaderCard .sapMObjectStatusStateError      .sapMObjectStatusText {
+    color: #ffffff !important;
+}
+.tsPageHeaderCard .sapMObjectStatusIcon,
+.tsPageHeaderCard .sapMObjectStatus .sapMObjectStatusIcon,
+.tsPageHeaderCard .sapMObjectStatusStateInformation .sapMObjectStatusIcon,
+.tsPageHeaderCard .sapMObjectStatusStateInformation .sapUiIcon,
+.tsPageHeaderCard .sapMObjectStatusStateWarning    .sapMObjectStatusIcon,
+.tsPageHeaderCard .sapMObjectStatusStateWarning    .sapUiIcon,
+.tsPageHeaderCard .sapMObjectStatusStateSuccess    .sapMObjectStatusIcon,
+.tsPageHeaderCard .sapMObjectStatusStateSuccess    .sapUiIcon,
+.tsPageHeaderCard .sapMObjectStatusStateError      .sapMObjectStatusIcon,
+.tsPageHeaderCard .sapMObjectStatusStateError      .sapUiIcon {
+    color: rgba(255, 255, 255, 0.92) !important;
+}
+
+/* Core icons (page title icon + any others) → white */
+.tsPageHeaderCard .sapUiIcon { color: #ffffff !important; }
+
+/* All sap.m.Text inside blue header (used for page titles + subtitles) */
+.tsPageHeaderCard .sapMText,
+.tsPageHeaderCard .sapMText span,
+.tsPageHeaderCard span.sapMText {
+    color: rgba(255, 255, 255, 0.95) !important;
+}
+/* Back button on any blue-header page */
+.tsPageBackBtn .sapMBtnInner {
+    background: rgba(255, 255, 255, 0.15) !important;
+    border: 1px solid rgba(255, 255, 255, 0.35) !important;
+    border-radius: 8px !important;
+    min-width: 34px !important;
+    margin-right: 10px !important;
+}
+.tsPageBackBtn .sapMBtnIcon { color: #ffffff !important; }
+.tsPageBackBtn .sapMBtnInner:hover { background: rgba(255, 255, 255, 0.28) !important; }
+/* Default-type buttons inside blue header (e.g. Timesheet Save button) */
+.tsPageHeaderCard .sapMBtnDefault .sapMBtnInner {
+    background: rgba(255, 255, 255, 0.18) !important;
+    border-color: rgba(255, 255, 255, 0.38) !important;
+}
+.tsPageHeaderCard .sapMBtnDefault .sapMBtnIcon,
+.tsPageHeaderCard .sapMBtnDefault .sapMBtnText {
+    color: #ffffff !important;
+}
+.tsPageHeaderCard .sapMBtnDefault .sapMBtnInner:hover {
+    background: rgba(255, 255, 255, 0.28) !important;
+}
+/* Transparent buttons (e.g. nav icons) in blue header */
+.tsPageHeaderCard .sapMBtnTransparent .sapMBtnIcon,
+.tsDashGreetingRow .sapMBtnTransparent .sapMBtnIcon {
+    color: #ffffff !important;
+}
+
+/* Back button on the Team Attendance blue band — needs lighter colour */
+.tsTeamAttBackBtn .sapMBtnInner {
+    background: rgba(255, 255, 255, 0.15) !important;
+    border: 1px solid rgba(255, 255, 255, 0.35) !important;
+    border-radius: 8px !important;
+    min-width: 34px !important;
+    margin-right: 10px !important;
+}
+.tsTeamAttBackBtn .sapMBtnIcon { color: #ffffff !important; }
+.tsTeamAttBackBtn .sapMBtnInner:hover { background: rgba(255, 255, 255, 0.28) !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Universal soft shadow on card-style containers
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsTaskCard,
+.tsHistWelcomeCard,
+.tsHistDetailPanel,
+.tsTaskFormPanel,
+.tsKpiTile,
+.tsTaskCardItem .sapMLIB,
+.tsMgrListToolbar,
+.tsTeamAttPager,
+.tsAttGridScroll {
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06) !important;
+    border-radius: 10px !important;
+    border: 1px solid #eef2f7 !important;
+}
+
+/* Hover lift on task cards */
+.tsTaskCard:hover {
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.10) !important;
+    transition: box-shadow 0.18s ease;
+}
+
+/* Team Attendance blue header — sticky + shadow */
+.tsTeamAttHeader {
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.18);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Dashboard KPI tile gradients  (each tile gets a soft category tint)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsDashTile {
+    background: #ffffff;
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.tsDashTile:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12) !important;
+}
+.tsDashTile-anniv       { background: linear-gradient(135deg, #eff6ff 0%, #ffffff 65%); }
+.tsDashTile-leave       { background: linear-gradient(135deg, #ecfdf5 0%, #ffffff 65%); }
+.tsDashTile-tasks       { background: linear-gradient(135deg, #fffbeb 0%, #ffffff 65%); }
+.tsDashTile-attendance  { background: linear-gradient(135deg, #eff6ff 0%, #ffffff 65%); }
+.tsDashTile-perf        { background: linear-gradient(135deg, #fef3c7 0%, #ffffff 65%); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Pill-chip filter styling for SegmentedButton (priority / status filters)
+   ══════════════════════════════════════════════════════════════════════════ */
+.sapMSegB .sapMSegBBtn {
+    border-radius: 999px !important;
+    border: 1px solid #e2e8f0 !important;
+    background: #ffffff !important;
+    color: #475569 !important;
+    margin-right: 6px !important;
+    font-weight: 500 !important;
+    padding: 4px 14px !important;
+    min-width: 60px !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.sapMSegB .sapMSegBBtn:hover {
+    background: #f1f5f9 !important;
+    color: #2563eb !important;
+}
+.sapMSegB .sapMSegBBtnSel {
+    background: #dbeafe !important;
+    color: #1d4ed8 !important;
+    border-color: #93c5fd !important;
+    font-weight: 600 !important;
+}
+/* Remove default SAP UI5 vertical separators between segmented buttons */
+.sapMSegB .sapMSegBBtn + .sapMSegBBtn {
+    border-left-width: 1px !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Friendly empty states
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsTaskEmpty,
+.tsTeamAttEmpty {
+    background: #ffffff;
+    padding: 48px 24px;
+    border-radius: 12px;
+    border: 1px dashed #cbd5e1;
+    margin-top: 18px;
+}
+.tsTaskEmpty .sapUiIcon,
+.tsTeamAttEmpty .sapUiIcon {
+    background: #f1f5f9;
+    border-radius: 50%;
+    padding: 18px;
+    width: 48px !important;
+    height: 48px !important;
+    line-height: 48px !important;
+    font-size: 2rem !important;
+}
+.tsTaskEmpty .sapMText,
+.tsTeamAttEmpty .sapMText {
+    color: #475569;
+    font-size: 0.92rem;
+}
+
+/* Tables / Lists noDataText area — give it some padding so it doesn't
+   feel cramped, and a soft background. */
+.sapMListNoData,
+.sapMListTblNoData {
+    padding: 40px 20px !important;
+    background: #f9fafb !important;
+    color: #6b7280 !important;
+    font-style: italic;
+    text-align: center !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Team Attendance (manager view)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsTeamAttPage {
+    background: #f4f6f9;
+}
+.tsTeamAttWrap {
+    padding: 16px 18px 24px 18px;
+}
+.tsTeamAttHeader {
+    background: #2476d8;
+    color: #fff;
+    padding: 14px 18px;
+    border-radius: 10px 10px 0 0;
+}
+.tsTeamAttHeader .sapMTitle,
+.tsTeamAttTitle,
+.tsTeamAttTitle .sapMTitleInner {
+    color: #fff !important;
+}
+.tsTeamAttTitleIcon {
+    color: #fff !important;
+    font-size: 1.4rem;
+}
+.tsTeamAttSearch input,
+.tsTeamAttSearch .sapMSF {
+    background: #fff !important;
+    border-radius: 22px !important;
+}
+.tsTeamAttExportBtn .sapMBtnInner {
+    background: rgba(255, 255, 255, 0.15) !important;
+    color: #fff !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
+}
+.tsTeamAttExportBtn .sapMBtnIcon { color: #fff !important; }
+
+.tsTeamAttMonthNav {
+    background: #fff;
+    padding: 12px 14px;
+    border-bottom: 1px solid #e5e7eb;
+    gap: 14px;
+}
+.tsTeamAttMonthLabel {
+    font-weight: 700;
+    color: #1f2937;
+    font-size: 1rem;
+    min-width: 140px;
+    text-align: center;
+    letter-spacing: 0.2px;
+}
+.tsTeamAttMonthIcon {
+    color: #2476d8;
+    font-size: 1.05rem;
+}
+.tsTeamAttArrowBtn .sapMBtnInner {
+    background: #e0f2fe !important;
+    border: 1px solid #bae6fd !important;
+    color: #0369a1 !important;
+    border-radius: 8px !important;
+    min-width: 36px !important;
+    padding: 6px 10px !important;
+}
+.tsTeamAttArrowBtn .sapMBtnIcon { color: #0369a1 !important; }
+.tsTeamAttArrowBtn .sapMBtnInner:hover {
+    background: #bae6fd !important;
+}
+
+.tsTeamAttLegend {
+    padding: 8px 14px;
+    background: #fff;
+    border-bottom: 1px solid #e5e7eb;
+    gap: 18px;
+    font-size: 0.78rem;
+    color: #374151;
+}
+.tsTeamAttLegendItem { gap: 4px; }
+
+.tsTeamAttEmpty,
+.tsTeamAttLoading {
+    padding: 60px 0;
+    background: #fff;
+    border-radius: 0 0 10px 10px;
+}
+
+/* ── The grid table ──────────────────────────────────────────────────── */
+.tsAttGridScroll {
+    overflow-x: auto;
+    background: #fff;
+    border-bottom: 1px solid #e5e7eb;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+.tsAttGrid {
+    border-collapse: separate;
+    border-spacing: 0;
+    width: max-content;
+    font-size: 0.78rem;
+    color: #374151;
+}
+.tsAttGrid th, .tsAttGrid td {
+    border-bottom: 1px solid #e5e7eb;
+    border-right: 1px solid #f1f5f9;
+    text-align: center;
+    vertical-align: middle;
+    padding: 6px 4px;
+    white-space: nowrap;
+}
+.tsAttGrid thead th {
+    position: sticky;
+    top: 0;
+    background: #f8fafc;
+    color: #475569;
+    font-weight: 600;
+    z-index: 2;
+    border-bottom: 2px solid #cbd5e1;
+}
+
+/* Sticky first column (employee) */
+.tsAttGrid .tsAttEmpCol,
+.tsAttGrid .tsAttEmpCell {
+    position: sticky;
+    left: 0;
+    background: #fff;
+    z-index: 1;
+    text-align: left;
+    min-width: 220px;
+    border-right: 2px solid #e5e7eb;
+}
+.tsAttGrid thead .tsAttEmpCol {
+    background: #f8fafc;
+    z-index: 3;
+}
+
+/* Date column header */
+.tsAttDayCol {
+    min-width: 60px;
+    line-height: 1.15;
+    padding: 4px 6px !important;
+}
+.tsAttDayDow {
+    display: block;
+    color: #94a3b8;
+    font-weight: 500;
+    font-size: 0.7rem;
+}
+.tsAttDayDate {
+    display: block;
+    color: #475569;
+    font-weight: 600;
+    font-size: 0.78rem;
+}
+.tsAttWeekend { background: #f1f5f9 !important; }
+.tsAttHolidayCol .tsAttDayDate { color: #dc2626; }
+
+/* Employee identity cell */
+.tsAttEmpInfo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 10px;
+}
+.tsAttEmpAvatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #60a5fa, #2563eb);
+    color: #fff;
+    font-weight: 600;
+    font-size: 0.78rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.tsAttEmpName {
+    color: #111827;
+    font-weight: 600;
+    font-size: 0.85rem;
+    line-height: 1.2;
+}
+.tsAttEmpRole {
+    color: #6b7280;
+    font-size: 0.72rem;
+    line-height: 1.2;
+}
+
+/* Status code badges (small square inside cell) */
+.tsAttCell { min-width: 60px; }
+.tsAttCellLg {
+    display: inline-block;
+    min-width: 30px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 0.78rem;
+    line-height: 1.1;
+}
+.tsAttCellTime {
+    display: block;
+    color: #475569;
+    font-size: 0.7rem;
+    margin-top: 2px;
+}
+
+.tsAtt-P   { background: transparent; color: #1f2937; }     /* Plain P */
+.tsAtt-A   { background: transparent; color: #dc2626; }     /* Red A */
+.tsAtt-H   { background: transparent; color: #dc2626; }     /* Red H (holiday letter) */
+.tsAtt-CL  { background: #22c55e; color: #fff; }            /* Casual leave — green */
+.tsAtt-SL  { background: #facc15; color: #1f2937; }         /* Sick leave — yellow */
+.tsAtt-PL  { background: #4ade80; color: #fff; }            /* Paid leave — light green */
+.tsAtt-ML  { background: #c084fc; color: #fff; }            /* Maternity — purple */
+.tsAtt-PtL { background: #a78bfa; color: #fff; }            /* Paternity — light purple */
+.tsAtt-L   { background: #e5e7eb; color: #374151; }         /* Generic leave */
+.tsAtt-W   { background: transparent; color: transparent; min-width: 30px; height: 18px; } /* Weekend blank */
+.tsAtt-F   { background: transparent; color: transparent; min-width: 30px; height: 18px; } /* Future-date blank */
+
+/* Future-date cell (after today) — neutral grey background, no badge */
+.tsAttCell.tsAttFuture { background: #f9fafb !important; }
+
+.tsTeamAttPager {
+    background: #fff;
+    border-radius: 0 0 10px 10px;
+    padding: 8px 14px;
+    border-top: 1px solid #e5e7eb;
+    gap: 4px;
+    font-size: 0.82rem;
+    color: #475569;
+}
+
+/* tsHeaderBadge — ObjectStatus used as a white info chip inside any blue header */
+.tsHeaderBadge .sapMObjectStatusText,
+.tsHeaderBadge span.sapMObjectStatusText {
+    color: rgba(255, 255, 255, 0.92) !important;
+    font-weight: 500 !important;
+}
+.tsHeaderBadge .sapMObjectStatusIcon,
+.tsHeaderBadge .sapUiIcon {
+    color: rgba(255, 255, 255, 0.85) !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Performance Rating page
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsPerfWrap         { padding: 16px 18px 32px; box-sizing: border-box; }
+.tsPerfHeaderSub    { color: rgba(255,255,255,0.75) !important; font-size: 0.84rem !important; }
+
+.tsPerfLayout {
+    gap: 18px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+.tsPerfFormCard,
+.tsPerfHistCard {
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(15, 23, 42, 0.06);
+    border: 1px solid #eef2f7;
+    padding: 24px;
+    box-sizing: border-box;
+}
+.tsPerfFormCard { flex: 1; min-width: 320px; }
+.tsPerfHistCard { flex: 1.4; min-width: 340px; }
+
+.tsPerfSectionHead {
+    padding-bottom: 14px;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #eff6ff;
+}
+.tsPerfSectionIcon { color: #2563eb !important; font-size: 1.1rem; }
+.tsPerfSectionTitle .sapMTitleInner {
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    color: #111827 !important;
+}
+
+.tsPerfFieldGroup  { margin-bottom: 16px; }
+.tsPerfLabel.sapMLabel { font-size: 0.82rem !important; font-weight: 600 !important; color: #374151 !important; margin-bottom: 6px !important; display: block !important; }
+
+.tsPerfRatingDisplay {
+    background: #eff6ff;
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-top: 10px;
+    border: 1px solid #bfdbfe;
+}
+.tsPerfRatingLabel { font-size: 1.05rem !important; font-weight: 700 !important; color: #1d4ed8 !important; margin-top: 4px !important; }
+
+.tsPerfSubmitBtn .sapMBtnInner {
+    border-radius: 8px !important;
+    padding: 0 20px !important;
+    min-height: 36px !important;
+}
+
+/* Rating history table rendered via core:HTML */
+.tsPerfHistCard table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+.tsPerfHistCard th {
+    background: #f8fafc;
+    color: #475569;
+    font-weight: 600;
+    padding: 10px 12px;
+    border-bottom: 2px solid #e5e7eb;
+    text-align: left;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.tsPerfHistCard td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f3f4f6;
+    color: #1f2937;
+    vertical-align: middle;
+}
+.tsPerfHistCard tr:last-child td { border-bottom: none; }
+.tsPerfHistCard tr:hover td { background: #f0f7ff; }

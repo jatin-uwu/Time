@@ -9,7 +9,7 @@
     displayBlock="true">
 
     <Page id="taskAssignPage"
-          title="Assign Task"
+          showHeader="false"
           class="tsDashboardPage"
           enableScrolling="true">
 
@@ -17,16 +17,19 @@
 
             <VBox class="tsTaskAssignWrap">
 
-                <!-- Toolbar -->
-                <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween">
+                <!-- ── Page header ─────────────────────────────────────── -->
+                <HBox class="tsPageHeaderCard" alignItems="Center" justifyContent="SpaceBetween">
                     <HBox alignItems="Center">
-                        <core:Icon src="sap-icon://create-form" class="tsMgrToolbarIcon" />
-                        <Title text="Assign New Task" level="H4" class="sapUiSmallMarginBegin" />
+                        <core:Icon src="sap-icon://create-form" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                        <Text text="Assign New Task"
+                              style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
                     </HBox>
                     <ObjectStatus
                         text="{taView>/assignedCount} assigned"
-                        state="Information"
-                        icon="sap-icon://task" />
+                        state="None"
+                        icon="sap-icon://task"
+                        style="color:#ffffff;"
+                        class="tsHeaderBadge" />
                 </HBox>
 
                 <!-- ── Task creation form ── -->

@@ -104,16 +104,86 @@ service EmployeeService @(path: '/employee') {
 
     @(requires: [
         'Employee',
-        'HR', 
+        'HR',
         'Manager'
     ])
     action updateTaskStatus(taskId: String(10),
                             status: String(20),
                             reviewerId: String(10),
-                            reviewerStatus: String(20))                    returns {
+                            reviewerStatus: String(20))
+    returns {
         taskId : String(10);
         status : String(20);
     };
+
+    // ── Review workflow ──────────────────────────────────────────────
+    // Reviewer submits "Reviewed" decision → task becomes 'Completed'.
+    @(requires: [
+        'Employee',
+        'Manager',
+        'HR'
+    ])
+    action submitReview(taskId: String(10),
+                        remarks: String(2000),
+                        fileName: String(255),
+                        mimeType: String(100),
+                        dataBase64: LargeString)                           returns {
+        reviewId : String(30);
+        taskId   : String(10);
+        status   : String(20);
+    };
+
+    // Reviewer submits "Issue Found" → task returns to 'In Progress'.
+    @(requires: [
+        'Employee',
+        'Manager',
+        'HR'
+    ])
+    action reportIssue(taskId: String(10),
+                       remarks: String(2000),
+                       fileName: String(255),
+                       mimeType: String(100),
+                       dataBase64: LargeString)                            returns {
+        reviewId : String(30);
+        taskId   : String(10);
+        status   : String(20);
+    };
+
+    // Read the latest review for a task (for assignee to see what reviewer wrote).
+    @(requires: [
+        'Employee',
+        'Manager',
+        'HR'
+    ])
+    action getTaskReview(taskId: String(10))                               returns {
+        reviewId       : String(30);
+        reviewerId     : String(10);
+        reviewerName   : String(100);
+        decision       : String(20);
+        remarks        : String(2000);
+        attachmentName : String(255);
+        reviewedOn     : String;
+    };
+
+    // Download attachment uploaded by a reviewer (kept as base64 stream).
+    @(requires: [
+        'Employee',
+        'Manager',
+        'HR'
+    ])
+    action getReviewAttachment(reviewId: String(30))                       returns {
+        fileName   : String(255);
+        mimeType   : String(100);
+        dataBase64 : LargeString;
+    };
+
+    // Read-only projection so the UI can list/inspect review records.
+    @(requires: [
+        'Employee',
+        'Manager',
+        'HR'
+    ])
+    entity TaskReviews                               as projection on db.timesheet.TaskReview;
 
     // ── Leave ────────────────────────────────────────────────────────
     @(requires: [
@@ -351,6 +421,20 @@ service ManagerService @(path: '/manager')@(requires: 'Manager') {
         timesheetId : String;
     };
 
+    // ── Team Attendance ───────────────────────────────────────────────────
+    // Read-only Holiday projection so the grid can mark "H" cells.
+    entity Holidays         as projection on db.timesheet.HolidayMaster;
+
+    // Returns the full attendance grid for every employee reporting to the
+    // logged-in manager, for the requested calendar month.  Output is JSON
+    // (LargeString) to avoid a deep CDS type forest.
+    action getTeamAttendance(year: Integer,
+                             month: Integer)                               returns {
+        employees : LargeString; // [{employeeId,employeeName,designation,email,days:[{date,status,time}]}]
+        holidays  : LargeString; // [{date,name}]
+        daysInMonth : Integer;
+    };
+
 }
 
 
@@ -408,4 +492,7 @@ service HRService @(path: '/hr')@(requires: 'HR') {
         requestId : String;
         status    : String;
     };
+
+    // Holiday master — HR maintains national/regional holidays here.
+    entity Holidays                            as projection on db.timesheet.HolidayMaster;
 }

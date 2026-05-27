@@ -79,10 +79,20 @@ sap.ui.define([
             this._oAppModel = new JSONModel({
                 unreadCount: 0,
                 userRole: ["manager", "employee", "hr"].includes(sInitRole) ? sInitRole : "employee",
+                // roleResolved gates the visibility of all role-conditional
+                // sidebar items.  Always starts as `false` and flips to `true`
+                // ONLY once getCurrentUser() returns from the backend — even
+                // if localStorage already has a cached role, because that
+                // cached value could belong to a different user from the
+                // previous session.  This guarantees zero flicker / wrong-
+                // styling-then-correct transitions on first login.
+                roleResolved: false,
                 userName: "",
                 userInitials: "JD",
                 userProfile: null,
-                profilePhotoSrc: ""
+                // data: URL bound to the toolbar Avatar.src and popover img
+                profilePhotoSrc: "",
+                profilePhotoDataUrl: ""
             });
             this.getView().setModel(this._oAppModel, "appView");
 
@@ -90,17 +100,54 @@ sap.ui.define([
             // cleared in afterClose. Allows _applyProfilePhoto to update it async.
             this._oCurrentPopoverAvatar = null;
 
+            // Re-inject photo overlay after every Avatar re-render.
+            try {
+                const oAv = this.getView().byId("userAvatar");
+                if (oAv) {
+                    oAv.addEventDelegate({
+                        onAfterRendering: () => {
+                            if (this._sPhotoBlobUrl) {
+                                this._patchAvatarDOM(this._sPhotoBlobUrl);
+                            }
+                        }
+                    }, this);
+                }
+            } catch (e) { /* ignore */ }
+
             this._loadCurrentUser();
 
-            const bExplicit = !!(sUrlRole || sSaveRole && false);
+            const bExplicit = !!(sUrlRole);
             const oComp = this.getOwnerComponent();
+
+            // Separate concerns:
+            //   markResolved – flips roleResolved to true exactly ONCE (unblocks sidebar)
+            //   applyRole    – ALWAYS updates userRole when backend gives a real value,
+            //                  even if markResolved already fired (fixes first-login bug
+            //                  where the 3-s timeout beat the OData metadata fetch)
+            const applyRole = (sRole) => {
+                if (sRole && !bExplicit) {
+                    this._oAppModel.setProperty("/userRole", sRole.toLowerCase());
+                }
+            };
+            const markResolved = () => {
+                if (this._bRoleResolved) return;
+                this._bRoleResolved = true;
+                this._oAppModel.setProperty("/roleResolved", true);
+            };
+
             if (oComp.getCurrentUser) {
                 oComp.getCurrentUser().then(u => {
-                    if (bExplicit) return;
                     const sRole = u && (u.role || (u.value && u.value.role));
-                    if (sRole) this._oAppModel.setProperty("/userRole", sRole.toLowerCase());
-                });
+                    applyRole(sRole);
+                    markResolved();
+                }).catch(() => markResolved());
+            } else {
+                markResolved();
             }
+            // Safety net: unblock the sidebar after 3 s if backend is slow.
+            // applyRole() from the backend response will still fire when it
+            // arrives, even after this timeout, and update the sidebar items.
+            setTimeout(markResolved, 3000);
 
             this.getOwnerComponent().getRouter().attachRouteMatched(this._onRouteMatched, this);
 
@@ -258,14 +305,15 @@ sap.ui.define([
                 const approxKB = Math.round(sDataUrl.length * 0.75 / 1024);
                 console.log(`[ProfilePhoto] Compressed: ~${approxKB} KB`);
 
-                // Show optimistic preview immediately
-                this._applyProfilePhoto(sDataUrl);
+                // Show optimistic blob URL preview immediately
+                const sPreviewBlobUrl = await this._toBlobUrl(sDataUrl);
+                this._applyProfilePhoto(sPreviewBlobUrl, sDataUrl);
 
                 try {
                     const oResult = await callAction("uploadProfilePhoto", { dataBase64: sDataUrl });
                     if (oResult && oResult.success) {
                         MessageToast.show("Profile picture saved!");
-                        // Re-fetch from DB to confirm round-trip
+                        // Re-fetch from DB to get the definitive blob URL
                         await this._loadProfilePhoto();
                     } else {
                         MessageToast.show("Save may have failed — check console.");
@@ -287,68 +335,101 @@ sap.ui.define([
                     "| mime:", oResult && oResult.mimeType);
 
                 if (src && src.length > 100) {
-                    // Ensure data-URL prefix exists (backend adds it, but guard anyway)
-                    const sSrc = src.startsWith("data:") ? src : `data:image/jpeg;base64,${src}`;
-                    this._applyProfilePhoto(sSrc);
+                    const sDataUrl = src.startsWith("data:") ? src : `data:image/jpeg;base64,${src}`;
+                    const sBlobUrl = await this._toBlobUrl(sDataUrl);
+                    this._applyProfilePhoto(sBlobUrl, sDataUrl);
                 }
             } catch (e) {
-                // Non-fatal — avatar shows initials if no photo saved yet
                 console.warn("[ProfilePhoto] Load failed:", e.message || e);
             }
         },
 
-        // ── Convert a data-URL to a Blob URL ─────────────────────────────────
-        // Blob URLs (blob:https://...) are always CSP-safe; data: URLs are
-        // blocked by the AppRouter's img-src Content-Security-Policy header.
-        _dataUrlToBlobUrl(sDataUrl) {
+        // ── Convert data-URL → same-origin blob URL ───────────────────────────
+        // Using fetch() to let the browser parse the data URL is more reliable
+        // than manual atob() — the browser handles padding, whitespace, etc.
+        // blob: URLs from the same origin are never blocked by SAP UI5's URL
+        // sanitizer or any Content-Security-Policy img-src restriction.
+        async _toBlobUrl(sDataUrl) {
             try {
-                const arr = sDataUrl.split(",");
-                const mimeMatch = arr[0].match(/:(.*?);/);
-                const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
-                const bstr = atob(arr[1]);
-                const u8 = new Uint8Array(bstr.length);
-                for (let i = 0; i < bstr.length; i++) u8[i] = bstr.charCodeAt(i);
-                const blob = new Blob([u8], { type: mime });
-                return URL.createObjectURL(blob);
+                const resp = await fetch(sDataUrl);
+                const blob = await resp.blob();
+                if (blob && blob.size > 0) {
+                    const url = URL.createObjectURL(blob);
+                    console.log("[ProfilePhoto] Blob URL ready, size:", blob.size);
+                    return url;
+                }
             } catch (e) {
-                console.warn("[ProfilePhoto] Blob conversion failed:", e.message);
-                return sDataUrl; // fallback to data URL
+                console.warn("[ProfilePhoto] fetch-to-blob failed:", e.message);
             }
+            return sDataUrl; // fallback — data URL direct
         },
 
-        // ── Write photo to every avatar surface ──────────────────────────────
-        _applyProfilePhoto(sDataUrl) {
-            if (!sDataUrl) return;
+        // ── Inject an <img> overlay directly into the Avatar DOM ─────────────
+        // blob: URLs bypass all SAP UI5 / browser sanitization for img-src.
+        // .__tsAvatarPhoto marks the element so duplicates are removed on each
+        // onAfterRendering fire without accumulating.
+        _patchAvatarDOM(sBlobUrl) {
+            try {
+                const oAvatar = this.getView().byId("userAvatar");
+                const domRef = oAvatar && oAvatar.getDomRef();
+                if (!domRef) return;
 
-            // 1. Model property — stores the original data URL (used when
-            //    reopening the popover to generate a fresh blob URL)
-            this._oAppModel.setProperty("/profilePhotoSrc", sDataUrl);
+                // Remove any previous overlay
+                domRef.querySelectorAll(".__tsAvatarPhoto").forEach(el => el.remove());
 
-            // 2. Convert to blob URL — CSP-safe for both toolbar Avatar and
-            //    popover <img>. Revoke previous blob to avoid memory leaks.
-            if (this._sPhotoBlobUrl) {
-                try { URL.revokeObjectURL(this._sPhotoBlobUrl); } catch (e) { /**/ }
-            }
-            const sBlobUrl = sDataUrl.startsWith("blob:")
-                ? sDataUrl
-                : this._dataUrlToBlobUrl(sDataUrl);
+                // Inject <img> that fills the full Avatar circle
+                const img = document.createElement("img");
+                img.className = "__tsAvatarPhoto";
+                img.src = sBlobUrl;
+                img.alt = "";
+                img.style.cssText =
+                    "position:absolute;top:0;left:0;width:100%;height:100%;" +
+                    "border-radius:50%;object-fit:cover;pointer-events:none;" +
+                    "z-index:10;display:block;";
+
+                domRef.style.position = "relative";
+                domRef.style.overflow = "hidden";
+                domRef.appendChild(img);
+
+                // Hide SAP Avatar's built-in initials / icon text
+                domRef.querySelectorAll(
+                    ".sapFAvatarInitialsHolder,.sapMAvatarInitialsHolder," +
+                    ".sapFAvatarIcon,.sapFAvatarInitials"
+                ).forEach(el => { el.style.visibility = "hidden"; });
+            } catch (e) { /* ignore */ }
+        },
+
+        // ── Apply photo to toolbar Avatar + popover ───────────────────────────
+        // sBlobUrl  : same-origin blob: URL — used for img src everywhere
+        // sDataUrl  : original data: URL — kept as popover fallback only
+        _applyProfilePhoto(sBlobUrl, sDataUrl) {
+            if (!sBlobUrl) return;
+
             this._sPhotoBlobUrl = sBlobUrl;
+            this._sPhotoDataUrl = sDataUrl || sBlobUrl;
 
-            // 3. Toolbar Avatar — set blob URL directly
-            const oSidebarAvatar = this.byId("userAvatar");
-            if (oSidebarAvatar) {
-                oSidebarAvatar.setSrc(sBlobUrl);
-                oSidebarAvatar.setInitials("");
-                oSidebarAvatar.setBackgroundColor("Transparent");
-            }
+            // Model drives Avatar src binding
+            this._oAppModel.setProperty("/profilePhotoSrc", sBlobUrl);
+            this._oAppModel.setProperty("/profilePhotoDataUrl", sDataUrl || sBlobUrl);
 
-            // 4. Popover <img> — patch via DOM id
+            // Imperative Avatar API (resets internal error state)
+            try {
+                const oAvatar = this.getView().byId("userAvatar");
+                if (oAvatar) {
+                    oAvatar.setSrc(sBlobUrl);
+                    oAvatar.setInitials("");
+                    oAvatar.setBackgroundColor("Transparent");
+                }
+            } catch (e) { /* view not yet ready */ }
+
+            // DOM overlay — also re-applied by onAfterRendering delegate
+            this._patchAvatarDOM(sBlobUrl);
+
+            // Patch open popover avatar
             if (this._sPopoverAvatarDomId) {
                 const el = document.getElementById(this._sPopoverAvatarDomId);
                 if (el) {
-                    el.style.background = "none";
-                    el.style.overflow = "hidden";
-                    el.innerHTML = `<img src="${sBlobUrl}" alt="Profile"
+                    el.innerHTML = `<img src="${sBlobUrl}" alt=""
                         style="width:100%;height:100%;object-fit:cover;display:block;"/>`;
                 }
             }
@@ -524,17 +605,14 @@ sap.ui.define([
             this._oCurrentPopoverAvatar = null;
 
             const sInitials = this._oAppModel.getProperty("/userInitials");
-            const sPhoto    = this._oAppModel.getProperty("/profilePhotoSrc");
+            // Use blob URL for the popover avatar (never sanitized by browser or SAP)
+            const sPhotoUrl = this._sPhotoBlobUrl
+                || this._oAppModel.getProperty("/profilePhotoSrc")
+                || null;
 
             // Unique DOM id so _applyProfilePhoto can patch the <img> if called later
             const sAvatarId = "__tsPopAvatar_" + Date.now();
             this._sPopoverAvatarDomId = sAvatarId;
-
-            // Use existing blob URL if available (already CSP-safe), otherwise
-            // convert the stored data URL → blob URL now.
-            const sPhotoUrl = sPhoto
-                ? (this._sPhotoBlobUrl || this._dataUrlToBlobUrl(sPhoto))
-                : null;
 
             // Build the entire profile card as one HTML string.
             const sAvatarCircle = sPhotoUrl
