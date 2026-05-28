@@ -48,13 +48,16 @@
                                        text="Prev-Week Requests"
                                        icon="sap-icon://calendar"
                                        count="{mgrView>/prevWeekPendingCount}" />
+                        <IconTabFilter key="leaves"
+                                       text="Leave Approvals"
+                                       icon="sap-icon://away"
+                                       count="{mgrView>/leavePendingCount}" />
                     </items>
                 </IconTabBar>
 
                 <!-- ── TAB 1: Timesheet Approvals ──────────────────────── -->
                 <VBox visible="{= ${mgrView>/activeSection} === 'timesheets' }">
 
-                    <!-- Toolbar: pending badge + filter -->
                     <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween">
                         <HBox alignItems="Center">
                             <core:Icon src="sap-icon://approvals" class="tsMgrToolbarIcon" />
@@ -67,51 +70,50 @@
                             icon="sap-icon://alert" />
                     </HBox>
 
-                    <!-- Status filter -->
-                    <SegmentedButton id="statusFilter" selectedKey="Pending"
-                        selectionChange=".onFilterChange" class="tsMgrFilter">
+                    <!-- Empty state -->
+                    <VBox visible="{= ${mgrView>/submissions}.length === 0 }"
+                          class="tsMgrEmptyState" alignItems="Center">
+                        <core:Icon src="sap-icon://approvals" size="2.5rem" color="#9ca3af" />
+                        <Text text="No pending timesheets." textAlign="Center"
+                              class="tsMgrEmptyText sapUiSmallMarginTop" />
+                    </VBox>
+
+                    <!-- Table — only when there are items -->
+                    <Table id="approvalList"
+                           visible="{= ${mgrView>/submissions}.length > 0 }"
+                           items="{mgrView>/submissions}"
+                           class="sapUiSmallMarginTop">
+                        <columns>
+                            <Column><Text text="Employee"     /></Column>
+                            <Column><Text text="Week"         /></Column>
+                            <Column><Text text="Submitted On" /></Column>
+                            <Column><Text text="Status"       /></Column>
+                            <Column width="14rem"><Text text="Actions" /></Column>
+                        </columns>
                         <items>
-                            <SegmentedButtonItem key="Pending"  text="Pending"  />
-                            <SegmentedButtonItem key="All"      text="All"      />
-                            <SegmentedButtonItem key="Approved" text="Approved" />
-                            <SegmentedButtonItem key="Rejected" text="Rejected" />
-                        </items>
-                    </SegmentedButton>
-
-                    <!-- Timesheet submission cards -->
-                    <List id="approvalList"
-                          mode="None"
-                          items="{mgrView>/submissions}"
-                          noDataText="No timesheets found for this filter."
-                          itemPress=".onApprovalSelect"
-                          class="tsMgrApprovalList">
-
-                        <CustomListItem type="Navigation" class="tsMgrListItem">
-                            <HBox class="tsMgrCard" alignItems="Center" justifyContent="SpaceBetween">
-
-                                <!-- Left: employee + week info -->
-                                <VBox class="tsMgrCardLeft">
-                                    <HBox alignItems="Center">
-                                        <core:Icon src="sap-icon://employee" class="tsMgrCardIcon" />
-                                        <Text text="{mgrView>employeeName}" class="tsMgrCardName sapUiTinyMarginBegin" />
-                                        <ObjectStatus
-                                            text="{mgrView>status}"
-                                            state="{path:'mgrView>status', formatter:'.formatStatusState'}"
-                                            class="sapUiSmallMarginBegin" />
+                            <ColumnListItem>
+                                <cells>
+                                    <Text text="{mgrView>employeeName}" />
+                                    <Text text="{mgrView>weekRange}" />
+                                    <Text text="{mgrView>submittedOn}" />
+                                    <ObjectStatus
+                                        text="{mgrView>status}"
+                                        state="{path:'mgrView>status', formatter:'.formatStatusState'}" />
+                                    <HBox>
+                                        <Button text="Approve"
+                                                type="Accept"
+                                                icon="sap-icon://accept"
+                                                press=".onApproveTimesheetInline"
+                                                class="sapUiTinyMarginEnd" />
+                                        <Button text="Reject"
+                                                type="Reject"
+                                                icon="sap-icon://decline"
+                                                press=".onRejectTimesheetInline" />
                                     </HBox>
-                                    <Text text="{mgrView>weekRange}"     class="tsMgrCardWeek" />
-                                    <Text text="Submitted: {mgrView>submittedOn}" class="tsMgrCardDate" />
-                                </VBox>
-
-                                <!-- Right: total hours -->
-                                <VBox alignItems="End" class="tsMgrCardRight">
-                                    <Text text="{mgrView>grandTotal}" class="tsMgrCardHours" />
-                                    <Text text="Total hrs"            class="tsMgrCardDate"  />
-                                </VBox>
-
-                            </HBox>
-                        </CustomListItem>
-                    </List>
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
 
                 </VBox>
 
@@ -130,9 +132,18 @@
                             icon="sap-icon://alert" />
                     </HBox>
 
+                    <!-- Empty state -->
+                    <VBox visible="{= ${mgrView>/prevWeekRequests}.length === 0 }"
+                          class="tsMgrEmptyState" alignItems="Center">
+                        <core:Icon src="sap-icon://calendar" size="2.5rem" color="#9ca3af" />
+                        <Text text="No pending prev-week requests." textAlign="Center"
+                              class="tsMgrEmptyText sapUiSmallMarginTop" />
+                    </VBox>
+
+                    <!-- Table — only when there are items -->
                     <Table id="prevWeekTable"
+                           visible="{= ${mgrView>/prevWeekRequests}.length > 0 }"
                            items="{mgrView>/prevWeekRequests}"
-                           noDataText="No prev-week fill requests."
                            class="sapUiSmallMarginTop">
                         <columns>
                             <Column><Text text="Employee"        /></Column>
@@ -164,6 +175,76 @@
                                                 icon="sap-icon://decline"
                                                 visible="{= ${mgrView>status} === 'Pending' }"
                                                 press=".onRejectPrevWeek" />
+                                    </HBox>
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+
+                </VBox>
+
+                <!-- ── TAB 3: Leave Approvals ─────────────────────────── -->
+                <VBox visible="{= ${mgrView>/activeSection} === 'leaves' }">
+
+                    <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween">
+                        <HBox alignItems="Center">
+                            <core:Icon src="sap-icon://away" class="tsMgrToolbarIcon" />
+                            <Title text="Leave Requests" level="H4" class="sapUiSmallMarginBegin" />
+                        </HBox>
+                        <ObjectStatus
+                            visible="{= ${mgrView>/leavePendingCount} > 0 }"
+                            text="{mgrView>/leavePendingCount} pending"
+                            state="Warning"
+                            icon="sap-icon://alert" />
+                    </HBox>
+
+                    <!-- Empty state -->
+                    <VBox visible="{= ${mgrView>/leaveRequests}.length === 0 }"
+                          class="tsMgrEmptyState" alignItems="Center">
+                        <core:Icon src="sap-icon://away" size="2.5rem" color="#9ca3af" />
+                        <Text text="No pending leave requests." textAlign="Center"
+                              class="tsMgrEmptyText sapUiSmallMarginTop" />
+                    </VBox>
+
+                    <!-- Table — only when there are items -->
+                    <Table id="mgrLeaveTable"
+                           visible="{= ${mgrView>/leaveRequests}.length > 0 }"
+                           items="{mgrView>/leaveRequests}"
+                           class="sapUiSmallMarginTop">
+                        <columns>
+                            <Column><Text text="Employee"   /></Column>
+                            <Column><Text text="Leave Type" /></Column>
+                            <Column><Text text="From"       /></Column>
+                            <Column><Text text="To"         /></Column>
+                            <Column width="4rem"><Text text="Days" /></Column>
+                            <Column><Text text="Reason"     /></Column>
+                            <Column><Text text="Status"     /></Column>
+                            <Column width="14rem"><Text text="Actions" /></Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem>
+                                <cells>
+                                    <Text text="{mgrView>employeeName}" />
+                                    <Text text="{mgrView>leaveType}" />
+                                    <Text text="{mgrView>fromDate}" />
+                                    <Text text="{mgrView>toDate}" />
+                                    <Text text="{mgrView>days}" />
+                                    <Text text="{mgrView>reason}" wrapping="false" maxLines="2" />
+                                    <ObjectStatus
+                                        text="{mgrView>status}"
+                                        state="{= ${mgrView>status} === 'Approved' ? 'Success' : ${mgrView>status} === 'Rejected' ? 'Error' : 'Warning'}" />
+                                    <HBox>
+                                        <Button text="Approve"
+                                                type="Accept"
+                                                icon="sap-icon://accept"
+                                                visible="{= ${mgrView>status} === 'Pending' }"
+                                                press=".onApproveLeave"
+                                                class="sapUiTinyMarginEnd" />
+                                        <Button text="Reject"
+                                                type="Reject"
+                                                icon="sap-icon://decline"
+                                                visible="{= ${mgrView>status} === 'Pending' }"
+                                                press=".onRejectLeave" />
                                     </HBox>
                                 </cells>
                             </ColumnListItem>

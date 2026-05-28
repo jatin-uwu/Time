@@ -105,6 +105,7 @@ sap.ui.define([
                 attendanceBtnLabel: "Checking...",
                 attendanceBtnEnabled: false,
                 attendanceMarked: false,
+                notifUnreadCount: "0",
             });
 
             this.getView().setModel(this._oDashModel, "dash");
@@ -1193,11 +1194,20 @@ sap.ui.define([
                         }));
 
                         this._oDashModel.setProperty("/recentNotifications/items", items);
+                        this._updateNotifBadge(items);
                     })
                     .catch(() => this._loadNotificationsFallback())
                     .finally(() => this._refreshDash());
 
             }).catch(() => this._loadNotificationsFallback());
+        },
+
+        _updateNotifBadge(items) {
+            const readKeys = new Set(JSON.parse(localStorage.getItem("tsNotifReadKeys") || "[]"));
+            const unread = (items || []).filter(n =>
+                !n.isRead && !readKeys.has((n.title || "") + "|" + (n.notifiedAt || ""))
+            ).length;
+            this._oDashModel.setProperty("/notifUnreadCount", unread > 0 ? String(unread) : "");
         },
 
         _loadNotificationsFallback() {
@@ -1212,6 +1222,7 @@ sap.ui.define([
                         try { items = JSON.parse(oData.itemsJSON); } catch (e) { items = []; }
                     }
                     this._oDashModel.setProperty("/recentNotifications/items", items);
+                    this._updateNotifBadge(items);
                 })
                 .catch(() => {
                     this._oDashModel.setProperty("/recentNotifications/items", []);

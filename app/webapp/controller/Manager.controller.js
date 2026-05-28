@@ -40,6 +40,9 @@ sap.ui.define([
                 prevWeekRequests:      [],
                 allPrevWeekRequests:   [],
                 prevWeekPendingCount:  0,
+                leaveRequests:         [],
+                allLeaveRequests:      [],
+                leavePendingCount:     0,
                 activeSection:         "timesheets",   // drives tab visibility
                 showDetail:            false,
                 pageTitle:             "Manager – Approvals",
@@ -67,6 +70,7 @@ sap.ui.define([
             this._selectedSub = null;
             this._loadSubmissions();
             this._loadPrevWeekRequests();
+            this._loadLeaveRequests();
         },
 
         onNavBack() {
@@ -129,10 +133,7 @@ sap.ui.define([
                     ).length;
                     this._oMgrModel.setProperty("/allSubmissions", submissions);
                     this._oMgrModel.setProperty("/pendingCount",   pending);
-
-                    const oSeg = this.byId("statusFilter");
-                    const sKey = oSeg ? oSeg.getSelectedKey() : "Pending";
-                    this._applyFilter(sKey, submissions);
+                    this._applyFilter(submissions);
                 })
                 .catch(() => this._loadFromLocalStorage())
                 .finally(() => this._oMgrModel.setProperty("/busy", false));
@@ -148,26 +149,13 @@ sap.ui.define([
             const pending = mine.filter(s => s.status === "Pending").length;
             this._oMgrModel.setProperty("/allSubmissions", mine);
             this._oMgrModel.setProperty("/pendingCount",   pending);
-
-            const oSeg = this.byId("statusFilter");
-            const sKey = oSeg ? oSeg.getSelectedKey() : "Pending";
-            this._applyFilter(sKey, mine);
+            this._applyFilter(mine);
         },
 
-        _applyFilter(sKey, all) {
-            const filtered = sKey === "All"      ? all
-                : sKey === "Pending"  ? all.filter(s => s.status === "Pending" || s.status === "Submitted")
-                : sKey === "Approved" ? all.filter(s => s.status === "Approved")
-                : sKey === "Rejected" ? all.filter(s => s.status === "Rejected")
-                : all;
+        _applyFilter(all) {
+            const data     = all || (this._oMgrModel.getProperty("/allSubmissions") || []);
+            const filtered = data.filter(s => s.status === "Pending" || s.status === "Submitted");
             this._oMgrModel.setProperty("/submissions", filtered);
-        },
-
-        onFilterChange(oEvent) {
-            const sKey = oEvent.getParameter("item").getKey();
-            const all  = this._oMgrModel.getProperty("/allSubmissions");
-            this._applyFilter(sKey, all);
-            this._selectedSub = null;
         },
 
         onApprovalSelect(oEvent) {
@@ -191,6 +179,96 @@ sap.ui.define([
             } else {
                 this._buildTableRows(sub);
             }
+        },
+
+        // ── Inline Approve / Reject (table row buttons) ───────────────────
+        onApproveTimesheetInline(oEvent) {
+            const oCtx = oEvent.getSource().getBindingContext("mgrView");
+            const sub  = oCtx.getObject();
+
+            MessageBox.confirm(
+                `Approve timesheet for ${sub.weekRange} submitted by ${sub.employeeName || "this employee"}?`,
+                {
+                    title:            "Approve Timesheet",
+                    actions:          [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                    emphasizedAction: MessageBox.Action.OK,
+                    onClose: (sAction) => {
+                        if (sAction !== MessageBox.Action.OK) return;
+                        this._oMgrModel.setProperty("/busy", true);
+                        fetch("/manager/approveTimesheet", {
+                            method:  "POST",
+                            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                            body:    JSON.stringify({ timesheetId: sub.timesheetId, remarks: "" })
+                        })
+                        .then(r => r.ok ? r.json() : Promise.reject(new Error("Approve failed: " + r.status)))
+                        .then(() => {
+                            this._postNotification(sub.weekStart, sub.weekRange, "approved", "", sub.employeeId);
+                            this._loadSubmissions();
+                            MessageToast.show("Timesheet approved.");
+                        })
+                        .catch(err => MessageBox.error((err && err.message) || "Approve failed."))
+                        .finally(() => this._oMgrModel.setProperty("/busy", false));
+                    }
+                }
+            );
+        },
+
+        onRejectTimesheetInline(oEvent) {
+            const oCtx = oEvent.getSource().getBindingContext("mgrView");
+            const sub  = oCtx.getObject();
+
+            const oTA = new TextArea({
+                placeholder: "Enter rejection reason (required)...",
+                rows: 4,
+                width: "100%"
+            });
+
+            const oDialog = new Dialog({
+                title: "Reject Timesheet",
+                content: [
+                    new VBox({
+                        items: [
+                            new Text({
+                                text: "Provide a reason for rejection. The employee will be notified.",
+                                wrapping: true
+                            }).addStyleClass("sapUiSmallMarginBottom"),
+                            new Label({ text: "Reason", labelFor: oTA }),
+                            oTA
+                        ]
+                    }).addStyleClass("sapUiSmallMargin")
+                ],
+                beginButton: new Button({
+                    text: "Reject",
+                    type: "Reject",
+                    press: () => {
+                        const sComment = oTA.getValue().trim();
+                        if (!sComment) { MessageToast.show("Please enter a rejection reason."); return; }
+                        oDialog.close();
+                        oDialog.destroy();
+                        this._oMgrModel.setProperty("/busy", true);
+                        fetch("/manager/rejectTimesheet", {
+                            method:  "POST",
+                            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                            body:    JSON.stringify({ timesheetId: sub.timesheetId, remarks: sComment })
+                        })
+                        .then(r => r.ok ? r.json() : Promise.reject(new Error("Reject failed: " + r.status)))
+                        .then(() => {
+                            this._postNotification(sub.weekStart, sub.weekRange, "rejected", sComment, sub.employeeId);
+                            this._loadSubmissions();
+                            MessageToast.show(`Timesheet rejected. ${sub.employeeName || "Employee"} has been notified.`);
+                        })
+                        .catch(err => MessageBox.error((err && err.message) || "Reject failed."))
+                        .finally(() => this._oMgrModel.setProperty("/busy", false));
+                    }
+                }),
+                endButton: new Button({
+                    text: "Cancel",
+                    press: () => { oDialog.close(); oDialog.destroy(); }
+                })
+            });
+
+            this.getView().addDependent(oDialog);
+            oDialog.open();
         },
 
         _loadEntriesFromBackend(sub) {
@@ -451,7 +529,7 @@ sap.ui.define([
                         const pending = enriched.filter(r => r.status === "Pending").length;
                         this._oMgrModel.setProperty("/allPrevWeekRequests",  enriched);
                         this._oMgrModel.setProperty("/prevWeekPendingCount", pending);
-                        this._oMgrModel.setProperty("/prevWeekRequests",     enriched);
+                        this._oMgrModel.setProperty("/prevWeekRequests",     enriched.filter(r => r.status === "Pending"));
                     });
                 })
                 .catch(err => console.error("Failed to load prev-week requests:", err));
@@ -579,6 +657,122 @@ sap.ui.define([
                 oComp.persistNotifications();
             } catch (e) {
                 console.warn("Failed to push prev-week notification:", e);
+            }
+        },
+
+        // ════════════════════════════════════════════════════════════════════
+        // LEAVE APPROVALS
+        // ════════════════════════════════════════════════════════════════════
+
+        _loadLeaveRequests() {
+            const oMgrModel = this.getOwnerComponent().getModel("manager");
+            if (!oMgrModel) return;
+
+            oMgrModel.bindList("/LeaveRequests").requestContexts(0, 500)
+                .then(aCtx => {
+                    const all = aCtx.map(c => c.getObject()).filter(Boolean);
+                    const oComp = this.getOwnerComponent();
+                    const empPromises = all.map(r => {
+                        if (oComp.getEmployeeById) {
+                            return oComp.getEmployeeById(r.employee_employeeId)
+                                .then(emp => { r.employeeName = emp ? emp.employeeName : r.employee_employeeId; return r; })
+                                .catch(() => { r.employeeName = r.employee_employeeId; return r; });
+                        }
+                        r.employeeName = r.employee_employeeId;
+                        return Promise.resolve(r);
+                    });
+                    Promise.all(empPromises).then(enriched => {
+                        const pending = enriched.filter(r => r.status === "Pending").length;
+                        this._oMgrModel.setProperty("/allLeaveRequests",  enriched);
+                        this._oMgrModel.setProperty("/leavePendingCount", pending);
+                        this._oMgrModel.setProperty("/leaveRequests",     enriched.filter(r => r.status === "Pending"));
+                    });
+                })
+                .catch(err => console.error("Failed to load leave requests:", err));
+        },
+
+        onApproveLeave(oEvent) {
+            const oCtx  = oEvent.getSource().getBindingContext("mgrView");
+            const oItem = oCtx.getObject();
+            MessageBox.confirm(
+                `Approve ${oItem.leaveType} leave for ${oItem.employeeName} (${oItem.days} day(s))?`,
+                {
+                    title: "Confirm Approval",
+                    actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                    emphasizedAction: MessageBox.Action.OK,
+                    onClose: (sAction) => {
+                        if (sAction !== MessageBox.Action.OK) return;
+                        this._submitLeaveDecision(oItem, true, "");
+                    }
+                }
+            );
+        },
+
+        onRejectLeave(oEvent) {
+            const oCtx  = oEvent.getSource().getBindingContext("mgrView");
+            const oItem = oCtx.getObject();
+            const oTA   = new TextArea({ placeholder: "Reason for rejection (optional)...", rows: 3, width: "100%" });
+            const oDialog = new Dialog({
+                title: "Reject Leave Request",
+                content: [oTA],
+                beginButton: new Button({
+                    text: "Reject", type: "Reject",
+                    press: () => {
+                        const remarks = oTA.getValue();
+                        oDialog.close();
+                        oDialog.destroy();
+                        this._submitLeaveDecision(oItem, false, remarks);
+                    }
+                }),
+                endButton: new Button({
+                    text: "Cancel",
+                    press: () => { oDialog.close(); oDialog.destroy(); }
+                })
+            });
+            this.getView().addDependent(oDialog);
+            oDialog.open();
+        },
+
+        _submitLeaveDecision(oItem, bApproved, sRemarks) {
+            const oMgrModel = this.getOwnerComponent().getModel("manager");
+            if (!oMgrModel) return;
+            const oCtx = oMgrModel.bindContext("/approveLeave(...)");
+            oCtx.setParameter("leaveId",  oItem.leaveId);
+            oCtx.setParameter("approved", bApproved);
+            oCtx.setParameter("remarks",  sRemarks || "");
+            oCtx.execute()
+                .then(() => {
+                    MessageToast.show(`Leave request ${bApproved ? "approved" : "rejected"} successfully.`);
+                    this._postLeaveNotification(oItem, bApproved, sRemarks);
+                    this._loadLeaveRequests();
+                })
+                .catch(err => MessageBox.error((err && err.message) || "Could not process leave request.", { title: "Error" }));
+        },
+
+        _postLeaveNotification(oItem, bApproved, sRemarks) {
+            try {
+                const oComp       = this.getOwnerComponent();
+                const oNotifModel = oComp.getModel("notifications");
+                if (!oNotifModel) return;
+                const recipientId = oItem.employee_employeeId
+                    || (oItem.employee && oItem.employee.employeeId)
+                    || oItem.employeeId || "";
+                if (!recipientId) return;
+                const fmtDate = (s) => s ? new Date(s).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
+                const weekRange   = `${fmtDate(oItem.fromDate)} - ${fmtDate(oItem.toDate)}`;
+                const sManagerId  = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : "";
+                const sManagerName = oComp._builtinEmployees && oComp._builtinEmployees[sManagerId]
+                    ? oComp._builtinEmployees[sManagerId].employeeName : "Your manager";
+                const message = bApproved
+                    ? `${sManagerName} approved your ${oItem.leaveType} Leave request (${oItem.days} day(s)) from ${weekRange}.`
+                    : `${sManagerName} rejected your ${oItem.leaveType} Leave request (${oItem.days} day(s)) from ${weekRange}.`
+                        + (sRemarks ? ` Reason: ${sRemarks}` : "");
+                const items = oNotifModel.getProperty("/items") || [];
+                items.unshift({ type: bApproved ? "LEAVE_APPROVED" : "LEAVE_REJECTED", message, weekRange, recipientEmployeeId: recipientId, read: false, timestamp: new Date().toISOString() });
+                oNotifModel.setProperty("/items", items);
+                oComp.persistNotifications();
+            } catch (e) {
+                console.warn("Failed to push leave notification from manager:", e);
             }
         },
 

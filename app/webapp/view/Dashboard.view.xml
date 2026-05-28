@@ -22,14 +22,22 @@
                                 type="Default"
                                 press=".onMarkAttendance"
                                 enabled="{dash>/attendanceBtnEnabled}"
-                                class="tsTeamAttExportBtn" />
+                                class="tsTeamAttExportBtn sapUiTinyMarginEnd" />
 
                         <!-- Bell icon with unread badge -->
                         <Button id="notifBellBtn"
                                 icon="sap-icon://bell"
                                 type="Transparent"
                                 press=".onNotificationPress"
-                                tooltip="Notifications" />
+                                tooltip="Notifications"
+                                class="tsDashBellBtn sapUiTinyMarginEnd">
+                            <customData>
+                                <BadgeCustomData xmlns="sap.m"
+                                                key="badge"
+                                                value="{dash>/notifUnreadCount}"
+                                                visible="{= !!${dash>/notifUnreadCount} }" />
+                            </customData>
+                        </Button>
 
                         <Text text="{dash>/todayLabel}"
                               style="font-size:0.82rem; font-weight:500; color:rgba(255,255,255,0.72); white-space:nowrap;" />

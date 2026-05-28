@@ -31,12 +31,13 @@
                                     icon="sap-icon://accept"
                                     visible="{= ${notifView>/unreadCount} > 0 }"
                                     press=".onMarkAllRead"
-                                    class="tsNotifMarkAllBtn" />
+                                    class="tsNotifMarkAllBtn sapUiTinyMarginEnd" />
                             <!-- Close → Dashboard -->
                             <Button icon="sap-icon://decline"
                                     type="Transparent"
                                     tooltip="Back to Dashboard"
-                                    press=".onCloseNotifications" />
+                                    press=".onCloseNotifications"
+                                    class="tsNotifCloseBtn" />
                         </HBox>
                     </HBox>
                 </VBox>

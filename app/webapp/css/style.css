@@ -543,6 +543,21 @@ html, body { margin: 0; height: 100%; }
     background: #f0f7ff;
 }
 
+/* ── Empty state for Prev-Week / Leave tabs ─────────────────────────── */
+.tsMgrEmptyState {
+    padding: 48px 24px;
+    border-radius: 12px;
+    border: 1px dashed #cbd5e1;
+    background: #ffffff;
+    margin-top: 12px;
+    width: 100%;
+    box-sizing: border-box;
+}
+.tsMgrEmptyText {
+    color: #9ca3af;
+    font-size: 0.92rem;
+}
+
 /* ── Detail view (full-width, shown after card tap) ────────────────── */
 .tsMgrDetailView {
     width: 100%;
@@ -608,6 +623,16 @@ html, body { margin: 0; height: 100%; }
 .tsNotifMarkAllBtn {
     margin-left: 12px;
 }
+
+.tsNotifCloseBtn .sapMBtnInner {
+    background: rgba(255, 255, 255, 0.18) !important;
+    border: 1px solid rgba(255, 255, 255, 0.45) !important;
+    border-radius: 8px !important;
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+}
+.tsNotifCloseBtn .sapMBtnIcon { color: #ffffff !important; }
 
 /* ── Empty state ────────────────────────────────────────────────────── */
 .tsNotifEmpty {
@@ -991,10 +1016,6 @@ html, body { margin: 0; height: 100%; }
     border-radius: 10px;
     padding: 10px 14px;
     margin-bottom: 12px;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-.tsTaskFilterRight {
     gap: 10px;
     flex-wrap: wrap;
 }
@@ -1416,6 +1437,20 @@ html, body { margin: 0; height: 100%; }
     color: #ffffff !important;
 }
 
+/* Dashboard bell button */
+.tsDashBellBtn .sapMBtnInner {
+    background: rgba(255, 255, 255, 0.15) !important;
+    border: 1px solid rgba(255, 255, 255, 0.45) !important;
+    border-radius: 8px !important;
+    transition: background 0.18s, border-color 0.18s !important;
+}
+.tsDashBellBtn .sapMBtnInner:hover {
+    background: #ffffff !important;
+    border-color: #1d4ed8 !important;
+}
+.tsDashBellBtn .sapMBtnIcon { color: #ffffff !important; }
+.tsDashBellBtn .sapMBtnInner:hover .sapMBtnIcon { color: #1d4ed8 !important; }
+
 /* Back button on the Team Attendance blue band — needs lighter colour */
 .tsTeamAttBackBtn .sapMBtnInner {
     background: rgba(255, 255, 255, 0.15) !important;
@@ -1478,30 +1513,40 @@ html, body { margin: 0; height: 100%; }
 /* ══════════════════════════════════════════════════════════════════════════
    Pill-chip filter styling for SegmentedButton (priority / status filters)
    ══════════════════════════════════════════════════════════════════════════ */
-.sapMSegB .sapMSegBBtn {
-    border-radius: 999px !important;
-    border: 1px solid #e2e8f0 !important;
-    background: #ffffff !important;
-    color: #475569 !important;
-    margin-right: 6px !important;
+/* Priority filter — custom chip-group (plain Buttons, full CSS control) */
+.tsTaskPriorityFilter {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 3px;
+    gap: 2px;
+}
+.tsFilterBtn.sapMBtn {
+    margin: 0 !important;
+    min-width: 0 !important;
+}
+.tsFilterBtn .sapMBtnInner {
+    border: none !important;
+    border-radius: 7px !important;
+    background: transparent !important;
+    color: #64748b !important;
     font-weight: 500 !important;
-    padding: 4px 14px !important;
-    min-width: 60px !important;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    font-size: 0.875rem !important;
+    height: 32px !important;
+    line-height: 32px !important;
+    padding: 0 16px !important;
+    min-width: 52px !important;
+    box-shadow: none !important;
 }
-.sapMSegB .sapMSegBBtn:hover {
-    background: #f1f5f9 !important;
-    color: #2563eb !important;
+.tsFilterBtn .sapMBtnInner:hover {
+    background: #e2e8f0 !important;
+    color: #374151 !important;
 }
-.sapMSegB .sapMSegBBtnSel {
-    background: #dbeafe !important;
+.tsFilterBtnActive .sapMBtnInner {
+    background: #ffffff !important;
     color: #1d4ed8 !important;
-    border-color: #93c5fd !important;
     font-weight: 600 !important;
-}
-/* Remove default SAP UI5 vertical separators between segmented buttons */
-.sapMSegB .sapMSegBBtn + .sapMSegBBtn {
-    border-left-width: 1px !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.06) !important;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1860,3 +1905,175 @@ html, body { margin: 0; height: 100%; }
 }
 .tsPerfHistCard tr:last-child td { border-bottom: none; }
 .tsPerfHistCard tr:hover td { background: #f0f7ff; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Approval History page
+   ══════════════════════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════════════════
+   Missed Days HR card (timesheet page)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsMissedDaysCard {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-left: 4px solid #f59e0b;
+    border-radius: 10px;
+    margin-top: 16px;
+    overflow: hidden;
+}
+.tsMissedDaysHeader {
+    background: #fef3c7;
+    padding: 10px 16px;
+    gap: 8px;
+    border-bottom: 1px solid #fde68a;
+}
+.tsMissedDaysHeaderIcon {
+    color: #d97706;
+    font-size: 1rem;
+}
+.tsMissedDaysHeaderText {
+    color: #92400e;
+    font-size: 0.9rem;
+    font-weight: 700;
+}
+.tsMissedDaysRow {
+    padding: 10px 16px;
+    border-bottom: 1px solid #fef3c7;
+}
+.tsMissedDaysRow:last-child {
+    border-bottom: none;
+}
+.tsMissedDaysDate {
+    color: #78350f;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Previous Week card (timesheet page)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsPrevWeekCard {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 16px 20px;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.05);
+}
+.tsPrevWeekIcon {
+    color: #3b82f6;
+    font-size: 1.4rem;
+    background: #eff6ff;
+    border-radius: 8px;
+    padding: 8px;
+    flex-shrink: 0;
+}
+.tsPrevWeekTitle {
+    color: #1e293b;
+    font-weight: 700 !important;
+}
+.tsPrevWeekRange {
+    color: #64748b;
+    font-size: 0.82rem;
+    margin-top: 2px;
+}
+.tsPrevWeekActionBtn .sapMBtnInner {
+    border-color: #3b82f6 !important;
+    color: #1d4ed8 !important;
+}
+.tsPrevWeekActionBtn .sapMBtnInner:hover {
+    background: #eff6ff !important;
+}
+.tsPrevWeekPendingBadge,
+.tsPrevWeekDoneBadge {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 999px;
+    padding: 4px 12px;
+}
+.tsPrevWeekDoneBadge {
+    background: #f0fdf4;
+    border-color: #bbf7d0;
+}
+
+.tsApprHistOuter {
+    padding: 0;
+}
+.tsApprHistTabBar {
+    background: #ffffff;
+    border-radius: 0 0 10px 10px;
+    padding: 0 16px;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.06);
+    margin-bottom: 16px !important;
+}
+.tsApprHistFilterBar {
+    background: #ffffff;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 0 0 16px 0;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.06);
+    gap: 8px;
+}
+.tsApprHistTable {
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.06);
+}
+.tsApprHistTable .sapMListTblHeader {
+    background: #f8fafc;
+}
+.tsApprHistTable .sapMLIB:hover {
+    background: #f0f7ff !important;
+}
+
+
+/* ── Dialog backdrop ─────────────────────────────────────────────────
+   SAPUI5 creates exactly one block-layer element with a fixed id.
+   Targeting by id (specificity 1-0-0) beats any class-based theme rule.
+   Three selectors cover the id, the primary class, and the fallback class.
+   --sapBackdropBackground overrides the CSS-variable the theme reads.    */
+:root {
+    --sapBackdropBackground: rgba(15, 23, 42, 0.68);
+}
+#sap-ui-blocklayer-popup,
+html .sapUiBLy,
+html .sapUiBlyTop,
+html .sapUiBlockLayer {
+    background:       rgba(15, 23, 42, 0.68) !important;
+    background-color: rgba(15, 23, 42, 0.68) !important;
+    opacity: 1 !important;
+}
+
+/* ── Dialog shape ────────────────────────────────────────────────────── */
+.sapMDialog {
+    border-radius: 14px !important;
+    box-shadow: 0 8px 40px rgba(15,23,42,0.22) !important;
+    border: 1px solid #e2e8f0 !important;
+}
+.sapMDialogTitleGroup {
+    border-radius: 14px 14px 0 0 !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    background: #ffffff !important;
+}
+.sapMDialogTitleGroup .sapMTitleInner {
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    color: #1e293b !important;
+}
+.sapMDialogScrollCont {
+    max-height: calc(100vh - 220px) !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    background: #ffffff !important;
+}
+.sapMDialogSection {
+    background: #ffffff !important;
+}
+.sapMDialogFooter {
+    border-radius: 0 0 14px 14px !important;
+    border-top: 1px solid #e2e8f0 !important;
+    background: #f8fafc !important;
+}
+.sapMDialogFooter .sapMBtn .sapMBtnInner {
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.875rem !important;
+}

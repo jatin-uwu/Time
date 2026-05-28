@@ -156,52 +156,63 @@
                 <!-- ══════════════════════════════════════════════════════════
                      PREVIOUS WEEK SECTION — hidden when viewing prev week
                      ══════════════════════════════════════════════════════════ -->
-                <Panel
-                    id="prevWeekPanel"
-                    backgroundDesign="Transparent"
-                    class="sapUiMediumMarginTop"
-                    visible="{= !${viewModel>/isViewingPrevWeek} }">
-                    <HBox
-                        justifyContent="SpaceBetween"
-                        alignItems="Center"
-                        class="sapUiSmallMargin">
-                        <VBox>
-                            <Title text="Previous Week Timesheet" level="H5" />
-                            <Text
-                                text="{viewModel>/prevWeekRangeLabel}"
-                                class="sapUiSmallMarginTop" />
+                <HBox id="prevWeekPanel"
+                      class="tsPrevWeekCard sapUiMediumMarginTop"
+                      alignItems="Center"
+                      justifyContent="SpaceBetween"
+                      visible="{= !${viewModel>/isViewingPrevWeek} }">
+
+                    <!-- Left: icon + title + date range -->
+                    <HBox alignItems="Center">
+                        <core:Icon src="sap-icon://calendar"
+                                   class="tsPrevWeekIcon" />
+                        <VBox class="sapUiTinyMarginBegin">
+                            <Title text="Previous Week Timesheet" level="H5"
+                                   class="tsPrevWeekTitle" />
+                            <Text text="{viewModel>/prevWeekRangeLabel}"
+                                  class="tsPrevWeekRange" />
                         </VBox>
-                        <HBox alignItems="Center">
-                            <Button
-                                id="btnRequestPrevWeek"
-                                text="Request to Fill Previous Week"
-                                type="Default"
-                                icon="sap-icon://edit"
-                                visible="{viewModel>/showRequestPrevWeekBtn}"
-                                press=".onRequestPrevWeekFill" />
-                            <ObjectStatus
-                                id="prevWeekPendingStatus"
-                                text="Approval Pending from Manager"
-                                state="Warning"
-                                icon="sap-icon://pending"
-                                visible="{viewModel>/showPrevWeekPending}" />
-                            <Button
-                                id="btnFillPrevWeek"
-                                text="Fill Previous Week"
-                                type="Emphasized"
-                                icon="sap-icon://calendar"
-                                visible="{viewModel>/showFillPrevWeekBtn}"
-                                enabled="{viewModel>/prevWeekFillEnabled}"
-                                press=".onSwitchToPrevWeek" />
-                            <ObjectStatus
-                                id="prevWeekDoneStatus"
-                                text="Previous Week Submitted"
-                                state="Success"
-                                icon="sap-icon://accept"
-                                visible="{viewModel>/showPrevWeekDone}" />
+                    </HBox>
+
+                    <!-- Right: action / status -->
+                    <HBox alignItems="Center">
+                        <Button
+                            id="btnRequestPrevWeek"
+                            text="Request to Fill Previous Week"
+                            type="Default"
+                            icon="sap-icon://edit"
+                            visible="{viewModel>/showRequestPrevWeekBtn}"
+                            press=".onRequestPrevWeekFill"
+                            class="tsPrevWeekActionBtn" />
+                        <HBox alignItems="Center"
+                              class="tsPrevWeekPendingBadge"
+                              visible="{viewModel>/showPrevWeekPending}">
+                            <core:Icon src="sap-icon://pending"
+                                       style="color:#d97706;font-size:1rem;" />
+                            <Text text="Pending Manager Approval"
+                                  class="sapUiTinyMarginBegin"
+                                  style="color:#92400e;font-size:0.82rem;font-weight:600;" />
+                        </HBox>
+                        <Button
+                            id="btnFillPrevWeek"
+                            text="Fill Previous Week"
+                            type="Emphasized"
+                            icon="sap-icon://calendar"
+                            visible="{viewModel>/showFillPrevWeekBtn}"
+                            enabled="{viewModel>/prevWeekFillEnabled}"
+                            press=".onSwitchToPrevWeek" />
+                        <HBox alignItems="Center"
+                              class="tsPrevWeekDoneBadge"
+                              visible="{viewModel>/showPrevWeekDone}">
+                            <core:Icon src="sap-icon://accept"
+                                       style="color:#16a34a;font-size:1rem;" />
+                            <Text text="Previous Week Submitted"
+                                  class="sapUiTinyMarginBegin"
+                                  style="color:#14532d;font-size:0.82rem;font-weight:600;" />
                         </HBox>
                     </HBox>
-                </Panel>
+
+                </HBox>
 
             </VBox>
         </content>

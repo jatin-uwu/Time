@@ -177,14 +177,14 @@
                             press=".onNavPerfRating"
                             visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;" />
-                        <StandardListItem title="Leave Approvals"
-                            icon="sap-icon://away"
+                        <StandardListItem title="Approval History"
+                            icon="sap-icon://history"
                             type="Active"
                             press=".onNavSelect"
                             visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
                             <customData>
-                                <core:CustomData key="target" value="leave-approvals" />
+                                <core:CustomData key="target" value="approval-history" />
                             </customData>
                         </StandardListItem>
                         <StandardListItem title="Team Attendance"

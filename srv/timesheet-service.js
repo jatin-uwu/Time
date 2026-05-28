@@ -196,14 +196,31 @@ class EmployeeService extends cds.ApplicationService {
 
             if (!row || !row.profilePhoto) return { dataBase64: '', mimeType: '' };
 
-            // Convert BLOB → base64
+            // Convert BLOB → base64.
+            // The column may hold EITHER raw image binary OR base64 text stored
+            // as bytes — CAP's LargeBinary handling base64-encodes Buffers when
+            // written via raw SQL on SQLite, so existing rows hold base64 text.
+            // Detect which form it is by checking image magic numbers and always
+            // emit SINGLE-encoded base64 (re-encoding base64 text would corrupt
+            // the data URL and show a broken image).
             let base64 = '';
             try {
                 const photo = row.profilePhoto;
-                if (Buffer.isBuffer(photo)) base64 = photo.toString('base64');
-                else if (typeof photo === 'string') base64 = photo;
-                else if (photo instanceof Uint8Array) base64 = Buffer.from(photo).toString('base64');
-                else base64 = Buffer.from(photo).toString('base64');
+                let buf;
+                if (Buffer.isBuffer(photo)) buf = photo;
+                else if (photo instanceof Uint8Array) buf = Buffer.from(photo);
+                else if (typeof photo === 'string') buf = Buffer.from(photo, 'utf8');
+                else buf = Buffer.from(photo);
+
+                const isRawImage =
+                    (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) || // JPEG
+                    (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E) || // PNG
+                    (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) || // GIF
+                    (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46);   // WEBP/RIFF
+
+                base64 = isRawImage
+                    ? buf.toString('base64')          // raw binary → encode once
+                    : buf.toString('utf8').trim();    // already base64 text → use as-is
             } catch (e) {
                 cds.log('profile').error('Could not encode photo:', e.message);
                 return { dataBase64: '', mimeType: '' };

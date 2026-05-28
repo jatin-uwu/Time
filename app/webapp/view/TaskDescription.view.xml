@@ -36,35 +36,42 @@
                 </HBox>
 
                 <!-- ── Filters ────────────────────────────────────────────── -->
-                <HBox alignItems="Center" justifyContent="SpaceBetween"
-                      class="tsTaskFilterBar" wrap="Wrap">
+                <HBox alignItems="Center" class="tsTaskFilterBar" wrap="Wrap">
                     <SearchField placeholder="Search tasks..."
                                  liveChange=".onSearch"
-                                 width="260px" />
+                                 width="260px"
+                                 class="sapUiTinyMarginEnd sapUiTinyMarginBottom" />
 
-                    <HBox alignItems="Center" class="tsTaskFilterRight">
-                        <!-- Manager-only: preview as employee -->
-                        <Select id="selEmployeeView"
-                                visible="{= ${appView>/userRole} === 'manager' }"
-                                selectedKey="{tdView>/viewAsEmployee}"
-                                items="{tdView>/employeeFilterList}"
-                                change=".onEmployeeFilterChange"
-                                width="220px"
-                                tooltip="Preview as employee"
-                                class="sapUiSmallMarginEnd">
-                            <core:Item key="{tdView>employeeId}" text="{tdView>employeeName}" />
-                        </Select>
+                    <!-- Manager-only: preview as employee -->
+                    <Select id="selEmployeeView"
+                            visible="{= ${appView>/userRole} === 'manager' }"
+                            selectedKey="{tdView>/viewAsEmployee}"
+                            items="{tdView>/employeeFilterList}"
+                            change=".onEmployeeFilterChange"
+                            width="220px"
+                            tooltip="Preview as employee"
+                            class="sapUiTinyMarginEnd sapUiTinyMarginBottom">
+                        <core:Item key="{tdView>employeeId}" text="{tdView>employeeName}" />
+                    </Select>
 
-                        <!-- Priority filter -->
-                        <SegmentedButton selectedKey="{tdView>/priorityFilter}"
-                                         selectionChange=".onPriorityFilterChange">
-                            <items>
-                                <SegmentedButtonItem key=""       text="All" />
-                                <SegmentedButtonItem key="High"   text="High" />
-                                <SegmentedButtonItem key="Medium" text="Medium" />
-                                <SegmentedButtonItem key="Low"    text="Low" />
-                            </items>
-                        </SegmentedButton>
+                    <!-- Priority filter -->
+                    <HBox class="tsTaskPriorityFilter sapUiTinyMarginBottom" alignItems="Center">
+                        <Button text="All"
+                                type="Transparent"
+                                press=".onPriorityFilter"
+                                class="{= ${tdView>/priorityFilter} === '' ? 'tsFilterBtn tsFilterBtnActive' : 'tsFilterBtn'}" />
+                        <Button text="High"
+                                type="Transparent"
+                                press=".onPriorityFilter"
+                                class="{= ${tdView>/priorityFilter} === 'High' ? 'tsFilterBtn tsFilterBtnActive' : 'tsFilterBtn'}" />
+                        <Button text="Medium"
+                                type="Transparent"
+                                press=".onPriorityFilter"
+                                class="{= ${tdView>/priorityFilter} === 'Medium' ? 'tsFilterBtn tsFilterBtnActive' : 'tsFilterBtn'}" />
+                        <Button text="Low"
+                                type="Transparent"
+                                press=".onPriorityFilter"
+                                class="{= ${tdView>/priorityFilter} === 'Low' ? 'tsFilterBtn tsFilterBtnActive' : 'tsFilterBtn'}" />
                     </HBox>
                 </HBox>
 

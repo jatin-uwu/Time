@@ -195,9 +195,9 @@ sap.ui.define([
             this._applyFilter();
         },
 
-        onPriorityFilterChange(oEvent) {
-            const sKey = oEvent.getParameter("item").getKey();
-            this._oTdModel.setProperty("/priorityFilter", sKey);
+        onPriorityFilter(oEvent) {
+            const sText = oEvent.getSource().getText();
+            this._oTdModel.setProperty("/priorityFilter", sText === "All" ? "" : sText);
             this._applyFilter();
         },
 

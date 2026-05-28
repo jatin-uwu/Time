@@ -128,6 +128,14 @@ sap.ui.define([
                     new Date(b.notifiedAt || 0) - new Date(a.notifiedAt || 0)
                 );
 
+                // Apply persisted read state — overrides backend isRead:false after mark-all-read
+                const readKeys = new Set(JSON.parse(localStorage.getItem("tsNotifReadKeys") || "[]"));
+                merged.forEach(n => {
+                    if (readKeys.has((n.title || "") + "|" + (n.notifiedAt || ""))) {
+                        n.isRead = true;
+                    }
+                });
+
                 const unread = merged.filter(n => !n.isRead).length;
 
                 this._oNotifViewModel.setProperty("/notifications",    merged);
@@ -179,6 +187,11 @@ sap.ui.define([
             viewItems.forEach(n => { n.isRead = true; });
             this._oNotifViewModel.setProperty("/notifications", viewItems);
             this._oNotifViewModel.setProperty("/unreadCount",   0);
+
+            // Persist read state so it survives navigation and backend re-fetch
+            const readKeys = new Set(JSON.parse(localStorage.getItem("tsNotifReadKeys") || "[]"));
+            viewItems.forEach(n => readKeys.add((n.title || "") + "|" + (n.notifiedAt || "")));
+            localStorage.setItem("tsNotifReadKeys", JSON.stringify([...readKeys]));
 
             MessageToast.show("All notifications marked as read.");
         },

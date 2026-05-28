@@ -1,0 +1,244 @@
+<mvc:View
+    controllerName="timesheet.app.controller.ApprovalHistory"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="approvalHistoryPage"
+          showHeader="false"
+          class="tsDashboardPage"
+          enableScrolling="true">
+
+        <content>
+            <VBox class="tsApprHistOuter">
+
+                <!-- ── Blue header ─────────────────────────────────────── -->
+                <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone"
+                      alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center">
+                        <core:Icon src="sap-icon://history"
+                                   class="tsPageHeaderIcon sapUiTinyMarginEnd"
+                                   style="color:#ffffff;font-size:1.25rem;" />
+                        <Text text="Approval History"
+                              style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                    </HBox>
+                    <Button icon="sap-icon://refresh"
+                            type="Transparent"
+                            tooltip="Refresh"
+                            press=".onRefresh"
+                            class="tsTeamAttExportBtn" />
+                </HBox>
+
+                <!-- ── History type tabs ───────────────────────────────── -->
+                <IconTabBar id="approvalHistoryTabs"
+                            select=".onTabSelect"
+                            selectedKey="timesheets"
+                            class="sapUiSmallMarginBottom tsApprHistTabBar">
+                    <items>
+                        <IconTabFilter key="timesheets"
+                                       text="Timesheet History"
+                                       icon="sap-icon://approvals" />
+                        <IconTabFilter key="prevweek"
+                                       text="Prev-Week History"
+                                       icon="sap-icon://calendar" />
+                        <IconTabFilter key="leaves"
+                                       text="Leave History"
+                                       icon="sap-icon://away" />
+                    </items>
+                </IconTabBar>
+
+                <!-- ── Filter bar ──────────────────────────────────────── -->
+                <HBox class="tsApprHistFilterBar" wrap="Wrap" alignItems="Center">
+
+                    <!-- Employee search — all tabs -->
+                    <SearchField id="empSearchField"
+                                 placeholder="Search by employee..."
+                                 search=".onEmployeeSearch"
+                                 liveChange=".onEmployeeSearchLive"
+                                 width="200px"
+                                 class="sapUiTinyMarginEnd sapUiTinyMarginBottom" />
+
+                    <!-- Status — all tabs -->
+                    <Select id="statusSelect"
+                            change=".onStatusFilter"
+                            class="sapUiTinyMarginEnd sapUiTinyMarginBottom">
+                        <items>
+                            <core:Item key=""         text="All Statuses" />
+                            <core:Item key="Approved" text="Approved"     />
+                            <core:Item key="Rejected" text="Rejected"     />
+                            <core:Item key="Pending"  text="Pending"      />
+                        </items>
+                    </Select>
+
+                    <!-- Leave type — leaves tab only -->
+                    <Select id="leaveTypeSelect"
+                            change=".onLeaveTypeFilter"
+                            visible="{= ${approvalHistView>/activeTab} === 'leaves' }"
+                            class="sapUiTinyMarginEnd sapUiTinyMarginBottom">
+                        <items>
+                            <core:Item key=""        text="All Leave Types" />
+                            <core:Item key="Casual"  text="Casual"          />
+                            <core:Item key="Sick"    text="Sick"            />
+                            <core:Item key="Annual"  text="Annual"          />
+                            <core:Item key="Unpaid"  text="Unpaid"          />
+                        </items>
+                    </Select>
+
+                    <!-- Date range — prevweek + leaves tabs -->
+                    <DatePicker id="dateFromPicker"
+                                placeholder="From date"
+                                change=".onDateFromChange"
+                                visible="{= ${approvalHistView>/activeTab} !== 'timesheets' }"
+                                class="sapUiTinyMarginEnd sapUiTinyMarginBottom"
+                                valueFormat="yyyy-MM-dd"
+                                displayFormat="dd MMM yyyy" />
+                    <DatePicker id="dateToPicker"
+                                placeholder="To date"
+                                change=".onDateToChange"
+                                visible="{= ${approvalHistView>/activeTab} !== 'timesheets' }"
+                                class="sapUiTinyMarginEnd sapUiTinyMarginBottom"
+                                valueFormat="yyyy-MM-dd"
+                                displayFormat="dd MMM yyyy" />
+
+                    <!-- Reset -->
+                    <Button text="Reset Filters"
+                            icon="sap-icon://clear-filter"
+                            type="Transparent"
+                            press=".onResetFilters"
+                            class="sapUiTinyMarginBottom" />
+                </HBox>
+
+                <!-- ══════════════════════════════════════════════════════
+                     TIMESHEET HISTORY TABLE
+                     ══════════════════════════════════════════════════════ -->
+                <VBox visible="{= ${approvalHistView>/activeTab} === 'timesheets' }">
+                    <Table id="timesheetHistTable"
+                           items="{approvalHistView>/timesheetRecords}"
+                           noDataText="No timesheet history found."
+                           class="sapUiSmallMarginTop tsApprHistTable">
+                        <headerToolbar>
+                            <OverflowToolbar>
+                                <Title text="Timesheet Approval History" level="H5" />
+                                <ToolbarSpacer />
+                                <ObjectStatus
+                                    text="{= ${approvalHistView>/timesheetRecords}.length + ' records' }"
+                                    state="None" />
+                            </OverflowToolbar>
+                        </headerToolbar>
+                        <columns>
+                            <Column><Text text="Employee"     /></Column>
+                            <Column><Text text="Week"         /></Column>
+                            <Column><Text text="Submitted On" /></Column>
+                            <Column><Text text="Status"       /></Column>
+                            <Column><Text text="Remarks"      /></Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem>
+                                <cells>
+                                    <Text text="{approvalHistView>employeeName}" />
+                                    <Text text="{approvalHistView>weekRange}" />
+                                    <Text text="{approvalHistView>submittedOn}" />
+                                    <ObjectStatus
+                                        text="{approvalHistView>status}"
+                                        state="{path:'approvalHistView>status', formatter:'.formatStatusState'}" />
+                                    <Text text="{approvalHistView>remarks}" wrapping="false" maxLines="2" />
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+                </VBox>
+
+                <!-- ══════════════════════════════════════════════════════
+                     PREV-WEEK HISTORY TABLE
+                     ══════════════════════════════════════════════════════ -->
+                <VBox visible="{= ${approvalHistView>/activeTab} === 'prevweek' }">
+                    <Table id="prevWeekHistTable"
+                           items="{approvalHistView>/prevWeekRecords}"
+                           noDataText="No prev-week access history found."
+                           class="sapUiSmallMarginTop tsApprHistTable">
+                        <headerToolbar>
+                            <OverflowToolbar>
+                                <Title text="Prev-Week Access History" level="H5" />
+                                <ToolbarSpacer />
+                                <ObjectStatus
+                                    text="{= ${approvalHistView>/prevWeekRecords}.length + ' records' }"
+                                    state="None" />
+                            </OverflowToolbar>
+                        </headerToolbar>
+                        <columns>
+                            <Column><Text text="Employee"        /></Column>
+                            <Column><Text text="Requested Week"  /></Column>
+                            <Column><Text text="Requested On"    /></Column>
+                            <Column><Text text="Employee Remarks"/></Column>
+                            <Column><Text text="Status"          /></Column>
+                            <Column><Text text="Manager Remarks" /></Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem>
+                                <cells>
+                                    <Text text="{approvalHistView>employeeName}" />
+                                    <Text text="{approvalHistView>weekRange}" />
+                                    <Text text="{approvalHistView>requestedOn}" />
+                                    <Text text="{approvalHistView>employeeRemarks}" wrapping="false" maxLines="2" />
+                                    <ObjectStatus
+                                        text="{approvalHistView>status}"
+                                        state="{path:'approvalHistView>status', formatter:'.formatStatusState'}" />
+                                    <Text text="{approvalHistView>managerRemarks}" wrapping="false" maxLines="2" />
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+                </VBox>
+
+                <!-- ══════════════════════════════════════════════════════
+                     LEAVE HISTORY TABLE
+                     ══════════════════════════════════════════════════════ -->
+                <VBox visible="{= ${approvalHistView>/activeTab} === 'leaves' }">
+                    <Table id="leaveHistTable"
+                           items="{approvalHistView>/leaveRecords}"
+                           noDataText="No leave approval history found."
+                           class="sapUiSmallMarginTop tsApprHistTable">
+                        <headerToolbar>
+                            <OverflowToolbar>
+                                <Title text="Leave Approval History" level="H5" />
+                                <ToolbarSpacer />
+                                <ObjectStatus
+                                    text="{= ${approvalHistView>/leaveRecords}.length + ' records' }"
+                                    state="None" />
+                            </OverflowToolbar>
+                        </headerToolbar>
+                        <columns>
+                            <Column><Text text="Employee"   /></Column>
+                            <Column><Text text="Leave Type" /></Column>
+                            <Column><Text text="From"       /></Column>
+                            <Column><Text text="To"         /></Column>
+                            <Column width="4rem"><Text text="Days" /></Column>
+                            <Column><Text text="Reason"     /></Column>
+                            <Column><Text text="Status"     /></Column>
+                            <Column><Text text="Remarks"    /></Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem>
+                                <cells>
+                                    <Text text="{approvalHistView>employeeName}" />
+                                    <Text text="{approvalHistView>leaveType}" />
+                                    <Text text="{approvalHistView>fromDate}" />
+                                    <Text text="{approvalHistView>toDate}" />
+                                    <Text text="{approvalHistView>days}" />
+                                    <Text text="{approvalHistView>reason}" wrapping="false" maxLines="2" />
+                                    <ObjectStatus
+                                        text="{approvalHistView>status}"
+                                        state="{path:'approvalHistView>status', formatter:'.formatStatusState'}" />
+                                    <Text text="{approvalHistView>remarks}" wrapping="false" maxLines="2" />
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+                </VBox>
+
+            </VBox>
+        </content>
+    </Page>
+
+</mvc:View>

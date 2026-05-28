@@ -885,89 +885,96 @@ sap.ui.define([
             const vm = this.getView().getModel("viewModel");
             if (vm.getProperty("/isViewingPrevWeek")) return;
 
-            const today = this._toISODate(new Date());
-            const yesterday = this._getYesterday();
+            const today      = this._toISODate(new Date());
+            const yesterday  = this._getYesterday();
             const twoDaysAgo = this._getTwoDaysAgo();
-            const weekDays = this._getWeekDays();
-            let hasMissed = false;
+            const weekDays   = this._getWeekDays();
+            const missedRows = [];
 
             weekDays.forEach(function (dateStr, idx) {
-                if (idx === 6) return; // skip Sunday (holiday)
-                if (dateStr >= today) return; // skip today and future days
-
-                // Yesterday and 2 days ago are directly editable — skip
+                if (idx === 6) return;
+                if (dateStr >= today) return;
                 if (dateStr === yesterday || dateStr === twoDaysAgo) return;
 
-                // Check if this day has any hours filled
                 const dayTotal = this._rows.reduce(function (sum, r) {
                     return sum + parseFloat(r.entries[dateStr] || 0);
                 }, 0);
-                if (dayTotal > 0) return; // already filled
+                if (dayTotal > 0) return;
 
                 const req = this._dayUnlockReqs[dateStr];
-                let buttonEnabled, buttonText, buttonType;
-                let statusText = null;
+                let buttonEnabled, buttonType, statusText = null, statusState = "Warning";
 
                 if (!req) {
-                    // No request yet — show request button
                     buttonEnabled = true;
-                    buttonText = "Request HR Approval \u2014 " +
-                        DAY_LABELS[idx] + ", " +
-                        this._formatDisplayDate(dateStr);
-                    buttonType = "Attention";
+                    buttonType    = "Attention";
                 } else if (req.status === "Pending") {
                     buttonEnabled = false;
-                    buttonText = "Request Sent \u2014 " + this._formatDisplayDate(dateStr);
-                    buttonType = "Default";
-                    statusText = "HR Approval Pending for " + this._formatDisplayDate(dateStr);
+                    buttonType    = "Default";
+                    statusText    = "HR Approval Pending";
+                    statusState   = "Warning";
                 } else if (req.status === "Approved") {
-                    return; // cell is now editable directly
+                    return;
                 } else if (req.status === "Rejected") {
                     buttonEnabled = true;
-                    buttonText = "Re-request HR Approval \u2014 " +
-                        DAY_LABELS[idx] + ", " +
-                        this._formatDisplayDate(dateStr);
-                    buttonType = "Negative";
-                    statusText = "HR request rejected for " + this._formatDisplayDate(dateStr);
+                    buttonType    = "Negative";
+                    statusText    = "HR Request Rejected";
+                    statusState   = "Error";
                 } else {
                     return;
                 }
 
-                hasMissed = true;
-
-                const rowBox = new HBox({ alignItems: "Center" });
-                rowBox.addStyleClass("sapUiSmallMarginBottom");
-
-                if (statusText) {
-                    const os = new ObjectStatus({
-                        text: statusText,
-                        state: (req && req.status === "Rejected") ? "Error" : "Warning"
-                    });
-                    os.addStyleClass("sapUiSmallMarginEnd");
-                    rowBox.addItem(os);
-                }
-
-                const btn = new Button({
-                    text: buttonText,
-                    type: buttonType,
-                    icon: "sap-icon://approvals",
-                    enabled: !!buttonEnabled,
-                    press: (function (d) {
-                        return function () { this._openHRUnlockDialog(d); }.bind(this);
-                    }.bind(this))(dateStr)
+                missedRows.push({
+                    dateStr, buttonEnabled, buttonType, statusText, statusState,
+                    label: DAY_LABELS[idx] + ", " + this._formatDisplayDate(dateStr)
                 });
-                rowBox.addItem(btn);
-                container.addItem(rowBox);
             }.bind(this));
 
-            if (hasMissed) {
-                const lbl = new Label({
-                    text: "\u26A0\uFE0F Missed Days \u2014 HR Approval Required",
-                    design: "Bold"
+            if (!missedRows.length) return;
+
+            const card = new VBox();
+            card.addStyleClass("tsMissedDaysCard");
+
+            const header = new HBox({ alignItems: "Center" });
+            header.addStyleClass("tsMissedDaysHeader");
+            const hIcon = new sap.ui.core.Icon({ src: "sap-icon://alert" });
+            hIcon.addStyleClass("tsMissedDaysHeaderIcon");
+            const hText = new Text({ text: "Missed Days — HR Approval Required" });
+            hText.addStyleClass("tsMissedDaysHeaderText");
+            header.addItem(hIcon);
+            header.addItem(hText);
+            card.addItem(header);
+
+            missedRows.forEach(function (item) {
+                const row = new HBox({ alignItems: "Center", justifyContent: "SpaceBetween" });
+                row.addStyleClass("tsMissedDaysRow");
+
+                const dateLabel = new Text({ text: item.label });
+                dateLabel.addStyleClass("tsMissedDaysDate");
+                row.addItem(dateLabel);
+
+                const right = new HBox({ alignItems: "Center" });
+                if (item.statusText) {
+                    const badge = new ObjectStatus({ text: item.statusText, state: item.statusState });
+                    badge.addStyleClass("sapUiTinyMarginEnd");
+                    right.addItem(badge);
+                }
+                const actionText = item.buttonType === "Negative" ? "Re-request Approval"
+                    : item.buttonEnabled ? "Request HR Approval" : "Request Sent";
+                const btn = new Button({
+                    text:    actionText,
+                    type:    item.buttonType,
+                    icon:    item.buttonType === "Negative" ? "sap-icon://refresh" : "sap-icon://paper-plane",
+                    enabled: !!item.buttonEnabled,
+                    press:   (function (d) {
+                        return function () { this._openHRUnlockDialog(d); }.bind(this);
+                    }.bind(this))(item.dateStr)
                 });
-                lbl.addStyleClass("sapUiSmallMarginTop sapUiSmallMarginBottom");
-                container.insertItem(lbl, 0);
-            }
+                right.addItem(btn);
+                row.addItem(right);
+                card.addItem(row);
+            }.bind(this));
+
+            container.addItem(card);
         },
 
         // ══════════════════════════════════════════════════════════════════════

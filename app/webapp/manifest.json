@@ -47,7 +47,7 @@
         },
         "resources": {
             "css": [
-                { "uri": "css/style.css" }
+                { "uri": "css/style.css?v=3" }
             ]
         },
         "models": {
@@ -116,7 +116,8 @@
                 { "name": "apply-leave", "pattern": "apply-leave", "target": "apply-leave" },
                 { "name": "leave-approvals", "pattern": "leave-approvals", "target": "leave-approvals" },
                 { "name": "performance-rating", "pattern": "performance-rating", "target": "performance-rating" },
-                { "name": "team-attendance", "pattern": "team-attendance", "target": "team-attendance" }
+                { "name": "team-attendance", "pattern": "team-attendance", "target": "team-attendance" },
+                { "name": "approval-history", "pattern": "approval-history", "target": "approval-history" }
             ],
             "targets": {
                 "dashboard":     { "viewName": "Dashboard"     },
@@ -133,7 +134,8 @@
                 "apply-leave": { "viewName": "ApplyLeave" },
                 "leave-approvals":{ "viewName": "LeaveApprovals"},
                 "performance-rating": { "viewName": "PerformanceRating" },
-                "team-attendance": { "viewName": "TeamAttendance" }
+                "team-attendance": { "viewName": "TeamAttendance" },
+                "approval-history": { "viewName": "ApprovalHistory" }
             }
         }
     }
