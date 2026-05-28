@@ -38,6 +38,10 @@
                                                 visible="{= !!${dash>/notifUnreadCount} }" />
                             </customData>
                         </Button>
+                        <!-- ── Bell icon with unread badge (custom HTML for badge overlay) ── -->
+                        <core:HTML id="notifBellHTML"
+                                   sanitizeContent="false"
+                                   content="{dash>/bellHTML}" />
 
                         <Text text="{dash>/todayLabel}"
                               style="font-size:0.82rem; font-weight:500; color:rgba(255,255,255,0.72); white-space:nowrap;" />

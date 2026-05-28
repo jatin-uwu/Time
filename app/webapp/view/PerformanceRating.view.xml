@@ -14,7 +14,8 @@
                 <!-- ── Blue page header ───────────────────────────────── -->
                 <HBox class="tsPageHeaderCard" alignItems="Center" justifyContent="SpaceBetween">
                     <HBox alignItems="Center">
-                        <core:Icon src="sap-icon://survey" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                        <core:Icon src="sap-icon://survey" class="tsPageHeaderIcon sapUiTinyMarginEnd"
+                                   style="color:#ffffff;font-size:1.25rem;" />
                         <Text text="Performance Rating"
                               style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
                     </HBox>
@@ -26,7 +27,9 @@
                 <!-- ── Two-panel layout: form left, history right ─────── -->
                 <HBox class="tsPerfLayout" alignItems="Start">
 
-                    <!-- ── Left: Add Rating form ── -->
+                    <!-- ══════════════════════════════════════════════════
+                         Left panel: Add / Update Rating form
+                    ══════════════════════════════════════════════════ -->
                     <VBox class="tsPerfFormCard">
 
                         <HBox alignItems="Center" class="tsPerfSectionHead">
@@ -46,11 +49,14 @@
                             </Select>
                         </VBox>
 
-                        <!-- Month + Year -->
-                        <HBox style="gap:12px;margin-bottom:16px;">
-                            <VBox style="flex:1;">
-                                <Label text="Month" required="true" class="tsPerfLabel" />
-                                <Select id="monthSelect" width="100%">
+                        <!-- Month + Year — plain HBox, no inner VBox wrappers -->
+                        <VBox class="tsPerfFieldGroup">
+                            <Label text="Month / Year" required="true" class="tsPerfLabel" />
+                            <HBox>
+                                <Select id="monthSelect"
+                                        width="150px"
+                                        change=".onMonthChange"
+                                        class="sapUiTinyMarginEnd">
                                     <core:Item key="1"  text="January"/>
                                     <core:Item key="2"  text="February"/>
                                     <core:Item key="3"  text="March"/>
@@ -64,26 +70,33 @@
                                     <core:Item key="11" text="November"/>
                                     <core:Item key="12" text="December"/>
                                 </Select>
-                            </VBox>
-                            <VBox style="flex:1;">
-                                <Label text="Year" required="true" class="tsPerfLabel" />
-                                <Select id="yearSelect" width="100%">
+                                <Select id="yearSelect"
+                                        width="110px"
+                                        change=".onYearChange">
                                     <core:Item key="2024" text="2024"/>
                                     <core:Item key="2025" text="2025"/>
                                     <core:Item key="2026" text="2026"/>
                                 </Select>
-                            </VBox>
-                        </HBox>
+                            </HBox>
+                        </VBox>
 
                         <!-- Rating slider -->
                         <VBox class="tsPerfFieldGroup">
                             <Label text="Rating (1.0 – 5.0)" required="true" class="tsPerfLabel" />
+
+                            <!-- Min / current value / Max indicators -->
+
                             <Slider id="ratingSlider"
                                     min="1" max="5" step="0.1"
                                     value="{perfRating>/form/ratingValue}"
                                     liveChange=".onRatingChange"
                                     width="100%"
-                                    enableTickmarks="true"/>
+                                    enableTickmarks="false"
+                                    showAdvancedTooltip="true"
+                                    inputsAsTooltips="true"
+                                    class="tsPerfSlider"/>
+
+                            <!-- Stars + label -->
                             <VBox class="tsPerfRatingDisplay">
                                 <core:HTML id="starsDisplay"
                                            sanitizeContent="false"
@@ -115,22 +128,16 @@
 
                     </VBox>
 
-                    <!-- ── Right: Rating History ── -->
+                    <!-- ══════════════════════════════════════════════════
+                         Right panel: Rating History
+                         (no employee filter dropdown — auto-driven by empSelect)
+                    ══════════════════════════════════════════════════ -->
                     <VBox class="tsPerfHistCard">
 
-                        <HBox alignItems="Center" justifyContent="SpaceBetween"
-                              class="tsPerfSectionHead">
-                            <HBox alignItems="Center">
-                                <core:Icon src="sap-icon://history" class="tsPerfSectionIcon" />
-                                <Title text="Rating History" level="H5"
-                                       class="sapUiSmallMarginBegin tsPerfSectionTitle" />
-                            </HBox>
-                            <Select id="historyEmpSelect"
-                                    width="200px"
-                                    change=".onHistoryEmployeeChange"
-                                    forceSelection="false">
-                                <core:Item key="" text="All Employees"/>
-                            </Select>
+                        <HBox alignItems="Center" class="tsPerfSectionHead">
+                            <core:Icon src="sap-icon://history" class="tsPerfSectionIcon" />
+                            <Title text="Rating History" level="H5"
+                                   class="sapUiSmallMarginBegin tsPerfSectionTitle" />
                         </HBox>
 
                         <core:HTML id="ratingsTableHTML"

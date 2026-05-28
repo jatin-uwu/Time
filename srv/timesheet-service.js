@@ -328,6 +328,34 @@ class EmployeeService extends cds.ApplicationService {
             }));
         });
 
+        this.on('markAllNotificationsRead', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const emp = await SELECT.one.from(NOTIFICATION_ENTITY).columns('notificationId')
+                .where({ employee_employeeId: 'placeholder' });
+            // Re-fetch employee
+            const empRow = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            if (!empRow) return req.error(404, 'Employee not found.');
+
+            // Count unread BEFORE updating (affectedRows not reliable in CDS)
+            const unreadRows = await SELECT.from(NOTIFICATION)
+                .columns('notificationId')
+                .where({ employee_employeeId: empRow.employeeId, isRead: false });
+            const updated = (unreadRows || []).length;
+
+            if (updated > 0) {
+                await UPDATE(NOTIFICATION)
+                    .set({ isRead: true })
+                    .where({ employee_employeeId: empRow.employeeId, isRead: false });
+            }
+
+            cds.log('notif').info(`${updated} notifications marked as read for ${empRow.employeeId}`);
+            return { updated };
+        });
+
+        // ── Dashboard: Upcoming Calendar (Google Calendar API) ─────────────────────
+        // Reads GOOGLE_CALENDAR_API_KEY + GOOGLE_CALENDAR_ID from environment.
+        // Falls back to empty array if not configured — card shows "No events".
         const { fetchUpcomingMeetings } = require('./google-calendar');
 
         this.on('getUpcomingCalendar', async (req) => {
@@ -413,23 +441,23 @@ class EmployeeService extends cds.ApplicationService {
         });
 
         this.on('getTaskSummary', async (req) => {
-            const user  = req.user || {};
+            const user = req.user || {};
             const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp   = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
             if (!emp) return { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 };
- 
+
             const tasks = await SELECT.from(TASK).where({ assignedTo_employeeId: emp.employeeId });
- 
+
             let notStarted = 0, inProgress = 0, inReview = 0, completed = 0;
             (tasks || []).forEach(t => {
                 const s = (t.status || '').toLowerCase().replace(/\s+/g, '');
-                if      (s === 'notstarted' || s === 'open' || s === 'pending') notStarted++;
-                else if (s === 'inprogress')  inProgress++;
-                else if (s === 'inreview')    inReview++;
-                else if (s === 'completed')   completed++;
-                else                          notStarted++; // treat unknown as not started
+                if (s === 'notstarted' || s === 'open' || s === 'pending') notStarted++;
+                else if (s === 'inprogress') inProgress++;
+                else if (s === 'inreview') inReview++;
+                else if (s === 'completed') completed++;
+                else notStarted++; // treat unknown as not started
             });
- 
+
             return {
                 total: tasks.length,
                 notStarted, inProgress, inReview, completed
@@ -451,25 +479,25 @@ class EmployeeService extends cds.ApplicationService {
         });
 
         this.on('getMyTasks', async (req) => {
-            const user  = req.user || {};
+            const user = req.user || {};
             const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp   = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
             if (!emp) return { totalPending: 0, highPriorityCount: 0, mediumPriorityCount: 0, lowPriorityCount: 0 };
- 
+
             const tasks = await SELECT.from(TASK).where({ assignedTo_employeeId: emp.employeeId });
- 
+
             let totalPending = 0, highPriorityCount = 0, mediumPriorityCount = 0, lowPriorityCount = 0;
             (tasks || []).forEach(t => {
                 const s = (t.status || '').toLowerCase().replace(/\s+/g, '');
                 // Everything that isn't completed counts as pending
                 if (s !== 'completed') {
                     totalPending++;
-                    if      (t.priority === 'High')   highPriorityCount++;
-                    else if (t.priority === 'Medium')  mediumPriorityCount++;
-                    else if (t.priority === 'Low')     lowPriorityCount++;
+                    if (t.priority === 'High') highPriorityCount++;
+                    else if (t.priority === 'Medium') mediumPriorityCount++;
+                    else if (t.priority === 'Low') lowPriorityCount++;
                 }
             });
- 
+
             return { totalPending, highPriorityCount, mediumPriorityCount, lowPriorityCount };
         });
 
@@ -531,23 +559,23 @@ class EmployeeService extends cds.ApplicationService {
 
             cds.log('task').info('updateTaskStatus →', { taskId, status, reviewerId, reviewerStatus });
 
-            if (!taskId)  return req.error(400, 'taskId is required.');
-            if (!status)  return req.error(400, 'status is required.');
+            if (!taskId) return req.error(400, 'taskId is required.');
+            if (!status) return req.error(400, 'status is required.');
 
             const task = await SELECT.one.from(TASK).where({ taskId });
-            if (!task)    return req.error(404, `Task '${taskId}' not found.`);
+            if (!task) return req.error(404, `Task '${taskId}' not found.`);
 
             // Only patch reviewer fields when a real (non-empty) value is supplied.
             // Sending an empty string would try to set reviewer_employeeId = ""
             // which violates the FK and causes the entire UPDATE to fail.
             const patch = { status, statusUpdatedAt: new Date() };
-            if (reviewerId     && String(reviewerId).trim())     patch.reviewer_employeeId = reviewerId;
-            if (reviewerStatus && String(reviewerStatus).trim()) patch.reviewerStatus       = reviewerStatus;
+            if (reviewerId && String(reviewerId).trim()) patch.reviewer_employeeId = reviewerId;
+            if (reviewerStatus && String(reviewerStatus).trim()) patch.reviewerStatus = reviewerStatus;
 
             cds.log('task').info('updateTaskStatus patch:', JSON.stringify(patch));
             await UPDATE(TASK).set(patch).where({ taskId });
             cds.log('task').info('updateTaskStatus done for', taskId);
- 
+
             // Notify reviewer when task is sent for review
             if (status === 'In Review' && reviewerId) {
                 await createNotification(
@@ -558,7 +586,7 @@ class EmployeeService extends cds.ApplicationService {
                     taskId
                 );
             }
- 
+
             // Notify assignee when reviewer marks done or reopens
             if ((status === 'Completed' || status === 'In Progress') && task.assignedTo_employeeId) {
                 await createNotification(
@@ -571,7 +599,7 @@ class EmployeeService extends cds.ApplicationService {
                     taskId
                 );
             }
- 
+
             cds.log('task').info(`Task ${taskId} status → ${status} by ${req.user?.id}`);
             return { taskId, status };
         });
@@ -592,7 +620,7 @@ class EmployeeService extends cds.ApplicationService {
             }
 
             // Resolve reviewer from logged-in user
-            const user  = req.user || {};
+            const user = req.user || {};
             const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
             const reviewer = email
                 ? await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ email })
@@ -629,21 +657,21 @@ class EmployeeService extends cds.ApplicationService {
             // Persist review row
             await INSERT.into(TASK_REVIEW).entries({
                 reviewId,
-                task_taskId:          taskId,
-                reviewer_employeeId:  reviewer.employeeId,
-                assignee_employeeId:  task.assignedTo_employeeId || null,
+                task_taskId: taskId,
+                reviewer_employeeId: reviewer.employeeId,
+                assignee_employeeId: task.assignedTo_employeeId || null,
                 decision,
-                remarks:              String(remarks).trim(),
-                attachmentName:       storedName,
-                attachmentMimeType:   storedMime,
-                attachment:           attachmentBuf,
+                remarks: String(remarks).trim(),
+                attachmentName: storedName,
+                attachmentMimeType: storedMime,
+                attachment: attachmentBuf,
                 reviewedOn
             });
 
             // Update task status (and keep reviewerStatus in sync for legacy UI)
             await UPDATE(TASK).set({
-                status:          newTaskStatus,
-                reviewerStatus:  decision === 'Reviewed' ? 'Reviewed' : 'Issue Found',
+                status: newTaskStatus,
+                reviewerStatus: decision === 'Reviewed' ? 'Reviewed' : 'Issue Found',
                 statusUpdatedAt: reviewedOn
             }).where({ taskId });
 
@@ -665,7 +693,7 @@ class EmployeeService extends cds.ApplicationService {
         };
 
         this.on('submitReview', (req) => handleReviewDecision(req, 'Reviewed'));
-        this.on('reportIssue',  (req) => handleReviewDecision(req, 'IssueFound'));
+        this.on('reportIssue', (req) => handleReviewDecision(req, 'IssueFound'));
 
         // Fetch the latest review for a task (no attachment payload — use getReviewAttachment).
         this.on('getTaskReview', async (req) => {
@@ -685,13 +713,13 @@ class EmployeeService extends cds.ApplicationService {
                 reviewerName = (e && e.employeeName) || '';
             }
             return {
-                reviewId:       r.reviewId || '',
-                reviewerId:     r.reviewer_employeeId || '',
+                reviewId: r.reviewId || '',
+                reviewerId: r.reviewer_employeeId || '',
                 reviewerName,
-                decision:       r.decision || '',
-                remarks:        r.remarks || '',
+                decision: r.decision || '',
+                remarks: r.remarks || '',
                 attachmentName: r.attachmentName || '',
-                reviewedOn:     r.reviewedOn ? new Date(r.reviewedOn).toISOString() : ''
+                reviewedOn: r.reviewedOn ? new Date(r.reviewedOn).toISOString() : ''
             };
         });
 
@@ -715,8 +743,8 @@ class EmployeeService extends cds.ApplicationService {
                 return req.error(500, 'Could not read attachment.');
             }
             return {
-                fileName:   r.attachmentName || 'attachment',
-                mimeType:   r.attachmentMimeType || 'application/octet-stream',
+                fileName: r.attachmentName || 'attachment',
+                mimeType: r.attachmentMimeType || 'application/octet-stream',
                 dataBase64: base64
             };
         });
@@ -747,6 +775,20 @@ class ManagerService extends cds.ApplicationService {
             if (!ratingValue) return req.error(400, 'ratingValue is required.');
             if (!reviewMonth) return req.error(400, 'reviewMonth is required.');
             if (!reviewYear) return req.error(400, 'reviewYear is required.');
+
+            // ── Validate manager is rating their own team member ──
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const manager = email
+                ? await SELECT.one.from(EMPLOYEE).where({ email })
+                : null;
+            if (!manager) return req.error(403, 'Manager record not found.');
+
+            const emp = await SELECT.one.from(EMPLOYEE)
+                .where({ employeeId, manager_employeeId: manager.employeeId, isActive: true });
+            if (!emp) return req.error(403, `You are not authorised to rate employee '${employeeId}'.`);
+            // ─────────────────────────────────────────────────────
+
             const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
             const existing = await SELECT.one.from(PERF).where({ employee_employeeId: employeeId, reviewMonth, reviewYear });
             const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2, '0')}`;
@@ -758,6 +800,7 @@ class ManagerService extends cds.ApplicationService {
             return { ratingId, message: `Rating submitted for ${employeeId} — ${reviewMonth}/${reviewYear}` };
         });
 
+        
         this.on('notifyTaskAssignment', async (req) => {
             const { taskId, taskName, taskDescription, priority, dueDate, assigneeId } = req.data;
             const employee = await SELECT.one.from(EMPLOYEE).where({ employeeId: assigneeId });
@@ -828,6 +871,27 @@ class ManagerService extends cds.ApplicationService {
             cds.log('leave').info(`Leave ${leaveId} ${newStatus} by manager`);
             return { leaveId, status: newStatus };
         });
+        // read manager associated employees for Employee Management and Team Attendance features
+        this.on('READ', 'Employees', async (req) => {
+            // Resolve logged-in manager from email
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+
+            const manager = email
+                ? await SELECT.one.from(EMPLOYEE).where({ email })
+                : null;
+
+            if (!manager) return req.error(404, 'Manager record not found.');
+
+            // Return only employees reporting to this manager
+            return await SELECT.from(EMPLOYEE)
+                .columns('employeeId', 'employeeName', 'designation', 'email', 'isActive')
+                .where({
+                    manager_employeeId: manager.employeeId,
+                    isActive: true
+                })
+                .orderBy('employeeName');
+        });
 
         // ── Team Attendance grid ──────────────────────────────────────────
         // Returns a per-employee, per-day status grid for the manager's team
@@ -843,11 +907,11 @@ class ManagerService extends cds.ApplicationService {
         //   PtL = Paternity Leave (approved)
         this.on('getTeamAttendance', async (req) => {
             const { year, month } = req.data;
-            if (!year || !month)            return req.error(400, 'year and month are required.');
-            if (month < 1 || month > 12)    return req.error(400, 'month must be 1-12.');
+            if (!year || !month) return req.error(400, 'year and month are required.');
+            if (month < 1 || month > 12) return req.error(400, 'month must be 1-12.');
 
             // 1. Resolve the logged-in manager
-            const user  = req.user || {};
+            const user = req.user || {};
             const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
             const manager = email
                 ? await SELECT.one.from(EMPLOYEE).where({ email })
@@ -869,7 +933,7 @@ class ManagerService extends cds.ApplicationService {
             const daysInMonth = new Date(year, month, 0).getDate();
             const pad = (n) => String(n).padStart(2, '0');
             const isoStart = `${year}-${pad(month)}-01`;
-            const isoEnd   = `${year}-${pad(month)}-${pad(daysInMonth)}`;
+            const isoEnd = `${year}-${pad(month)}-${pad(daysInMonth)}`;
 
             // 4. Fetch all relevant data in parallel
             const [attendance, leaves, holidays] = await Promise.all([
@@ -890,22 +954,22 @@ class ManagerService extends cds.ApplicationService {
             // 6. Index leaves: empId → date → leaveCode
             const leaveCode = (t) => {
                 const lc = String(t || '').toLowerCase();
-                if (lc.includes('casual'))    return 'CL';
-                if (lc.includes('sick'))      return 'SL';
+                if (lc.includes('casual')) return 'CL';
+                if (lc.includes('sick')) return 'SL';
                 if (lc.includes('paternity')) return 'PtL';
                 if (lc.includes('maternity')) return 'ML';
-                if (lc.includes('paid'))      return 'PL';
+                if (lc.includes('paid')) return 'PL';
                 return 'L';
             };
             const leaveMap = new Map();
             for (const l of leaves) {
                 const code = leaveCode(l.leaveType);
                 const from = String(l.fromDate || '').slice(0, 10);
-                const to   = String(l.toDate   || '').slice(0, 10);
+                const to = String(l.toDate || '').slice(0, 10);
                 if (!from || !to) continue;
                 // Walk each calendar date in the leave range that falls in this month.
                 const startD = new Date(`${from}T00:00:00Z`);
-                const endD   = new Date(`${to}T00:00:00Z`);
+                const endD = new Date(`${to}T00:00:00Z`);
                 for (let d = new Date(startD); d <= endD; d.setUTCDate(d.getUTCDate() + 1)) {
                     const key = d.toISOString().slice(0, 10);
                     if (key < isoStart || key > isoEnd) continue;
@@ -952,10 +1016,10 @@ class ManagerService extends cds.ApplicationService {
                     days.push({ date: key, status, time });
                 }
                 return {
-                    employeeId:   emp.employeeId,
+                    employeeId: emp.employeeId,
                     employeeName: emp.employeeName || '',
-                    designation:  emp.designation  || '',
-                    email:        emp.email        || '',
+                    designation: emp.designation || '',
+                    email: emp.email || '',
                     days
                 };
             });
@@ -965,8 +1029,8 @@ class ManagerService extends cds.ApplicationService {
                 .sort((a, b) => a.date.localeCompare(b.date));
 
             return {
-                employees:   JSON.stringify(result),
-                holidays:    JSON.stringify(holidayArr),
+                employees: JSON.stringify(result),
+                holidays: JSON.stringify(holidayArr),
                 daysInMonth
             };
         });

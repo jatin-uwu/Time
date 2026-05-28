@@ -357,6 +357,32 @@ service EmployeeService @(path: '/employee') {
         takenJSON : String; // [{type,label,taken,balance,color}]
     };
 
+        // Mark a single notification as read
+    @(requires: 'authenticated-user')
+    action markNotificationRead(notificationId: String(30)) returns {
+        success : Boolean;
+    };
+
+    // Mark ALL notifications as read for the logged-in employee
+    @(requires: 'authenticated-user')
+    action markAllNotificationsRead() returns {
+        updated : Integer;
+    };
+
+    // Delete / dismiss a single notification
+    @(requires: 'authenticated-user')
+    action deleteNotification(notificationId: String(30)) returns {
+        success : Boolean;
+    };
+
+    // Paginated notifications list
+    @(requires: 'authenticated-user')
+    action getNotifications(page: Integer, pageSize: Integer) returns {
+        itemsJSON    : LargeString;  // JSON array of notification objects
+        totalCount   : Integer;
+        unreadCount  : Integer;
+    };
+
 }
 
 // ── Manager Service ──────────────────────────────────────────────────────────

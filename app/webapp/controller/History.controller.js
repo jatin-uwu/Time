@@ -1,19 +1,30 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// FILE: webapp/controller/History.controller.js
+// Shows timesheet history using the same HTML table style as Timesheet.view
+// Read-only — no editing, no save/submit
+// ─────────────────────────────────────────────────────────────────────────────
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
-    "sap/m/ActionSheet",
-    "sap/m/Button"
-], (Controller, JSONModel, ActionSheet, Button) => {
+    "sap/m/MessageToast",
+    "sap/ui/core/HTML"
+], function (Controller, JSONModel, MessageToast, HTML) {
     "use strict";
 
-    const DAYS      = ["mon","tue","wed","thu","fri","sat","sun"];
-    const DAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-    const MONTHS    = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const BASE_URL = "/employee";
+    const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const DAY_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-    const STATUS_CONFIG = {
-        "Pending":  { type: "Attention", state: "Warning"  },
-        "Approved": { type: "Accept",    state: "Success"  },
-        "Rejected": { type: "Reject",    state: "Error"    }
+    const STATUS_COLORS = {
+        "Approved": { bg: "#e8f5e9", color: "#2e7d32", label: "Approved" },
+        "Pending": { bg: "#fff8e1", color: "#f57f17", label: "Pending Approval" },
+        "Rejected": { bg: "#ffebee", color: "#c62828", label: "Rejected" },
+        "PrevWeekApproved": { bg: "#e8f5e9", color: "#2e7d32", label: "Approved" },
+        "Draft": { bg: "#f5f5f5", color: "#616161", label: "Draft" },
+        "None": { bg: "#f5f5f5", color: "#616161", label: "Not Submitted" }
     };
 
     function getWeekStart(date) {
@@ -24,311 +35,342 @@ sap.ui.define([
         return d;
     }
 
-    function toDateString(date) {
+    function toISODate(date) {
         const y = date.getFullYear();
         const m = String(date.getMonth() + 1).padStart(2, "0");
         const d = String(date.getDate()).padStart(2, "0");
-        return `${y}-${m}-${d}`;
+        return y + "-" + m + "-" + d;
     }
 
     function toShortLabel(date) {
         return date.getDate() + " " + MONTHS[date.getMonth()];
     }
 
-    function buildDayLabels(weekStart) {
-        return DAY_NAMES.map((name, i) => {
-            const d = new Date(weekStart);
-            d.setDate(weekStart.getDate() + i);
-            return { name: name, date: toShortLabel(d) };
-        });
-    }
-
     return Controller.extend("timesheet.app.controller.History", {
 
-        onInit() {
+        onInit: function () {
             this._oHistViewModel = new JSONModel({
                 selectedWeekLabel: "",
-                noDataText:   "No timesheet was submitted for this week.",
-                showCalendar: false,
                 weekSelected: false,
-                hasData:      false,
-                status:       "Pending",
-                statusType:   "Attention",
-                statusState:  "Warning",
+                hasData: false,
+                status: "",
+                statusLabel: "",
+                statusBg: "",
+                statusColor: "",
                 days: [
-                    { name:"Mon", date:"" }, { name:"Tue", date:"" },
-                    { name:"Wed", date:"" }, { name:"Thu", date:"" },
-                    { name:"Fri", date:"" }, { name:"Sat", date:"" },
-                    { name:"Sun", date:"" }
-                ],
-                rows:     [],
-                rowCount: 1
+                    { name: "Mon", date: "" }, { name: "Tue", date: "" },
+                    { name: "Wed", date: "" }, { name: "Thu", date: "" },
+                    { name: "Fri", date: "" }, { name: "Sat", date: "" },
+                    { name: "Sun", date: "" }
+                ]
             });
             this.getView().setModel(this._oHistViewModel, "histView");
-            this.getView().setModel(this.getOwnerComponent().getModel("history"), "history");
+            this._csrfToken = null;
+            this._histHtmlControlId = null;
 
-            // Block future weeks on the welcome calendar.
+            // Block future dates on calendar
             this.getView().addEventDelegate({
-                onAfterRendering: () => {
+                onAfterRendering: function () {
                     const oCal = this.byId("histCenterCalendar");
                     if (oCal && oCal.setMaxDate) {
                         const today = new Date();
                         today.setHours(0, 0, 0, 0);
                         oCal.setMaxDate(today);
                     }
-                }
+                }.bind(this)
             });
+
+            const oRouter = this.getOwnerComponent().getRouter();
+            oRouter.getRoute("history").attachPatternMatched(function () {
+                // Reset to calendar picker every time user navigates to this page
+                this._oHistViewModel.setProperty("/weekSelected", false);
+                this._oHistViewModel.setProperty("/hasData", false);
+                this._clearHistTable();
+                const oCal = this.byId("histCenterCalendar");
+                if (oCal) oCal.removeAllSelectedDates();
+            }.bind(this));
         },
 
-        // ── Calendar toggle ──────────────────────────────────────────────
-        // Always return to the centered welcome calendar (same as the
-        // first-time view) so the user can pick a different week.
-        onCalendarToggle() {
-            this._oHistViewModel.setProperty("/showCalendar", false);
+        // ── Calendar toggle — go back to picker ──────────────────────────────
+        onCalendarToggle: function () {
             this._oHistViewModel.setProperty("/weekSelected", false);
-
-            // Clear any selected date on the centered calendar so the next pick
-            // (even of the same date) fires the select event.
             const oCal = this.byId("histCenterCalendar");
-            if (oCal) { oCal.removeAllSelectedDates(); }
+            if (oCal) oCal.removeAllSelectedDates();
+            this._clearHistTable();
         },
 
-        onCalendarSelect(oEvent) {
-            const oCal   = oEvent.getSource();
+        // ── User picks a date ─────────────────────────────────────────────────
+        onCalendarSelect: function (oEvent) {
+            const oCal = oEvent.getSource();
             const aDates = oCal.getSelectedDates();
             if (!aDates || !aDates.length) return;
 
             const oStart = aDates[0].getStartDate();
             if (!oStart) return;
 
-            // Reject any pick whose week starts AFTER the current week.
-            const today           = new Date(); today.setHours(0, 0, 0, 0);
-            const currentWeek     = getWeekStart(today);
-            const pickedWeek      = getWeekStart(new Date(oStart));
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const currentWeek = getWeekStart(today);
+            const pickedWeek = getWeekStart(new Date(oStart));
+
             if (pickedWeek.getTime() > currentWeek.getTime()) {
-                sap.ui.require(["sap/m/MessageToast"], (MessageToast) => {
-                    MessageToast.show("Future weeks can't be opened — please pick today or earlier.");
-                });
+                MessageToast.show("Future weeks cannot be viewed.");
                 oCal.removeAllSelectedDates();
                 return;
             }
 
-            // Mark week as selected so the table view becomes visible
             this._oHistViewModel.setProperty("/weekSelected", true);
-            this._oHistViewModel.setProperty("/showCalendar", false);
             this._loadWeekData(pickedWeek);
         },
 
-        _loadWeekData(weekStart) {
-            const sWeekStart = toDateString(weekStart);
-            const weekEnd    = new Date(weekStart);
+        // ── Load from backend and render HTML table ───────────────────────────
+        _loadWeekData: async function (weekStart) {
+            const weekEnd = new Date(weekStart);
             weekEnd.setDate(weekStart.getDate() + 6);
-
-            const days   = buildDayLabels(weekStart);
-            const sLabel = toShortLabel(weekStart) + " – " + toShortLabel(weekEnd);
-
-            this._oHistViewModel.setProperty("/days", days);
-            this._oCurrentWeekStart = weekStart;
-
-            const oComp         = this.getOwnerComponent();
-            const oHistoryModel = oComp.getModel("history");
-            const submissions   = oHistoryModel.getProperty("/submissions") || [];
-            const sMyId         = oComp.getCurrentEmployeeId();
-            // Only the user's own submissions, so a manager opening
-            // History sees their own weeks (not their reportees').
-            const submission    = submissions.find(s =>
-                s.weekStart === sWeekStart &&
-                (!s.submittedBy || s.submittedBy === sMyId)
-            );
-
-            const oTable = this.byId("histTable");
-
-            if (!submission) {
-                this._oHistViewModel.setProperty("/selectedWeekLabel", sLabel + " — No submission");
-                this._oHistViewModel.setProperty("/noDataText", "No timesheet was submitted for this week.");
-                this._oHistViewModel.setProperty("/rows",    []);
-                this._oHistViewModel.setProperty("/rowCount", 1);
-                this._oHistViewModel.setProperty("/hasData",  false);
-                oTable.setFixedBottomRowCount(0);
-                this._sCurrentWeekStart = null;
-                this._oCurrentWeekStart = null;
-                return;
-            }
-
-            // Enrich each data row with _type and _weekTotal
-            const dataRows = (submission.rows || []).map(row => {
-                const rowDec = DAYS.reduce((sum, d) => sum + this._parseHHMM(row[d]), 0);
-                return Object.assign({}, row, { _type: "data", _weekTotal: this._toHHMM(rowDec) });
-            });
-
-            // Column-level totals
-            const colDec = { mon:0, tue:0, wed:0, thu:0, fri:0, sat:0, sun:0 };
-            dataRows.forEach(row => {
-                DAYS.forEach(d => { colDec[d] += this._parseHHMM(row[d]); });
-            });
-            const grand = DAYS.reduce((s, d) => s + colDec[d], 0);
-
-            // Day Total row (fixed at bottom -2)
-            const dayTotalRow = {
-                _type: "total", projectName: "Day Total(Hrs)", taskName: "",
-                _weekTotal: this._toHHMM(grand)
-            };
-            DAYS.forEach(d => { dayTotalRow[d] = this._toHHMM(colDec[d]); });
-
-            // Status row (fixed at bottom -1)
-            const status    = submission.status || "Pending";
-            const sc        = STATUS_CONFIG[status] || STATUS_CONFIG["Pending"];
-            const statusRow = { _type: "status", projectName: "Status", taskName: "", _weekTotal: "" };
-            DAYS.forEach(d => {
-                statusRow[d] = dataRows.some(r => r[d] && r[d] !== "") ? status : "";
-            });
-
-            const allRows = [...dataRows, dayTotalRow, statusRow];
+            const sWeekStart = toISODate(weekStart);
+            const sWeekEnd = toISODate(weekEnd);
+            const sLabel = toShortLabel(weekStart) + " \u2013 " + toShortLabel(weekEnd);
 
             this._oHistViewModel.setProperty("/selectedWeekLabel", sLabel);
-            this._oHistViewModel.setProperty("/rows",              allRows);
-            this._oHistViewModel.setProperty("/rowCount",          allRows.length);
-            this._oHistViewModel.setProperty("/status",            status);
-            this._oHistViewModel.setProperty("/statusType",        sc.type);
-            this._oHistViewModel.setProperty("/statusState",       sc.state);
-            this._oHistViewModel.setProperty("/hasData",           true);
 
-            oTable.setFixedBottomRowCount(2);
-            this._sCurrentWeekStart = sWeekStart;
-        },
+            const view = this.getView();
+            view.setBusy(true);
 
-        onStatusPress(oEvent) {
-            const oButton = oEvent.getSource();
-            const that    = this;
-            const oSheet  = new ActionSheet({
-                title: "Update Status",
-                buttons: [
-                    new Button({ text: "Approved", type: "Accept",
-                        press: function() { that._setStatus("Approved"); oSheet.close(); } }),
-                    new Button({ text: "Pending",  type: "Attention",
-                        press: function() { that._setStatus("Pending");  oSheet.close(); } }),
-                    new Button({ text: "Rejected", type: "Reject",
-                        press: function() { that._setStatus("Rejected"); oSheet.close(); } })
-                ],
-                cancelButton: new Button({ text: "Cancel", press: function() { oSheet.close(); } })
-            });
-            this.getView().addDependent(oSheet);
-            oSheet.openBy(oButton);
-        },
+            try {
+                const data = await this._callAction(BASE_URL + "/getTimesheetWeekData", {
+                    weekStartDate: sWeekStart,
+                    weekEndDate: sWeekEnd
+                });
 
-        _setStatus(sStatus) {
-            const sc = STATUS_CONFIG[sStatus] || STATUS_CONFIG["Pending"];
+                const weekStatus = data.weekStatus || "None";
+                const entries = JSON.parse(data.entries || "[]");
+                const tasks = JSON.parse(data.tasks || "[]");
 
-            this._oHistViewModel.setProperty("/status",      sStatus);
-            this._oHistViewModel.setProperty("/statusType",  sc.type);
-            this._oHistViewModel.setProperty("/statusState", sc.state);
+                // Status display config
+                const sc = STATUS_COLORS[weekStatus] || STATUS_COLORS["None"];
+                this._oHistViewModel.setProperty("/status", weekStatus);
+                this._oHistViewModel.setProperty("/statusLabel", sc.label);
+                this._oHistViewModel.setProperty("/statusBg", sc.bg);
+                this._oHistViewModel.setProperty("/statusColor", sc.color);
+                this._oHistViewModel.setProperty("/hasData", entries.length > 0);
 
-            if (this._sCurrentWeekStart) {
-                const oHistoryModel = this.getOwnerComponent().getModel("history");
-                const submissions   = oHistoryModel.getProperty("/submissions") || [];
-                const idx = submissions.findIndex(s => s.weekStart === this._sCurrentWeekStart);
-                if (idx >= 0) {
-                    submissions[idx].status = sStatus;
-                    oHistoryModel.setProperty("/submissions", submissions);
-                    this.getOwnerComponent().persistHistory();
+                // Build week day dates array
+                const weekDays = [];
+                for (let i = 0; i < 7; i++) {
+                    const d = new Date(weekStart);
+                    d.setDate(weekStart.getDate() + i);
+                    weekDays.push(toISODate(d));
                 }
 
-                if (sStatus === "Rejected") {
-                    this._unlockWeek(this._sCurrentWeekStart);
-                    this._postRejectionNotification(this._sCurrentWeekStart);
-                }
-            }
+                // Build task lookup
+                const taskMap = {};
+                tasks.forEach(function (t) { taskMap[t.taskId] = t.taskName; });
 
-            // Refresh table rows to reflect new status badges
-            if (this._oCurrentWeekStart) {
-                this._loadWeekData(this._oCurrentWeekStart);
+                // Group entries by taskId — one row per task
+                const rowMap = {};
+                entries.forEach(function (e) {
+                    const key = e.task_taskId;
+                    if (!rowMap[key]) {
+                        rowMap[key] = {
+                            taskName: taskMap[key] || key,
+                            entries: {}
+                        };
+                    }
+                    rowMap[key].entries[e.workDate] = e.hoursWorked;
+                });
+
+                const rows = Object.values(rowMap);
+
+                // Render the HTML table
+                this._renderHistTable(weekDays, weekStart, rows, weekStatus, sc, sLabel);
+
+            } catch (e) {
+                MessageToast.show("Failed to load: " + (e.message || e));
+                this._oHistViewModel.setProperty("/hasData", false);
+                this._clearHistTable();
+            } finally {
+                view.setBusy(false);
             }
         },
 
-        //Added a edit button functionality on 07 may
-        onEditWeek() {
-            if (!this._sCurrentWeekStart) return;
-            // Set flag to bypass min week validation for rejected edit
-            this.getOwnerComponent()._pendingWeekStart = this._sCurrentWeekStart;
-            this.getOwnerComponent()._isRejectedEdit   = true;
-            this.getOwnerComponent().getRouter().navTo("timesheet");
-        },
+        // ── Build the same styled HTML table as Timesheet ─────────────────────
+        _renderHistTable: function (weekDays, weekStart, rows, weekStatus, sc, sLabel) {
+            const container = this.byId("histTableContainer");
+            if (!container) return;
 
-        _unlockWeek(sWeekStart) {
-            const oLocksModel = this.getOwnerComponent().getModel("locked");
-            const allLocks    = oLocksModel.getData();
-            const weekRows    = allLocks[sWeekStart];
-            if (!weekRows) return;
+            // Destroy old HTML control
+            container.destroyItems();
+            if (this._histHtmlControlId) {
+                const old = sap.ui.getCore().byId(this._histHtmlControlId);
+                if (old) old.destroy();
+            }
 
-            weekRows.forEach(row => {
-                const approved = row.approved || {};
-                DAYS.forEach(d => { if (!approved[d]) row.locked[d] = false; });
-                row._rowLocked = DAYS.some(d => row.locked[d]);
+            const today = toISODate(new Date());
+            const ctrlId = this.getView().getId() + "--histHtmlTable";
+            this._histHtmlControlId = ctrlId;
+
+            // ── Status badge ──────────────────────────────────────────────
+            const statusHtml =
+                '<div style="display:flex;align-items:center;justify-content:space-between;'
+                + 'margin-bottom:12px;">'
+                + '<span style="font-size:0.95rem;color:#6a6d70;">' + sLabel + '</span>'
+                + '<span style="padding:4px 14px;border-radius:20px;font-size:0.82rem;'
+                + 'font-weight:600;background:' + sc.bg + ';color:' + sc.color + ';">'
+                + sc.label + '</span>'
+                + '</div>';
+
+            // ── <thead> ───────────────────────────────────────────────────
+            let thead = '<thead><tr style="background:#f5f6f7;border-bottom:2px solid #d9d9d9;">';
+            thead += '<th style="width:220px;padding:10px 12px;text-align:left;font-weight:700;'
+                + 'font-size:0.9rem;color:#32363a;border-right:1px solid #e5e5e5;">'
+                + 'Project / Task</th>';
+
+            weekDays.forEach(function (dateStr, idx) {
+                const isSun = idx === 6;
+                const isToday = dateStr === today;
+                const bg = isToday ? "#dbeeff" : isSun ? "#fafafa" : "transparent";
+                const col = isToday ? "#0854a0" : "#6a6d70";
+                const fw = isToday ? "700" : "500";
+
+                const d = new Date(dateStr + "T00:00:00");
+                const dateDisp = d.getDate() + " " + MONTHS[d.getMonth()];
+
+                thead += '<th style="width:110px;padding:10px 8px;text-align:center;background:'
+                    + bg + ';border-right:1px solid #e5e5e5;">'
+                    + '<div style="font-weight:' + fw + ';font-size:0.8rem;color:#32363a;">'
+                    + DAY_NAMES[idx] + '</div>'
+                    + '<div style="font-size:0.75rem;color:' + col + ';font-weight:' + fw + ';">'
+                    + dateDisp + '</div>'
+                    + (isSun ? '<div style="font-size:0.7rem;color:#a0a0a0;">Holiday</div>' : '')
+                    + '</th>';
             });
-            oLocksModel.setData(allLocks);
-            this.getOwnerComponent().persistLocked();
-        },
 
-        _postRejectionNotification(sWeekStart) {
-            const sLabel      = this._oHistViewModel.getProperty("/selectedWeekLabel");
-            const oNotifModel = this.getOwnerComponent().getModel("notifications");
-            const items       = oNotifModel.getProperty("/items") || [];
+            thead += '<th style="width:80px;padding:10px 8px;text-align:center;font-weight:700;'
+                + 'font-size:0.9rem;color:#32363a;">Total</th></tr></thead>';
 
-            const notif = {
-                weekStart: sWeekStart,
-                weekRange: sLabel,
-                type:      "rejected",
-                message:   `Your timesheet for ${sLabel} was rejected. Please review and resubmit.`,
-                read:      false,
-                timestamp: new Date().toISOString()
-            };
-            const existing = items.findIndex(n => n.weekStart === sWeekStart);
-            if (existing >= 0) {
-                items[existing] = notif;
+            // ── <tbody> data rows ─────────────────────────────────────────
+            let tbody = '<tbody>';
+            let weekTotal = 0;
+
+            if (rows.length === 0) {
+                tbody += '<tr><td colspan="9" style="padding:24px;text-align:center;'
+                    + 'color:#6a6d70;font-size:0.875rem;">No entries found for this week.</td></tr>';
             } else {
-                items.unshift(notif);
+                rows.forEach(function (row) {
+                    let rowTotal = 0;
+                    tbody += '<tr style="border-bottom:1px solid #e5e5e5;">';
+                    tbody += '<td style="padding:10px 12px;border-right:1px solid #e5e5e5;'
+                        + 'font-size:0.875rem;color:#32363a;font-weight:500;">'
+                        + (row.taskName || "") + '</td>';
+
+                    weekDays.forEach(function (dateStr, idx) {
+                        const isSun = idx === 6;
+                        const isToday = dateStr === today;
+                        const bg = isToday ? "#dbeeff" : isSun ? "#f5f5f5" : "transparent";
+                        const hours = row.entries[dateStr];
+                        const display = isSun ? "\u2014"
+                            : (hours != null && hours > 0 ? hours : "");
+
+                        rowTotal += (!isSun && hours) ? parseFloat(hours) : 0;
+
+                        const cellColor = (!isSun && hours > 0) ? "#32363a" : "#aaa";
+                        const cellFw = (!isSun && hours > 0) ? "500" : "400";
+
+                        tbody += '<td style="padding:10px 8px;text-align:center;background:'
+                            + bg + ';border-right:1px solid #e5e5e5;color:' + cellColor
+                            + ';font-weight:' + cellFw + ';font-size:0.875rem;">'
+                            + display + '</td>';
+                    });
+
+                    rowTotal = parseFloat(rowTotal.toFixed(2));
+                    weekTotal += rowTotal;
+
+                    tbody += '<td style="padding:10px 8px;text-align:center;font-weight:600;'
+                        + 'color:#32363a;font-size:0.875rem;">'
+                        + (rowTotal > 0 ? rowTotal : 0) + '</td>';
+                    tbody += '</tr>';
+                });
             }
-            oNotifModel.setProperty("/items", items);
-            this.getOwnerComponent().persistNotifications();
+
+            // ── Daily totals row ──────────────────────────────────────────
+            tbody += '<tr style="background:#f5f6f7;border-top:2px solid #d9d9d9;font-weight:700;">';
+            tbody += '<td style="padding:10px 12px;border-right:1px solid #e5e5e5;'
+                + 'font-size:0.875rem;color:#32363a;">Daily Total</td>';
+
+            weekDays.forEach(function (dateStr, idx) {
+                const isSun = idx === 6;
+                let dayTotal = 0;
+                if (!isSun) {
+                    rows.forEach(function (r) {
+                        dayTotal += parseFloat(r.entries[dateStr] || 0);
+                    });
+                }
+                dayTotal = parseFloat(dayTotal.toFixed(2));
+                const col = dayTotal > 8 ? "#bb0000" : "#32363a";
+
+                tbody += '<td style="padding:10px 8px;text-align:center;'
+                    + 'border-right:1px solid #e5e5e5;color:' + col + ';">'
+                    + (isSun ? "\u2014" : dayTotal) + '</td>';
+            });
+
+            weekTotal = parseFloat(weekTotal.toFixed(2));
+            tbody += '<td style="padding:10px 8px;text-align:center;color:#32363a;">'
+                + weekTotal + '</td>';
+            tbody += '</tr></tbody>';
+
+            // ── Assemble full HTML ────────────────────────────────────────
+            const completeHtml =
+                '<div style="width:100%;">'
+                + statusHtml
+                + '<div style="width:100%;overflow-x:auto;border-radius:6px;'
+                + 'box-shadow:0 1px 4px rgba(0,0,0,0.1);">'
+                + '<table style="width:100%;border-collapse:collapse;'
+                + 'border:1px solid #d9d9d9;font-family:inherit;font-size:0.875rem;">'
+                + thead + tbody
+                + '</table></div></div>';
+
+            const htmlCtrl = new HTML(ctrlId, { content: completeHtml });
+            container.addItem(htmlCtrl);
         },
 
-        // ── Cell class formatters ────────────────────────────────────────
-
-        formatProjectClass(sType) {
-            if (sType === "total")  return "tsProjectName tsColTotalLabel";
-            if (sType === "status") return "tsProjectName tsStatusLabel";
-            return "tsProjectName";
+        _clearHistTable: function () {
+            const container = this.byId("histTableContainer");
+            if (container) container.destroyItems();
         },
 
-        formatDayCellClass(sValue, sType) {
-            if (!sValue) return "";
-            if (sType === "total") return "tsColTotalCell";
-            if (sType === "status") {
-                const map = { "Approved": "tsStatusApproved", "Pending": "tsStatusPending", "Rejected": "tsStatusRejected" };
-                return map[sValue] || "";
+        // ── HTTP helpers ──────────────────────────────────────────────────────
+        _callAction: async function (url, payload) {
+            const resp = await fetch(url, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRF-Token": await this._fetchCSRFToken()
+                },
+                body: JSON.stringify(payload)
+            });
+            if (!resp.ok) {
+                let msg = "HTTP " + resp.status;
+                try {
+                    const e = await resp.json();
+                    msg = (e.error && e.error.message) || msg;
+                } catch (_) { }
+                throw new Error(msg);
             }
-            return "tsHistGreenCell";
+            const data = await resp.json();
+            return data.value !== undefined ? data.value : data;
         },
 
-        formatWeekTotalClass(sType) {
-            return sType !== "status" ? "tsRowTotal" : "";
-        },
-
-        // ── Helpers ──────────────────────────────────────────────────────
-
-        _parseHHMM(s) {
-            if (!s || s === "") return 0;
-            if (String(s).includes(":")) {
-                const [h, m] = String(s).split(":");
-                return (parseInt(h) || 0) + (parseInt(m) || 0) / 60;
+        _fetchCSRFToken: async function () {
+            if (this._csrfToken) return this._csrfToken;
+            try {
+                const r = await fetch(BASE_URL, {
+                    method: "GET",
+                    headers: { "X-CSRF-Token": "Fetch" }
+                });
+                this._csrfToken = r.headers.get("x-csrf-token") || "";
+            } catch (_) {
+                this._csrfToken = "";
             }
-            return parseFloat(s) || 0;
-        },
-
-        _toHHMM(decimal) {
-            const h = Math.floor(decimal);
-            const m = Math.round((decimal - h) * 60);
-            return h + ":" + String(m).padStart(2, "0");
+            return this._csrfToken;
         }
     });
 });
