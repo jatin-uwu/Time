@@ -10,9 +10,9 @@ sap.ui.define([
 
     // Max balances per leave type
     const MAX_BALANCE = {
-        Casual:    5,
-        Sick:      5,
-        Paid:      11,
+        Casual: 5,
+        Sick: 5,
+        Paid: 11,
         Maternity: 180,
         Paternity: 2
     };
@@ -21,12 +21,12 @@ sap.ui.define([
 
     const EMPTY_FORM = () => ({
         leaveType: "",
-        fromDate:  null,
-        toDate:    null,
-        days:      0,
-        reason:    "",
-        isUnpaid:  false,
-        cascade:   null
+        fromDate: null,
+        toDate: null,
+        days: 0,
+        reason: "",
+        isUnpaid: false,
+        cascade: null
     });
 
     return Controller.extend("timesheet.app.controller.ApplyLeave", {
@@ -35,12 +35,12 @@ sap.ui.define([
             this._bInitialized = false;
 
             this._oLeaveModel = new JSONModel({
-                form:       EMPTY_FORM(),
-                history:    [],
-                balance:    {
-                    casual:    5,
-                    sick:      5,
-                    paid:      11,
+                form: EMPTY_FORM(),
+                history: [],
+                balance: {
+                    casual: 5,
+                    sick: 5,
+                    paid: 11,
                     maternity: 180,
                     paternity: 2
                 },
@@ -59,16 +59,34 @@ sap.ui.define([
                 return;
             }
             this._bInitialized = true;
+
+            const today = new Date();
             const oDpFrom = this.byId("dpFrom");
+            const oDpTo = this.byId("dpTo");
+
             if (oDpFrom) {
-                oDpFrom.setMinDate(new Date());
+                oDpFrom.setMinDate(today);
+                // Force week numbers off on the internal calendar
+                oDpFrom.attachAfterValueHelpOpen(() => {
+                    const oCal = oDpFrom._getCalendar ? oDpFrom._getCalendar() : null;
+                    if (oCal) oCal.setShowWeekNumbers(false);
+                });
             }
+
+            if (oDpTo) {
+                oDpTo.setMinDate(today);
+                oDpTo.attachAfterValueHelpOpen(() => {
+                    const oCal = oDpTo._getCalendar ? oDpTo._getCalendar() : null;
+                    if (oCal) oCal.setShowWeekNumbers(false);
+                });
+            }
+
             this._loadHistory();
         },
 
         // ── Load leave history + compute remaining balance ────────────────
         _loadHistory() {
-            const oComp  = this.getOwnerComponent();
+            const oComp = this.getOwnerComponent();
             const oModel = oComp.getModel();
             if (!oModel) return;
 
@@ -127,25 +145,25 @@ sap.ui.define([
                         let remaining = days;
 
                         // Sick bucket
-                        const sickAvail   = Math.max(0, MAX_BALANCE.Sick    - used.Sick);
-                        const fromSick    = Math.min(remaining, sickAvail);
-                        used.Sick        += fromSick;
-                        remaining        -= fromSick;
+                        const sickAvail = Math.max(0, MAX_BALANCE.Sick - used.Sick);
+                        const fromSick = Math.min(remaining, sickAvail);
+                        used.Sick += fromSick;
+                        remaining -= fromSick;
 
                         // Casual bucket (cascade)
                         if (remaining > 0) {
                             const casualAvail = Math.max(0, MAX_BALANCE.Casual - used.Casual);
-                            const fromCasual  = Math.min(remaining, casualAvail);
-                            used.Casual      += fromCasual;
-                            remaining        -= fromCasual;
+                            const fromCasual = Math.min(remaining, casualAvail);
+                            used.Casual += fromCasual;
+                            remaining -= fromCasual;
                         }
 
                         // Paid bucket (cascade)
                         if (remaining > 0) {
                             const paidAvail = Math.max(0, MAX_BALANCE.Paid - used.Paid);
-                            const fromPaid  = Math.min(remaining, paidAvail);
-                            used.Paid      += fromPaid;
-                            remaining      -= fromPaid;
+                            const fromPaid = Math.min(remaining, paidAvail);
+                            used.Paid += fromPaid;
+                            remaining -= fromPaid;
                         }
                         // remaining > 0 here means Unpaid — no bucket to deduct
 
@@ -162,9 +180,9 @@ sap.ui.define([
                 });
 
             this._oLeaveModel.setProperty("/balance", {
-                casual:    Math.max(0, MAX_BALANCE.Casual    - used.Casual),
-                sick:      Math.max(0, MAX_BALANCE.Sick      - used.Sick),
-                paid:      Math.max(0, MAX_BALANCE.Paid      - used.Paid),
+                casual: Math.max(0, MAX_BALANCE.Casual - used.Casual),
+                sick: Math.max(0, MAX_BALANCE.Sick - used.Sick),
+                paid: Math.max(0, MAX_BALANCE.Paid - used.Paid),
                 maternity: Math.max(0, MAX_BALANCE.Maternity - used.Maternity),
                 paternity: Math.max(0, MAX_BALANCE.Paternity - used.Paternity)
             });
@@ -173,10 +191,18 @@ sap.ui.define([
         // ── Date change → recalculate working days ────────────────────────
         onDateChange() {
             const f = this._oLeaveModel.getProperty("/form");
+
+            // Keep To date minimum in sync with From date
+            const oDpTo = this.byId("dpTo");
+            if (f.fromDate && oDpTo) {
+                const oMinTo = new Date(f.fromDate);
+                oDpTo.setMinDate(oMinTo);
+            }
+
             if (!f.fromDate || !f.toDate) return;
 
             const from = new Date(f.fromDate);
-            const to   = new Date(f.toDate);
+            const to = new Date(f.toDate);
 
             if (to < from) {
                 this._oLeaveModel.setProperty("/form/toDate", null);
@@ -207,41 +233,41 @@ sap.ui.define([
                 const cascade = { sick: 0, casual: 0, paid: 0, unpaid: 0 };
 
                 const fromSick = Math.min(remaining, bal.sick);
-                cascade.sick    = fromSick;
-                remaining      -= fromSick;
+                cascade.sick = fromSick;
+                remaining -= fromSick;
 
                 if (remaining > 0) {
                     const fromCasual = Math.min(remaining, bal.casual);
-                    cascade.casual   = fromCasual;
-                    remaining       -= fromCasual;
+                    cascade.casual = fromCasual;
+                    remaining -= fromCasual;
                 }
 
                 if (remaining > 0) {
                     const fromPaid = Math.min(remaining, bal.paid);
-                    cascade.paid   = fromPaid;
-                    remaining     -= fromPaid;
+                    cascade.paid = fromPaid;
+                    remaining -= fromPaid;
                 }
 
                 cascade.unpaid = remaining;
 
-                this._oLeaveModel.setProperty("/form/cascade",  cascade);
+                this._oLeaveModel.setProperty("/form/cascade", cascade);
                 this._oLeaveModel.setProperty("/form/isUnpaid", cascade.unpaid > 0);
 
             } else {
-                const balKey   = leaveType.toLowerCase();
-                const balAmt   = bal[balKey] || 0;
+                const balKey = leaveType.toLowerCase();
+                const balAmt = bal[balKey] || 0;
                 const isUnpaid = days > balAmt;
 
-                this._oLeaveModel.setProperty("/form/cascade",  null);
+                this._oLeaveModel.setProperty("/form/cascade", null);
                 this._oLeaveModel.setProperty("/form/isUnpaid", isUnpaid);
             }
         },
 
         _buildCascadeSummary(cascade, days) {
             const lines = [];
-            if (cascade.sick   > 0) lines.push(`• ${cascade.sick} day(s) from Sick Leave balance`);
+            if (cascade.sick > 0) lines.push(`• ${cascade.sick} day(s) from Sick Leave balance`);
             if (cascade.casual > 0) lines.push(`• ${cascade.casual} day(s) from Casual Leave balance`);
-            if (cascade.paid   > 0) lines.push(`• ${cascade.paid} day(s) from Paid Leave balance`);
+            if (cascade.paid > 0) lines.push(`• ${cascade.paid} day(s) from Paid Leave balance`);
             if (cascade.unpaid > 0) lines.push(`• ${cascade.unpaid} day(s) as Unpaid Leave (no balance remaining)`);
             return `You are applying for ${days} day(s) of Sick Leave.\nHere is how the days will be deducted:\n\n${lines.join("\n")}\n\nDo you want to proceed?`;
         },
@@ -263,12 +289,12 @@ sap.ui.define([
         _getOverlappingLeave(fromDate, toDate) {
             const history = this._oLeaveModel.getProperty("/history") || [];
             const newFrom = new Date(fromDate).getTime();
-            const newTo   = new Date(toDate).getTime();
+            const newTo = new Date(toDate).getTime();
 
             return history.find(r => {
                 if (r.status === "Rejected") return false;
                 const rFrom = new Date(r.fromDate).getTime();
-                const rTo   = new Date(r.toDate).getTime();
+                const rTo = new Date(r.toDate).getTime();
                 // Two ranges overlap if: start1 <= end2 AND start2 <= end1
                 return newFrom <= rTo && rFrom <= newTo;
             }) || null;
@@ -276,7 +302,7 @@ sap.ui.define([
 
         // ── Validate ──────────────────────────────────────────────────────
         _validate() {
-            const f    = this._oLeaveModel.getProperty("/form");
+            const f = this._oLeaveModel.getProperty("/form");
             const errs = [];
 
             const setErr = (id, msg) => {
@@ -346,7 +372,7 @@ sap.ui.define([
                 return;
             }
 
-            const oComp  = this.getOwnerComponent();
+            const oComp = this.getOwnerComponent();
             const sEmpId = oComp.getCurrentEmployeeId
                 ? oComp.getCurrentEmployeeId() : null;
 
@@ -375,8 +401,8 @@ sap.ui.define([
                 if (needsMoreThanSick) {
                     const sMsg = this._buildCascadeSummary(cascade, f.days);
                     MessageBox.confirm(sMsg, {
-                        title:            "Confirm Leave Deduction",
-                        actions:          [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                        title: "Confirm Leave Deduction",
+                        actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
                         emphasizedAction: MessageBox.Action.OK,
                         onClose: (sAction) => {
                             if (sAction === MessageBox.Action.OK) {
@@ -389,15 +415,15 @@ sap.ui.define([
             }
 
             if (f.isUnpaid) {
-                const bal     = this._oLeaveModel.getProperty("/balance");
-                const balKey  = f.leaveType.toLowerCase();
-                const balAmt  = bal[balKey] || 0;
-                const unpaid  = f.days - balAmt;
+                const bal = this._oLeaveModel.getProperty("/balance");
+                const balKey = f.leaveType.toLowerCase();
+                const balAmt = bal[balKey] || 0;
+                const unpaid = f.days - balAmt;
                 MessageBox.confirm(
                     `You only have ${balAmt} day(s) of ${f.leaveType} Leave remaining.\n${unpaid} day(s) will be marked as Unpaid Leave.\n\nDo you want to proceed?`,
                     {
-                        title:            "Insufficient Balance",
-                        actions:          [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                        title: "Insufficient Balance",
+                        actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
                         emphasizedAction: MessageBox.Action.OK,
                         onClose: (sAction) => {
                             if (sAction === MessageBox.Action.OK) {
@@ -423,22 +449,22 @@ sap.ui.define([
                 return;
             }
 
-            const f       = this._oLeaveModel.getProperty("/form");
-            const bal     = this._oLeaveModel.getProperty("/balance");
-            const balKey  = f.leaveType.toLowerCase();
-            const balAmt  = bal[balKey] || 0;
+            const f = this._oLeaveModel.getProperty("/form");
+            const bal = this._oLeaveModel.getProperty("/balance");
+            const balKey = f.leaveType.toLowerCase();
+            const balAmt = bal[balKey] || 0;
             const isUnpaid = f.leaveType === "Sick"
                 ? (f.cascade && f.cascade.unpaid > 0)
                 : (f.days > balAmt);
 
             const oCtx = oModel.bindContext("/applyLeave(...)");
             oCtx.setParameter("employeeId", sEmpId);
-            oCtx.setParameter("leaveType",  f.leaveType);
-            oCtx.setParameter("fromDate",   f.fromDate);
-            oCtx.setParameter("toDate",     f.toDate);
-            oCtx.setParameter("days",       f.days);
-            oCtx.setParameter("reason",     f.reason.trim());
-            oCtx.setParameter("isUnpaid",   isUnpaid);
+            oCtx.setParameter("leaveType", f.leaveType);
+            oCtx.setParameter("fromDate", f.fromDate);
+            oCtx.setParameter("toDate", f.toDate);
+            oCtx.setParameter("days", f.days);
+            oCtx.setParameter("reason", f.reason.trim());
+            oCtx.setParameter("isUnpaid", isUnpaid);
 
             oCtx.execute()
                 .then(() => {
@@ -449,9 +475,9 @@ sap.ui.define([
                     if (f.leaveType === "Sick" && f.cascade) {
                         const c = f.cascade;
                         const parts = [];
-                        if (c.sick   > 0) parts.push(`${c.sick} from Sick`);
+                        if (c.sick > 0) parts.push(`${c.sick} from Sick`);
                         if (c.casual > 0) parts.push(`${c.casual} from Casual`);
-                        if (c.paid   > 0) parts.push(`${c.paid} from Paid`);
+                        if (c.paid > 0) parts.push(`${c.paid} from Paid`);
                         if (c.unpaid > 0) parts.push(`${c.unpaid} Unpaid`);
                         msg = `Leave request submitted.\nDeduction breakdown: ${parts.join(", ")}.`;
                     } else if (isUnpaid) {
@@ -464,17 +490,17 @@ sap.ui.define([
                     const history = this._oLeaveModel.getProperty("/history") || [];
                     const localRecord = {
                         leaveType: f.leaveType,
-                        fromDate:  f.fromDate,
-                        toDate:    f.toDate,
-                        days:      f.days,
-                        reason:    f.reason.trim(),
-                        status:    "Pending",
-                        isUnpaid:  isUnpaid,
+                        fromDate: f.fromDate,
+                        toDate: f.toDate,
+                        days: f.days,
+                        reason: f.reason.trim(),
+                        status: "Pending",
+                        isUnpaid: isUnpaid,
                         cascade: (f.leaveType === "Sick" && f.cascade)
                             ? {
-                                sick:   f.cascade.sick   || 0,
+                                sick: f.cascade.sick || 0,
                                 casual: f.cascade.casual || 0,
-                                paid:   f.cascade.paid   || 0,
+                                paid: f.cascade.paid || 0,
                                 unpaid: f.cascade.unpaid || 0
                             }
                             : null
@@ -484,7 +510,7 @@ sap.ui.define([
                     this._computeBalance(history);
 
                     MessageBox.success(msg, {
-                        title:   "Submitted",
+                        title: "Submitted",
                         onClose: () => {
                             this.onReset();
                             this._loadHistory();
@@ -502,7 +528,7 @@ sap.ui.define([
 
         onReset() {
             this._oLeaveModel.setProperty("/form", EMPTY_FORM());
-            ["selLeaveType","dpFrom","dpTo","taReason"].forEach(id => {
+            ["selLeaveType", "dpFrom", "dpTo", "taReason"].forEach(id => {
                 const o = this.byId(id);
                 if (o && o.setValueState) o.setValueState("None");
             });

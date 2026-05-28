@@ -1860,3 +1860,105 @@ html, body { margin: 0; height: 100%; }
 }
 .tsPerfHistCard tr:last-child td { border-bottom: none; }
 .tsPerfHistCard tr:hover td { background: #f0f7ff; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Leave Portal page
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.sapUiCalWeekNum { display: none !important; width: 0 !important; }
+.sapUiCalItemOtherMonth { visibility: hidden !important; }
+.tsLeaveWrap { padding: 24px; width: 100%; box-sizing: border-box; }
+.tsLeaveSectionTitle { font-size: 0.95rem; font-weight: 700; color: #1e3a5f; margin-bottom: 14px; }
+
+/* ── Balance Cards ── */
+.tsLeaveBalanceRow   { gap: 14px; flex-wrap: wrap; margin-bottom: 28px; }
+.tsLeaveBalCard      { border-radius: 14px; padding: 18px 24px; min-width: 140px; flex: 1; align-items: center; box-shadow: 0 4px 14px rgba(0,0,0,0.15); }
+.tsLeaveBalCard .sapMTitle  { color: #ffffff !important; font-size: 2rem !important; font-weight: 800 !important; }
+.tsLeaveBalCard .sapMText   { color: rgba(255,255,255,0.85) !important; font-size: 0.8rem !important; font-weight: 600 !important; }
+.tsLeaveBalCard .sapMObjectStatusText { color: rgba(255,255,255,0.6) !important; font-size: 0.73rem !important; }
+
+.tsLeaveBalCasual    { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+.tsLeaveBalSick      { background: linear-gradient(135deg, #10b981, #059669); }
+.tsLeaveBalPaid      { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.tsLeaveBalMaternity { background: linear-gradient(135deg, #ec4899, #be185d); }
+.tsLeaveBalPaternity { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+
+/* ── Form Card ── */
+.tsLeaveFormCard {
+    background: #ffffff;
+    border-radius: 16px;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+    padding: 28px 32px;
+    margin-bottom: 28px;
+}
+.tsLeaveFormHead {
+    padding-bottom: 16px;
+    margin-bottom: 24px;
+    border-bottom: 2px solid #f1f5f9;
+}
+.tsLeaveFormHead .sapUiIcon { color: #1d4ed8 !important; font-size: 1.2rem; margin-right: 10px; }
+.tsLeaveFormHead .sapMTitle .sapMTitleInner { color: #1e3a5f !important; font-weight: 700 !important; }
+
+/* ── Form Grid: 2-row layout ── */
+.tsLeaveFormGrid {
+    gap: 20px;
+    flex-wrap: wrap;
+    display: flex;
+    flex-direction: column;   /* stack rows vertically */
+}
+
+/* Row 1: Leave Type + Working Days + From + To — all on one line */
+.tsLeaveFormRow1 {
+    display: flex;
+    gap: 20px;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    width: 100%;
+}
+
+/* Row 2: Reason + Submit side by side */
+.tsLeaveFormRow2 {
+    display: flex;
+    gap: 20px;
+    align-items: flex-end;
+    width: 100%;
+}
+
+.tsLeaveFormField { flex: 1; min-width: 0; }
+
+.tsLeaveFormFieldReason { flex: 1; }
+
+.tsLeaveFormFieldFull { width: auto; flex: 1; }
+
+.tsLeaveFormLabel.sapMLabel {
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    color: #374151 !important;
+    margin-bottom: 6px !important;
+    display: block !important;
+}
+
+.tsLeaveDaysBox {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px 14px;
+    min-height: 36px;
+}
+
+.tsLeaveFormActions { margin-top: 24px; gap: 12px; }
+
+/* ── History Card ── */
+.tsLeaveHistCard {
+    background: #ffffff;
+    border-radius: 16px;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+    padding: 28px 32px;
+}
+.tsLeaveHistHead {
+    padding-bottom: 16px;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #f1f5f9;
+}
+.tsLeaveHistHead .sapUiIcon { color: #1d4ed8 !important; font-size: 1.2rem; margin-right: 10px; }
+.tsLeaveHistHead .sapMTitle .sapMTitleInner { color: #1e3a5f !important; font-weight: 700 !important; }
