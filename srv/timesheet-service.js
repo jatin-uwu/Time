@@ -423,6 +423,31 @@ class EmployeeService extends cds.ApplicationService {
             }));
         });
 
+               this.on('markAllNotificationsRead', async (req) => {
+            const user  = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const emp   = await SELECT.one.from(NOTIFICATION_ENTITY).columns('notificationId')
+                              .where({ employee_employeeId: 'placeholder' });
+            // Re-fetch employee
+            const empRow = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            if (!empRow) return req.error(404, 'Employee not found.');
+ 
+            // Count unread BEFORE updating (affectedRows not reliable in CDS)
+            const unreadRows = await SELECT.from(NOTIFICATION)
+                .columns('notificationId')
+                .where({ employee_employeeId: empRow.employeeId, isRead: false });
+            const updated = (unreadRows || []).length;
+ 
+            if (updated > 0) {
+                await UPDATE(NOTIFICATION)
+                    .set({ isRead: true })
+                    .where({ employee_employeeId: empRow.employeeId, isRead: false });
+            }
+ 
+            cds.log('notif').info(`${updated} notifications marked as read for ${empRow.employeeId}`);
+            return { updated };
+        });
+
         // ── Dashboard: Upcoming Calendar (Google Calendar API) ─────────────────────
         // Reads GOOGLE_CALENDAR_API_KEY + GOOGLE_CALENDAR_ID from environment.
         // Falls back to empty array if not configured — card shows "No events".

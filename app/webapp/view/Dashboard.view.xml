@@ -25,12 +25,10 @@
                                 enabled="{dash>/attendanceBtnEnabled}"
                                 style="border-radius:20px; font-weight:600;" />
 
-                        <!-- Bell icon with unread badge -->
-                        <Button id="notifBellBtn"
-                                icon="sap-icon://bell"
-                                type="Transparent"
-                                press=".onNotificationPress"
-                                tooltip="Notifications" />
+                        <!-- ── Bell icon with unread badge (custom HTML for badge overlay) ── -->
+                        <core:HTML id="notifBellHTML"
+                                   sanitizeContent="false"
+                                   content="{dash>/bellHTML}" />
 
                         <Text text="{dash>/todayLabel}"
                               style="font-size:0.82rem; font-weight:500; color:#9ca3af; white-space:nowrap;" />

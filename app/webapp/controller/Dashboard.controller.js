@@ -98,6 +98,8 @@ sap.ui.define([
                 recentNotifications: {
                     items: []
                 },
+                notifUnreadCount: 0,   // ← NEW: tracks unread count for bell badge
+                bellHTML: "",
                 // ADD inside the JSONModel({}) in onInit, after existing properties
                 greetingEmoji: "👋",
                 greetingHTML: "",
@@ -109,6 +111,17 @@ sap.ui.define([
 
             this.getView().setModel(this._oDashModel, "dash");
             this._loadGreeting();
+            // to refresh chart immediately after saving a timesheet entry in the Timesheet 
+            sap.ui.getCore().getEventBus().subscribe(
+                "Timesheet",
+                "DataChanged",
+                function (sChannel, sEvent, oData) {
+                    const sWeekStart = oData.weekStartDate ||
+                        this._oDashModel.getProperty("/weekStart");
+                    this._computeWeekHours(sWeekStart);
+                },
+                this
+            );
 
             this.getOwnerComponent().getRouter()
                 .getRoute("dashboard")
@@ -162,10 +175,37 @@ sap.ui.define([
             }
         },
 
+               _refreshNotifBell: function () {
+            this._callAction("getNotifications", { page: 1, pageSize: 1 })
+                .then(function (oData) {
+                    var unread     = oData.unreadCount || 0;
+                    var prevUnread = this._oDashModel.getProperty("/notifUnreadCount") || 0;
+ 
+                    this._oDashModel.setProperty("/notifUnreadCount", unread);
+                    this._oDashModel.setProperty("/bellHTML", this._buildBellHTML(unread));
+ 
+                    // If count went up, also refresh the recent-notifications list on the dashboard
+                    if (unread > prevUnread) {
+                        this._loadRecentNotifications();
+                    }
+                }.bind(this))
+                .catch(function () {
+                    // Silent fail — don't disrupt the user
+                });
+        },
+
         // ─────────────────────────────────────────────────────────────────────
         // Route match — kick off all loaders
         // ─────────────────────────────────────────────────────────────────────
         _onRouteMatched() {
+
+            if (this._notifRefreshInterval) {
+                clearInterval(this._notifRefreshInterval);
+            }
+            this._notifRefreshInterval = setInterval(
+                function () { this._refreshNotifBell(); }.bind(this),
+                60000   // poll every 60 seconds
+            );
             const oComp = this.getOwnerComponent();
 
             // Wait for backend user to resolve before loading any dashboard data
@@ -434,6 +474,10 @@ sap.ui.define([
             if (this._attendanceResetTimer) {
                 clearTimeout(this._attendanceResetTimer);
             }
+            if (this._notifRefreshInterval) {
+                clearInterval(this._notifRefreshInterval);
+                this._notifRefreshInterval = null;
+            }
         },
         // ─────────────────────────────────────────────────────────────────────
         // Week navigation (unchanged)
@@ -481,36 +525,84 @@ sap.ui.define([
         // Week hours (unchanged)
         // ─────────────────────────────────────────────────────────────────────
         _computeWeekHours(sWeekStart) {
-            const oLocksModel = this.getOwnerComponent().getModel("locked");
-            let rows = oLocksModel ? (oLocksModel.getProperty("/" + sWeekStart) || []) : [];
-            if (rows.length === 0) {
-                const subs = this.getOwnerComponent().getModel("history")?.getProperty("/submissions") || [];
-                const sub = subs.find(s => s.weekStart === sWeekStart);
-                rows = sub ? (sub.rows || []) : [];
-            }
-            const dayTotals = {};
-            DAYS.forEach(d => { dayTotals[d] = rows.reduce((s, r) => s + parseHHMM(r[d] || ""), 0); });
+            // Calculate week end date
+            const mon = new Date(sWeekStart + "T00:00:00");
+            const sun = new Date(mon);
+            sun.setDate(mon.getDate() + 6);
+            const sWeekEnd = toDateString(sun);
 
-            const weekDays = DAYS.slice(0, 5).map((d, i) => ({
-                name: DAY_NAMES[i], hours: dayTotals[d],
-                hoursLabel: dayTotals[d] > 0 ? toHHMM(dayTotals[d]) + " hrs" : "–"
-            }));
-            const weekTotal = DAYS.reduce((s, d) => s + dayTotals[d], 0);
-            const filledDays = DAYS.slice(0, 5).filter(d => dayTotals[d] > 0).length;
-            const pct = Math.round(filledDays / 5 * 100);
+            this._callAction("getTimesheetWeekData", {
+                weekStartDate: sWeekStart,
+                weekEndDate: sWeekEnd
+            })
+                .then(data => {
+                    const entries = JSON.parse(data.entries || "[]");
+                    const weekStatus = data.weekStatus || "None";
 
-            this._oDashModel.setProperty("/weekTotalLabel", `${toHHMM(weekTotal)} hrs this week`);
-            this._oDashModel.setProperty("/barChartHTML", this._buildBarChart(weekDays));
-            this._oDashModel.setProperty("/completion", {
-                pct,
-                label: `${filledDays} of 5 days filled`,
-                state: pct === 100 ? "Success" : pct >= 60 ? "Warning" : pct > 0 ? "Error" : "None",
-                hint: pct === 100
-                    ? "All Mon–Fri days filled – ready to submit!"
-                    : `${5 - filledDays} day${5 - filledDays !== 1 ? "s" : ""} remaining`
-            });
-            this._refreshDash();
-            this._scrollToTop();
+                    // Update timesheet status counts from backend
+                    const approved = weekStatus === "Approved" ? 1 : 0;
+                    const pending = weekStatus === "Pending" ? 1 : 0;
+                    const rejected = weekStatus === "Rejected" ? 1 : 0;
+                    this._oDashModel.setProperty("/approved", approved);
+                    this._oDashModel.setProperty("/pending", pending);
+                    this._oDashModel.setProperty("/rejected", rejected);
+                    this._oDashModel.setProperty("/total", approved + pending + rejected);
+
+                    // Build day totals from entries
+                    const dayTotals = {};
+                    DAYS.forEach(d => { dayTotals[d] = 0; });
+
+                    entries.forEach(function (e) {
+                        const d = new Date(e.workDate + "T00:00:00");
+                        const day = d.getDay(); // 0=Sun,1=Mon...
+                        const cols = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+                        const col = cols[day];
+                        if (col) dayTotals[col] += parseFloat(e.hoursWorked || 0);
+                    });
+
+                    const weekDays = DAYS.slice(0, 5).map((d, i) => ({
+                        name: DAY_NAMES[i],
+                        hours: dayTotals[d],
+                        hoursLabel: dayTotals[d] > 0
+                            ? toHHMM(dayTotals[d]) + " hrs" : "\u2013"
+                    }));
+
+                    const weekTotal = DAYS.reduce((s, d) => s + dayTotals[d], 0);
+                    const filledDays = DAYS.slice(0, 5).filter(d => dayTotals[d] > 0).length;
+                    const pct = Math.round(filledDays / 5 * 100);
+
+                    this._oDashModel.setProperty("/weekTotalLabel",
+                        toHHMM(weekTotal) + " hrs this week");
+                    this._oDashModel.setProperty("/barChartHTML",
+                        this._buildBarChart(weekDays));
+                    this._oDashModel.setProperty("/completion", {
+                        pct,
+                        label: filledDays + " of 5 days filled",
+                        state: pct === 100 ? "Success"
+                            : pct >= 60 ? "Warning"
+                                : pct > 0 ? "Error" : "None",
+                        hint: pct === 100
+                            ? "All Mon\u2013Fri days filled \u2013 ready to submit!"
+                            : (5 - filledDays) + " day" +
+                            (5 - filledDays !== 1 ? "s" : "") + " remaining"
+                    });
+
+                    this._refreshDash();
+                    this._scrollToTop();
+                })
+                .catch(() => {
+                    // Fallback — show empty chart
+                    const emptyDays = DAYS.slice(0, 5).map((d, i) => ({
+                        name: DAY_NAMES[i], hours: 0, hoursLabel: "\u2013"
+                    }));
+                    this._oDashModel.setProperty("/barChartHTML",
+                        this._buildBarChart(emptyDays));
+                    this._oDashModel.setProperty("/completion", {
+                        pct: 0, label: "0 of 5 days filled",
+                        state: "None", hint: "Fill Mon\u2013Fri to complete your timesheet"
+                    });
+                    this._refreshDash();
+                });
         },
 
         _scrollToTop() {
@@ -1196,23 +1288,35 @@ sap.ui.define([
             }).catch(() => this._loadNotificationsFallback());
         },
 
-        _loadNotificationsFallback() {
-            this._callAction("getRecentNotifications", {})
-                .then(oData => {
-                    let items = [];
-                    if (Array.isArray(oData)) {
-                        items = oData;
-                    } else if (Array.isArray(oData?.value)) {
-                        items = oData.value;
-                    } else if (oData.itemsJSON) {
-                        try { items = JSON.parse(oData.itemsJSON); } catch (e) { items = []; }
-                    }
-                    this._oDashModel.setProperty("/recentNotifications/items", items);
-                })
-                .catch(() => {
-                    this._oDashModel.setProperty("/recentNotifications/items", []);
-                })
-                .finally(() => this._refreshDash());
+        _loadNotificationsFallback: function () {
+            // Use getNotifications (paginated) so we also get unreadCount
+            this._callAction("getNotifications", { page: 1, pageSize: 5 })
+                .then(function (oData) {
+                    var items = [];
+                    try { items = JSON.parse(oData.itemsJSON || "[]"); } catch (e) { items = []; }
+
+                    var unread = oData.unreadCount || 0;
+                    this._oDashModel.setProperty("/recentNotifications/items", items.slice(0, 5));
+                    this._oDashModel.setProperty("/notifUnreadCount", unread);
+                    this._oDashModel.setProperty("/bellHTML", this._buildBellHTML(unread));
+                }.bind(this))
+                .catch(function () {
+                    // Fallback to getRecentNotifications (no unreadCount, but safe)
+                    this._callAction("getRecentNotifications", {})
+                        .then(function (oData) {
+                            var items = Array.isArray(oData) ? oData
+                                : (Array.isArray(oData && oData.value) ? oData.value : []);
+                            var unread = items.filter(function (n) { return !n.isRead; }).length;
+                            this._oDashModel.setProperty("/recentNotifications/items", items.slice(0, 5));
+                            this._oDashModel.setProperty("/notifUnreadCount", unread);
+                            this._oDashModel.setProperty("/bellHTML", this._buildBellHTML(unread));
+                        }.bind(this))
+                        .catch(function () {
+                            this._oDashModel.setProperty("/recentNotifications/items", []);
+                            this._oDashModel.setProperty("/bellHTML", this._buildBellHTML(0));
+                        }.bind(this));
+                }.bind(this))
+                .finally(function () { this._refreshDash(); }.bind(this));
         },
 
         // ─────────────────────────────────────────────────────────────────────
@@ -2095,6 +2199,78 @@ sap.ui.define([
         ${sRow2}
         ${sRow5}
     </div>`;
+        },
+
+        _buildBellHTML: function (unreadCount) {
+            var sViewId = this.getView().getId();
+            var hasUnread = unreadCount > 0;
+            var badgeLabel = unreadCount > 99 ? "99+" : String(unreadCount);
+
+            // CSS keyframes are injected once into <head>
+            if (!window._bellAnimInjected) {
+                window._bellAnimInjected = true;
+                var style = document.createElement("style");
+                style.textContent = [
+                    "@keyframes bellRing {",
+                    "  0%,100%{transform:rotate(0)}",
+                    "  10%,30%,50%,70%,90%{transform:rotate(-18deg)}",
+                    "  20%,40%,60%,80%{transform:rotate(18deg)}",
+                    "}",
+                    "@keyframes badgePop {",
+                    "  0%  {transform:scale(0);opacity:0}",
+                    "  70% {transform:scale(1.3);opacity:1}",
+                    "  100%{transform:scale(1);opacity:1}",
+                    "}"
+                ].join("\n");
+                document.head.appendChild(style);
+            }
+
+            var bellStyle = [
+                "display:inline-flex;align-items:center;justify-content:center;",
+                "width:40px;height:40px;border-radius:50%;",
+                "background:transparent;border:none;cursor:pointer;",
+                "position:relative;",
+                "transition:background 0.2s;",
+                "-webkit-tap-highlight-color:transparent;"
+            ].join("");
+
+            var svgStyle = hasUnread
+                ? "animation:bellRing 0.8s ease 0.2s 1;"
+                : "";
+
+            var badgeHTML = hasUnread ? [
+                "<span style='",
+                "  position:absolute;top:3px;right:3px;",
+                "  min-width:17px;height:17px;",
+                "  background:#ef4444;color:#fff;",
+                "  font-size:0.65rem;font-weight:700;line-height:17px;",
+                "  text-align:center;border-radius:9px;",
+                "  padding:0 4px;box-sizing:border-box;",
+                "  border:2px solid #fff;",
+                "  animation:badgePop 0.3s ease forwards;",
+                "  pointer-events:none;",
+                "'>",
+                badgeLabel,
+                "</span>"
+            ].join("") : "";
+
+            return [
+                "<button",
+                "  style='" + bellStyle + "'",
+                "  title='Notifications'",
+                "  onmouseover=\"this.style.background='#f3f4f6'\"",
+                "  onmouseout=\"this.style.background='transparent'\"",
+                "  onclick=\"sap.ui.getCore().byId('" + sViewId + "').getController().onNotificationPress()\">",
+                "  <svg style='" + svgStyle + "'",
+                "       width='22' height='22' viewBox='0 0 24 24' fill='none'",
+                "       stroke='" + (hasUnread ? "#111827" : "#6b7280") + "'",
+                "       stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>",
+                "    <path d='M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9'/>",
+                "    <path d='M13.73 21a2 2 0 01-3.46 0'/>",
+                "  </svg>",
+                badgeHTML,
+                "</button>"
+            ].join("\n");
         },
 
         // ─────────────────────────────────────────────────────────────────────

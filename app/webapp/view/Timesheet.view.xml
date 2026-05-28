@@ -125,7 +125,7 @@
                             <HBox class="sapUiSmallMarginTop" visible="{viewModel>/canEdit}">
                                 <Button
                                     id="btnAddRow"
-                                    text="+ Add Project Row"
+                                    text=" Add Project Row"
                                     type="Ghost"
                                     icon="sap-icon://add"
                                     press=".onAddRow" />
