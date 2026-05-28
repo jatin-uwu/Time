@@ -6,7 +6,7 @@
     displayBlock="true">
 
     <Page id="taskStatusPage"
-          title="Task Status"
+          showHeader="false"
           class="tsDashboardPage"
           enableScrolling="true">
 
@@ -14,27 +14,32 @@
 
             <VBox class="tsTaskAssignWrap">
 
-                <!-- Header / counters -->
-                <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween" wrap="Wrap">
+                <!-- ── Page header / counters ──────────────────────────── -->
+                <HBox class="tsPageHeaderCard" alignItems="Center" justifyContent="SpaceBetween" wrap="Wrap">
                     <HBox alignItems="Center">
-                        <core:Icon src="sap-icon://activity-items" class="tsMgrToolbarIcon" />
-                        <Title text="Task Status — All Employees" level="H4" class="sapUiSmallMarginBegin" />
+                        <core:Icon src="sap-icon://activity-items" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                        <Text text="Task Status — All Employees"
+                              style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
                     </HBox>
-                    <HBox alignItems="Center" wrap="Wrap">
+                    <HBox alignItems="Center" wrap="Wrap" style="gap:8px;">
                         <ObjectStatus
                             text="{tsView>/openCount} open"
-                            state="Information"
+                            state="None"
                             icon="sap-icon://circle-task-2"
-                            class="sapUiTinyMarginEnd" />
+                            style="color:#ffffff;"
+                            class="tsHeaderBadge sapUiTinyMarginEnd" />
                         <ObjectStatus
                             text="{tsView>/inProgressCount} in progress"
-                            state="Warning"
+                            state="None"
                             icon="sap-icon://play"
-                            class="sapUiTinyMarginEnd" />
+                            style="color:#ffffff;"
+                            class="tsHeaderBadge sapUiTinyMarginEnd" />
                         <ObjectStatus
                             text="{tsView>/completedCount} completed"
-                            state="Success"
-                            icon="sap-icon://accept" />
+                            state="None"
+                            icon="sap-icon://accept"
+                            style="color:#ffffff;"
+                            class="tsHeaderBadge" />
                     </HBox>
                 </HBox>
 

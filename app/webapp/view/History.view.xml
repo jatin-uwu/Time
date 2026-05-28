@@ -6,32 +6,22 @@
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
-    <Page id="historyPage"
-          showNavButton="false"
-          enableScrolling="true">
 
-        <customHeader>
-            <Bar>
-                <contentLeft>
-                    <Title text="Timesheet History" level="H4" />
-                </contentLeft>
-                <contentRight>
-                    <!-- Only visible after a week is selected -->
-                    <Button
-                        id="btnChangeWeek"
-                        icon="sap-icon://calendar"
-                        text="Change Week"
-                        type="Transparent"
-                        visible="{histView>/weekSelected}"
-                        tooltip="Select a different week"
-                        press=".onCalendarToggle" />
-                </contentRight>
-            </Bar>
-        </customHeader>
+
+            <!-- ① No week selected — centered calendar picker -->
+    <Page id="historyPage" showHeader="false" class="tsDashboardPage"
+          enableScrolling="false">
 
         <content>
 
-            <!-- ① No week selected — centered calendar picker -->
+            <!-- ── Compact page header ─────────────────────────────────── -->
+            <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone" alignItems="Center">
+                <core:Icon src="sap-icon://history" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                <Text text="Timesheet History"
+                      style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+            </HBox>
+
+            <!-- ① No week selected yet: centered calendar -->
             <VBox visible="{= !${histView>/weekSelected} }" class="tsHistWelcome">
                 <VBox alignItems="Center" class="tsHistWelcomeCard">
                     <core:Icon

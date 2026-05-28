@@ -11,19 +11,18 @@
         <content>
             <VBox class="tsDashOuter">
 
-                <!-- ── Greeting Row ── -->
-                <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsDashGreetingRow"
-                      style="padding: 1.2rem 1.5rem 0.8rem; background: #fff; border-bottom: 1px solid #f3f4f6;">
+                <!-- ── Greeting Row (blue brand header) ── -->
+                <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsDashGreetingRow">
 
                     <core:HTML sanitizeContent="false" content="{dash>/greetingHTML}" />
 
                     <HBox alignItems="Center" style="gap:12px; flex-shrink:0;">
                         <Button id="activeBtn"
                                 text="{dash>/attendanceBtnLabel}"
-                                type="{dash>/attendanceBtnType}"
+                                type="Default"
                                 press=".onMarkAttendance"
                                 enabled="{dash>/attendanceBtnEnabled}"
-                                style="border-radius:20px; font-weight:600;" />
+                                class="tsTeamAttExportBtn" />
 
                         <!-- ── Bell icon with unread badge (custom HTML for badge overlay) ── -->
                         <core:HTML id="notifBellHTML"
@@ -31,7 +30,7 @@
                                    content="{dash>/bellHTML}" />
 
                         <Text text="{dash>/todayLabel}"
-                              style="font-size:0.82rem; font-weight:500; color:#9ca3af; white-space:nowrap;" />
+                              style="font-size:0.82rem; font-weight:500; color:rgba(255,255,255,0.72); white-space:nowrap;" />
                     </HBox>
                 </HBox>
 

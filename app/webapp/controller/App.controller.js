@@ -26,13 +26,9 @@ sap.ui.define([
     }
 
     // ── CAP OData v4 unbound action caller ───────────────────────────────────
-    // Handles CSRF token fetch (required by SAP BTP AppRouter) then POSTs
-    // the action. Logs full server response to console on failure so you
-    // can see exactly what CAP is returning.
     async function callAction(sAction, oParams) {
         const sUrl = `/employee/${sAction}`;
 
-        // 1. Fetch CSRF token — SAP BTP AppRouter blocks POST without it
         let sCsrfToken = null;
         try {
             const oHead = await fetch("/employee/", {
@@ -44,7 +40,6 @@ sap.ui.define([
             console.warn("[callAction] CSRF prefetch failed:", e.message);
         }
 
-        // 2. POST the action with params as JSON body
         const oHeaders = { "Content-Type": "application/json", "Accept": "application/json" };
         if (sCsrfToken) oHeaders["X-CSRF-Token"] = sCsrfToken;
 
@@ -56,7 +51,6 @@ sap.ui.define([
             body: JSON.stringify(oParams || {})
         });
 
-        // 3. On failure — extract and log the full CAP error message
         if (!oResp.ok) {
             let sErrDetail = oResp.statusText;
             try {
@@ -71,7 +65,6 @@ sap.ui.define([
         }
 
         const oJson = await oResp.json().catch(() => ({}));
-        // CAP wraps action return values in { value: <result> }
         return oJson.value !== undefined ? oJson.value : oJson;
     }
 
@@ -86,24 +79,75 @@ sap.ui.define([
             this._oAppModel = new JSONModel({
                 unreadCount: 0,
                 userRole: ["manager", "employee", "hr"].includes(sInitRole) ? sInitRole : "employee",
+                // roleResolved gates the visibility of all role-conditional
+                // sidebar items.  Always starts as `false` and flips to `true`
+                // ONLY once getCurrentUser() returns from the backend — even
+                // if localStorage already has a cached role, because that
+                // cached value could belong to a different user from the
+                // previous session.  This guarantees zero flicker / wrong-
+                // styling-then-correct transitions on first login.
+                roleResolved: false,
                 userName: "",
                 userInitials: "JD",
                 userProfile: null,
-                profilePhotoSrc: ""
+                // data: URL bound to the toolbar Avatar.src and popover img
+                profilePhotoSrc: "",
+                profilePhotoDataUrl: ""
             });
             this.getView().setModel(this._oAppModel, "appView");
 
+            // Reference to the popover's Avatar control — set in _openProfilePopover,
+            // cleared in afterClose. Allows _applyProfilePhoto to update it async.
+            this._oCurrentPopoverAvatar = null;
+
+            // Re-inject photo overlay after every Avatar re-render.
+            try {
+                const oAv = this.getView().byId("userAvatar");
+                if (oAv) {
+                    oAv.addEventDelegate({
+                        onAfterRendering: () => {
+                            if (this._sPhotoBlobUrl) {
+                                this._patchAvatarDOM(this._sPhotoBlobUrl);
+                            }
+                        }
+                    }, this);
+                }
+            } catch (e) { /* ignore */ }
+
             this._loadCurrentUser();
 
-            const bExplicit = !!(sUrlRole || sSaveRole && false);
+            const bExplicit = !!(sUrlRole);
             const oComp = this.getOwnerComponent();
+
+            // Separate concerns:
+            //   markResolved – flips roleResolved to true exactly ONCE (unblocks sidebar)
+            //   applyRole    – ALWAYS updates userRole when backend gives a real value,
+            //                  even if markResolved already fired (fixes first-login bug
+            //                  where the 3-s timeout beat the OData metadata fetch)
+            const applyRole = (sRole) => {
+                if (sRole && !bExplicit) {
+                    this._oAppModel.setProperty("/userRole", sRole.toLowerCase());
+                }
+            };
+            const markResolved = () => {
+                if (this._bRoleResolved) return;
+                this._bRoleResolved = true;
+                this._oAppModel.setProperty("/roleResolved", true);
+            };
+
             if (oComp.getCurrentUser) {
                 oComp.getCurrentUser().then(u => {
-                    if (bExplicit) return;
                     const sRole = u && (u.role || (u.value && u.value.role));
-                    if (sRole) this._oAppModel.setProperty("/userRole", sRole.toLowerCase());
-                });
+                    applyRole(sRole);
+                    markResolved();
+                }).catch(() => markResolved());
+            } else {
+                markResolved();
             }
+            // Safety net: unblock the sidebar after 3 s if backend is slow.
+            // applyRole() from the backend response will still fire when it
+            // arrives, even after this timeout, and update the sidebar items.
+            setTimeout(markResolved, 3000);
 
             this.getOwnerComponent().getRouter().attachRouteMatched(this._onRouteMatched, this);
 
@@ -141,14 +185,30 @@ sap.ui.define([
                     if (!oList || !oList.getDomRef()) return;
                     oList.getDomRef().style.background = "transparent";
                     const oHeader = oList.getDomRef().querySelector(".sapMListHdr, .sapMListHdrText");
-                    if (oHeader) { oHeader.style.color = "#ffffff"; oHeader.style.background = "transparent"; oHeader.style.fontWeight = "600"; oHeader.style.fontSize = "0.75rem"; oHeader.style.letterSpacing = "1px"; }
+                    if (oHeader) {
+                        oHeader.style.color = "#ffffff";
+                        oHeader.style.background = "transparent";
+                        oHeader.style.fontWeight = "600";
+                        oHeader.style.fontSize = "0.75rem";
+                        oHeader.style.letterSpacing = "1px";
+                    }
                     oList.getItems().forEach(oItem => {
                         if (!oItem.getDomRef()) return;
                         oItem.getDomRef().style.background = "transparent";
                         oItem.getDomRef().style.borderBottom = "none";
-                        oItem.getDomRef().querySelectorAll("*").forEach(el => { el.style.color = "#94a3b8"; el.style.background = "transparent"; });
-                        oItem.getDomRef().addEventListener("mouseenter", () => { oItem.getDomRef().style.background = "#334155"; oItem.getDomRef().style.borderRadius = "8px"; });
-                        oItem.getDomRef().addEventListener("mouseleave", () => { if (!oItem.hasStyleClass("tsNavItemActive")) { oItem.getDomRef().style.background = "transparent"; oItem.getDomRef().style.borderRadius = "0"; } });
+                        oItem.getDomRef().querySelectorAll("*").forEach(el => {
+                            el.style.color = "#94a3b8"; el.style.background = "transparent";
+                        });
+                        oItem.getDomRef().addEventListener("mouseenter", () => {
+                            oItem.getDomRef().style.background = "#334155";
+                            oItem.getDomRef().style.borderRadius = "8px";
+                        });
+                        oItem.getDomRef().addEventListener("mouseleave", () => {
+                            if (!oItem.hasStyleClass("tsNavItemActive")) {
+                                oItem.getDomRef().style.background = "transparent";
+                                oItem.getDomRef().style.borderRadius = "0";
+                            }
+                        });
                     });
                 });
 
@@ -160,9 +220,19 @@ sap.ui.define([
                         if (!oItem.getDomRef()) return;
                         oItem.getDomRef().style.background = "transparent";
                         oItem.getDomRef().style.borderBottom = "none";
-                        oItem.getDomRef().querySelectorAll("*").forEach(el => { el.style.color = "#94a3b8"; el.style.background = "transparent"; });
-                        oItem.getDomRef().addEventListener("mouseenter", () => { oItem.getDomRef().style.background = "#334155"; oItem.getDomRef().style.borderRadius = "8px"; });
-                        oItem.getDomRef().addEventListener("mouseleave", () => { if (!oItem.hasStyleClass("tsNavItemActive")) { oItem.getDomRef().style.background = "transparent"; oItem.getDomRef().style.borderRadius = "0"; } });
+                        oItem.getDomRef().querySelectorAll("*").forEach(el => {
+                            el.style.color = "#94a3b8"; el.style.background = "transparent";
+                        });
+                        oItem.getDomRef().addEventListener("mouseenter", () => {
+                            oItem.getDomRef().style.background = "#334155";
+                            oItem.getDomRef().style.borderRadius = "8px";
+                        });
+                        oItem.getDomRef().addEventListener("mouseleave", () => {
+                            if (!oItem.hasStyleClass("tsNavItemActive")) {
+                                oItem.getDomRef().style.background = "transparent";
+                                oItem.getDomRef().style.borderRadius = "0";
+                            }
+                        });
                     });
                 }, 600);
 
@@ -170,7 +240,12 @@ sap.ui.define([
                 if (oFooter) {
                     oFooter.style.background = "#1e293b";
                     oFooter.style.borderTop = "1px solid #334155";
-                    oFooter.querySelectorAll("*").forEach(el => { el.style.background = "transparent"; el.style.border = "none"; el.style.color = "#94a3b8"; el.style.boxShadow = "none"; });
+                    oFooter.querySelectorAll("*").forEach(el => {
+                        el.style.background = "transparent";
+                        el.style.border = "none";
+                        el.style.color = "#94a3b8";
+                        el.style.boxShadow = "none";
+                    });
                 }
             }, 300);
 
@@ -198,32 +273,54 @@ sap.ui.define([
             }
             oInput.value = "";
 
-            oInput.onchange = (oEvt) => {
+            oInput.onchange = async (oEvt) => {
                 const oFile = oEvt.target.files && oEvt.target.files[0];
                 if (!oFile) return;
 
-                if (oFile.size > 2 * 1024 * 1024) {
-                    MessageToast.show("Image too large. Please choose a file under 2 MB.");
-                    return;
-                }
+                // ── Compress image: max 350px, progressive quality fallback ──
+                const sDataUrl = await new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const MAX = 350;
+                            let w = img.width, h = img.height;
+                            if (w > MAX || h > MAX) {
+                                if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+                                else { w = Math.round(w * MAX / h); h = MAX; }
+                            }
+                            const canvas = document.createElement("canvas");
+                            canvas.width = w; canvas.height = h;
+                            canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+                            let out = canvas.toDataURL("image/jpeg", 0.75);
+                            if (out.length > 50000) out = canvas.toDataURL("image/jpeg", 0.45);
+                            if (out.length > 50000) out = canvas.toDataURL("image/jpeg", 0.25);
+                            resolve(out);
+                        };
+                        img.src = e.target.result;
+                    };
+                    reader.readAsDataURL(oFile);
+                });
 
-                const oReader = new FileReader();
-                oReader.onload = async (eRead) => {
-                    const sDataUrl = eRead.target.result;
+                const approxKB = Math.round(sDataUrl.length * 0.75 / 1024);
+                console.log(`[ProfilePhoto] Compressed: ~${approxKB} KB`);
 
-                    // Optimistically update UI before server responds
-                    this._applyProfilePhoto(sDataUrl);
+                // Show optimistic blob URL preview immediately
+                const sPreviewBlobUrl = await this._toBlobUrl(sDataUrl);
+                this._applyProfilePhoto(sPreviewBlobUrl, sDataUrl);
 
-                    try {
-                        const oResult = await callAction("uploadProfilePhoto", { dataBase64: sDataUrl });
-                        console.log("[ProfilePhoto] Save result:", oResult);
+                try {
+                    const oResult = await callAction("uploadProfilePhoto", { dataBase64: sDataUrl });
+                    if (oResult && oResult.success) {
                         MessageToast.show("Profile picture saved!");
-                    } catch (e) {
-                        // Error details already logged by callAction
-                        MessageToast.show("Could not save photo — see F12 Console for details.");
+                        // Re-fetch from DB to get the definitive blob URL
+                        await this._loadProfilePhoto();
+                    } else {
+                        MessageToast.show("Save may have failed — check console.");
                     }
-                };
-                oReader.readAsDataURL(oFile);
+                } catch (e) {
+                    MessageToast.show("Could not save photo — see F12 Console for details.");
+                }
             };
 
             oInput.click();
@@ -233,30 +330,108 @@ sap.ui.define([
         async _loadProfilePhoto() {
             try {
                 const oResult = await callAction("getProfilePhoto", {});
-                console.log("[ProfilePhoto] Loaded from DB:", oResult ? "yes, " + (oResult.mimeType || "") : "none");
-                if (oResult && oResult.dataBase64) {
-                    this._applyProfilePhoto(oResult.dataBase64);
+                const src = oResult && oResult.dataBase64;
+                console.log("[ProfilePhoto] Load result — has src:", !!src,
+                    "| mime:", oResult && oResult.mimeType);
+
+                if (src && src.length > 100) {
+                    const sDataUrl = src.startsWith("data:") ? src : `data:image/jpeg;base64,${src}`;
+                    const sBlobUrl = await this._toBlobUrl(sDataUrl);
+                    this._applyProfilePhoto(sBlobUrl, sDataUrl);
                 }
             } catch (e) {
-                // Non-fatal — avatar shows initials if no photo saved yet
                 console.warn("[ProfilePhoto] Load failed:", e.message || e);
             }
         },
 
-        // ── Write photo to model + refresh open popover ───────────────────────
-        _applyProfilePhoto(sDataUrl) {
-            if (!sDataUrl) return;
-            this._oAppModel.setProperty("/profilePhotoSrc", sDataUrl);
+        // ── Convert data-URL → same-origin blob URL ───────────────────────────
+        // Using fetch() to let the browser parse the data URL is more reliable
+        // than manual atob() — the browser handles padding, whitespace, etc.
+        // blob: URLs from the same origin are never blocked by SAP UI5's URL
+        // sanitizer or any Content-Security-Policy img-src restriction.
+        async _toBlobUrl(sDataUrl) {
+            try {
+                const resp = await fetch(sDataUrl);
+                const blob = await resp.blob();
+                if (blob && blob.size > 0) {
+                    const url = URL.createObjectURL(blob);
+                    console.log("[ProfilePhoto] Blob URL ready, size:", blob.size);
+                    return url;
+                }
+            } catch (e) {
+                console.warn("[ProfilePhoto] fetch-to-blob failed:", e.message);
+            }
+            return sDataUrl; // fallback — data URL direct
+        },
 
-            if (this._oProfilePopover) {
-                try {
-                    const oPopoverAvatar = this._oProfilePopover
-                        .getContent()[0].getItems()[0].getItems()[0];
-                    if (oPopoverAvatar && oPopoverAvatar.setSrc) {
-                        oPopoverAvatar.setSrc(sDataUrl);
-                        oPopoverAvatar.setInitials("");
-                    }
-                } catch (e) { /* popover structure changed — ignore */ }
+        // ── Inject an <img> overlay directly into the Avatar DOM ─────────────
+        // blob: URLs bypass all SAP UI5 / browser sanitization for img-src.
+        // .__tsAvatarPhoto marks the element so duplicates are removed on each
+        // onAfterRendering fire without accumulating.
+        _patchAvatarDOM(sBlobUrl) {
+            try {
+                const oAvatar = this.getView().byId("userAvatar");
+                const domRef = oAvatar && oAvatar.getDomRef();
+                if (!domRef) return;
+
+                // Remove any previous overlay
+                domRef.querySelectorAll(".__tsAvatarPhoto").forEach(el => el.remove());
+
+                // Inject <img> that fills the full Avatar circle
+                const img = document.createElement("img");
+                img.className = "__tsAvatarPhoto";
+                img.src = sBlobUrl;
+                img.alt = "";
+                img.style.cssText =
+                    "position:absolute;top:0;left:0;width:100%;height:100%;" +
+                    "border-radius:50%;object-fit:cover;pointer-events:none;" +
+                    "z-index:10;display:block;";
+
+                domRef.style.position = "relative";
+                domRef.style.overflow = "hidden";
+                domRef.appendChild(img);
+
+                // Hide SAP Avatar's built-in initials / icon text
+                domRef.querySelectorAll(
+                    ".sapFAvatarInitialsHolder,.sapMAvatarInitialsHolder," +
+                    ".sapFAvatarIcon,.sapFAvatarInitials"
+                ).forEach(el => { el.style.visibility = "hidden"; });
+            } catch (e) { /* ignore */ }
+        },
+
+        // ── Apply photo to toolbar Avatar + popover ───────────────────────────
+        // sBlobUrl  : same-origin blob: URL — used for img src everywhere
+        // sDataUrl  : original data: URL — kept as popover fallback only
+        _applyProfilePhoto(sBlobUrl, sDataUrl) {
+            if (!sBlobUrl) return;
+
+            this._sPhotoBlobUrl = sBlobUrl;
+            this._sPhotoDataUrl = sDataUrl || sBlobUrl;
+
+            // Model drives Avatar src binding
+            this._oAppModel.setProperty("/profilePhotoSrc", sBlobUrl);
+            this._oAppModel.setProperty("/profilePhotoDataUrl", sDataUrl || sBlobUrl);
+
+            // Imperative Avatar API (resets internal error state)
+            try {
+                const oAvatar = this.getView().byId("userAvatar");
+                if (oAvatar) {
+                    oAvatar.setSrc(sBlobUrl);
+                    oAvatar.setInitials("");
+                    oAvatar.setBackgroundColor("Transparent");
+                }
+            } catch (e) { /* view not yet ready */ }
+
+            // DOM overlay — also re-applied by onAfterRendering delegate
+            this._patchAvatarDOM(sBlobUrl);
+
+            // Patch open popover avatar
+            if (this._sPopoverAvatarDomId) {
+                const el = document.getElementById(this._sPopoverAvatarDomId);
+                if (el) {
+                    el.innerHTML = `<img src="${sBlobUrl}" alt=""
+                        style="width:100%;height:100%;object-fit:cover;display:block;"/>`;
+                }
             }
         },
 
@@ -334,7 +509,10 @@ sap.ui.define([
                 title: "Logout",
                 actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
                 emphasizedAction: MessageBox.Action.OK,
-                onClose: (sAction) => { if (sAction !== MessageBox.Action.OK) return; this._performLogout(); }
+                onClose: (sAction) => {
+                    if (sAction !== MessageBox.Action.OK) return;
+                    this._performLogout();
+                }
             });
         },
 
@@ -424,62 +602,142 @@ sap.ui.define([
                 this._oProfilePopover.destroy();
                 this._oProfilePopover = null;
             }
+            this._oCurrentPopoverAvatar = null;
 
             const sInitials = this._oAppModel.getProperty("/userInitials");
-            const sPhoto    = this._oAppModel.getProperty("/profilePhotoSrc");
+            // Use blob URL for the popover avatar (never sanitized by browser or SAP)
+            const sPhotoUrl = this._sPhotoBlobUrl
+                || this._oAppModel.getProperty("/profilePhotoSrc")
+                || null;
 
-            const fieldRow = (sLabel, sValue, sIcon) => new HBox({
-                alignItems: "Center",
-                items: [
-                    new Icon({ src: "sap-icon://" + sIcon, size: "1rem", color: "#3b82f6" }).addStyleClass("sapUiTinyMarginEnd"),
-                    new VBox({ items: [new Label({ text: sLabel }).addStyleClass("tsProfileFieldLabel"), new Text({ text: sValue || "—" }).addStyleClass("tsProfileFieldValue")] })
-                ]
-            }).addStyleClass("tsProfileRow sapUiSmallMarginBottom");
+            // Unique DOM id so _applyProfilePhoto can patch the <img> if called later
+            const sAvatarId = "__tsPopAvatar_" + Date.now();
+            this._sPopoverAvatarDomId = sAvatarId;
 
-            const oPopoverAvatar = new Avatar({
-                src: sPhoto || "",
-                initials: sPhoto ? "" : sInitials,
-                displaySize: "L",
-                backgroundColor: sPhoto ? "Transparent" : "Accent6"
+            // Build the entire profile card as one HTML string.
+            const sAvatarCircle = sPhotoUrl
+                ? `<div id="${sAvatarId}"
+                        style="width:72px;height:72px;border-radius:50%;overflow:hidden;
+                               flex-shrink:0;border:3px solid #e2e8f0;background:#f1f5f9;">
+                       <img src="${sPhotoUrl}" alt="Profile"
+                            style="width:100%;height:100%;object-fit:cover;display:block;"/>
+                   </div>`
+                : `<div id="${sAvatarId}"
+                        style="width:72px;height:72px;border-radius:50%;flex-shrink:0;
+                               background:#6366f1;border:3px solid #e2e8f0;
+                               display:flex;align-items:center;justify-content:center;
+                               font-size:1.6rem;font-weight:700;color:#fff;">
+                       ${sInitials}
+                   </div>`;
+
+            const sStatus = oProfile.isActive === false ? "Inactive" : "Active";
+            const sStatusColor = oProfile.isActive === false ? "#dc2626" : "#16a34a";
+
+            const sPopoverContent =
+                `<div style="font-family:'Segoe UI',Arial,sans-serif;padding:4px 0 8px;">
+
+                    <!-- Header: avatar + name/role/id -->
+                    <div style="display:flex;align-items:center;gap:16px;
+                                padding:12px 20px 16px;border-bottom:1px solid #f1f5f9;">
+                        ${sAvatarCircle}
+                        <div>
+                            <div style="font-size:1.05rem;font-weight:700;color:#111827;
+                                        line-height:1.2;">${oProfile.employeeName || ""}</div>
+                            <div style="font-size:0.82rem;color:#6b7280;margin-top:2px;">
+                                ${oProfile.designation || "—"}</div>
+                            <div style="font-size:0.75rem;color:#9ca3af;margin-top:1px;">
+                                ID: ${oProfile.employeeId || ""}</div>
+                        </div>
+                    </div>
+
+                    <!-- Fields -->
+                    <div style="padding:12px 20px;display:flex;flex-direction:column;gap:10px;">
+
+                        <div style="display:flex;align-items:flex-start;gap:12px;">
+                            <span style="color:#3b82f6;font-size:1rem;margin-top:1px;">✉</span>
+                            <div>
+                                <div style="font-size:0.7rem;color:#9ca3af;
+                                            text-transform:uppercase;letter-spacing:.5px;">Email</div>
+                                <div style="font-size:0.85rem;color:#374151;">
+                                    ${oProfile.email || "—"}</div>
+                            </div>
+                        </div>
+
+                        <div style="display:flex;align-items:flex-start;gap:12px;">
+                            <span style="color:#3b82f6;font-size:1rem;margin-top:1px;">📞</span>
+                            <div>
+                                <div style="font-size:0.7rem;color:#9ca3af;
+                                            text-transform:uppercase;letter-spacing:.5px;">Mobile</div>
+                                <div style="font-size:0.85rem;color:#374151;">
+                                    ${oProfile.mobileNumber || "—"}</div>
+                            </div>
+                        </div>
+
+                        <div style="display:flex;align-items:flex-start;gap:12px;">
+                            <span style="color:#3b82f6;font-size:1rem;margin-top:1px;">📍</span>
+                            <div>
+                                <div style="font-size:0.7rem;color:#9ca3af;
+                                            text-transform:uppercase;letter-spacing:.5px;">Address</div>
+                                <div style="font-size:0.85rem;color:#374151;">
+                                    ${oProfile.address || "—"}</div>
+                            </div>
+                        </div>
+
+                        <div style="display:flex;align-items:flex-start;gap:12px;">
+                            <span style="color:${sStatusColor};font-size:1rem;margin-top:1px;">●</span>
+                            <div>
+                                <div style="font-size:0.7rem;color:#9ca3af;
+                                            text-transform:uppercase;letter-spacing:.5px;">Status</div>
+                                <div style="font-size:0.85rem;font-weight:600;
+                                            color:${sStatusColor};">${sStatus}</div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>`;
+
+            const oContentHTML = new sap.ui.core.HTML({
+                content: sPopoverContent,
+                sanitizeContent: false
             });
 
-            const oHeader = new HBox({
-                alignItems: "Center",
-                items: [
-                    oPopoverAvatar,
-                    new VBox({
-                        items: [
-                            new Title({ text: oProfile.employeeName, level: "H4" }).addStyleClass("tsProfileName"),
-                            new Text({ text: oProfile.designation }).addStyleClass("tsProfileDesignation"),
-                            new Text({ text: "ID: " + (oProfile.employeeId || "") }).addStyleClass("tsProfileEmpId")
-                        ]
-                    }).addStyleClass("sapUiSmallMarginBegin")
-                ]
-            }).addStyleClass("tsProfileHeader");
-
-            const oBody = new VBox({
-                items: [
-                    fieldRow("Email",   oProfile.email,        "email"),
-                    fieldRow("Mobile",  oProfile.mobileNumber, "call"),
-                    fieldRow("Address", oProfile.address,      "addresses"),
-                    fieldRow("Status",  oProfile.isActive === false ? "Inactive" : "Active", "status-positive")
-                ]
-            }).addStyleClass("tsProfileBody sapUiSmallMarginTop");
-
+            // Logout button stays as a proper UI5 Button so press handler works
             const oLogoutButton = new Button({
-                text: "Log Out", icon: "sap-icon://log", type: "Reject",
+                text: "Log Out",
+                icon: "sap-icon://log",
+                type: "Reject",
+                width: "100%",
                 press: () => { this._oProfilePopover.close(); this.onLogout(); }
-            }).addStyleClass("tsProfileLogoutButton sapUiMediumMarginTop");
+            }).addStyleClass("tsProfileLogoutButton");
+
+            const oLogoutWrap = new VBox({
+                items: [oLogoutButton]
+            });
+            oLogoutWrap.getDomRef && null; // lazy — rendered by UI5
+            // Add bottom padding via style class applied after render
+            oLogoutWrap.addStyleClass("sapUiSmallMarginBeginEnd sapUiSmallMarginBottom");
 
             this._oProfilePopover = new ResponsivePopover({
-                title: "My Profile", placement: "Bottom", contentWidth: "360px",
-                modal: false, showHeader: true, showCloseButton: true,
-                content: [new VBox({ items: [oHeader, oBody, oLogoutButton] }).addStyleClass("tsProfileDialogWrap sapUiContentPadding")],
-                afterClose: () => { if (this._oProfilePopover) { this._oProfilePopover.destroy(); this._oProfilePopover = null; } }
+                title: "My Profile",
+                placement: "Bottom",
+                contentWidth: "340px",
+                modal: false,
+                showHeader: true,
+                showCloseButton: true,
+                content: [ oContentHTML, oLogoutWrap ],
+                afterClose: () => {
+                    if (this._oProfilePopover) {
+                        this._oProfilePopover.destroy();
+                        this._oProfilePopover = null;
+                    }
+                    this._oCurrentPopoverAvatar = null;
+                    this._sPopoverAvatarDomId   = null;
+                }
             }).addStyleClass("tsProfileDialog");
 
             this.getView().addDependent(this._oProfilePopover);
             this._oProfilePopover.openBy(oSource);
+            // Photo already in model — no _loadProfilePhoto() call needed here.
         }
     });
 });

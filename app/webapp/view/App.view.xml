@@ -6,8 +6,22 @@
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
+<!-- ── Centred loading screen ─────────────────────────────────────
+     Visible from the moment the app starts until the backend has
+     confirmed the logged-in user's role.  This guarantees the user
+     never sees the sidebar in a partially-styled "wrong role"
+     intermediate state on first login. -->
+<VBox visible="{= !${appView>/roleResolved} }"
+      height="100vh"
+      justifyContent="Center"
+      alignItems="Center"
+      class="tsAppLoading">
+    <BusyIndicator size="3rem" />
+    <Text text="Loading your workspace…" class="sapUiMediumMarginTop tsAppLoadingText" />
+</VBox>
 
-<Toolbar style="background:#1e293b; min-height:72px; padding:0px 20px; box-shadow:0 2px 12px rgba(0,0,0,0.35);">
+<Toolbar visible="{appView>/roleResolved}"
+         style="background:#1e293b; min-height:72px; padding:0px 20px; box-shadow:0 2px 12px rgba(0,0,0,0.35);">
 
     <Button id="menuToggleBtn"
         icon="sap-icon://menu2"
@@ -58,7 +72,7 @@
             type="Transparent"
             tooltip="Upload profile picture"
             press=".onUploadProfilePicture" />
-        <Avatar id="toolbarAvatar"
+        <Avatar id="userAvatar"
         src="{appView>/profilePhotoSrc}"
         initials="{= ${appView>/profilePhotoSrc} ? '' : (${appView>/userInitials} || 'JD') }"
         backgroundColor="{= ${appView>/profilePhotoSrc} ? 'Transparent' : 'Accent6' }"
@@ -67,7 +81,7 @@
         tooltip="My profile" />
     </Toolbar>
 
-    <SplitApp id="app">
+    <SplitApp id="app" visible="{appView>/roleResolved}">
 
         <masterPages>
             <Page id="navPage" showHeader="false"
@@ -129,7 +143,7 @@
                             icon="sap-icon://approvals"
                             type="Active"
                             press=".onNavSelect"
-                            visible="{= ${appView>/userRole} === 'manager'}"
+                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
                             <customData>
                                 <core:CustomData key="target" value="manager" />
@@ -139,7 +153,7 @@
                             icon="sap-icon://create-form"
                             type="Active"
                             press=".onNavSelect"
-                            visible="{= ${appView>/userRole} === 'manager'}"
+                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
                             <customData>
                                 <core:CustomData key="target" value="task-assignment" />
@@ -149,7 +163,7 @@
                             icon="sap-icon://activity-items"
                             type="Active"
                             press=".onNavSelect"
-                            visible="{= ${appView>/userRole} === 'manager'}"
+                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
                             <customData>
                                 <core:CustomData key="target" value="task-status" />
@@ -161,15 +175,26 @@
                             icon="sap-icon://survey"
                             type="Active"
                             press=".onNavPerfRating"
-                            visible="{= ${appView>/userRole} === 'manager'}" />
+                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
+                            style="background:transparent; color:#cbd5e1;" />
                         <StandardListItem title="Leave Approvals"
                             icon="sap-icon://away"
                             type="Active"
                             press=".onNavSelect"
-                            visible="{= ${appView>/userRole} === 'manager'}"
+                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
                             style="background:transparent; color:#cbd5e1;">
                             <customData>
                                 <core:CustomData key="target" value="leave-approvals" />
+                            </customData>
+                        </StandardListItem>
+                        <StandardListItem title="Team Attendance"
+                            icon="sap-icon://employee-pane"
+                            type="Active"
+                            press=".onNavSelect"
+                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
+                            style="background:transparent; color:#cbd5e1;">
+                            <customData>
+                                <core:CustomData key="target" value="team-attendance" />
                             </customData>
                         </StandardListItem>
 
@@ -178,7 +203,7 @@
                             icon="sap-icon://add-employee"
                             type="Active"
                             press=".onNavSelect"
-                            visible="{= ${appView>/userRole} === 'hr'}"
+                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'hr'}"
                             style="background:transparent; color:#cbd5e1;">
                             <customData>
                                 <core:CustomData key="target" value="add-employee" />
@@ -188,7 +213,7 @@
                             icon="sap-icon://employee"
                             type="Active"
                             press=".onNavSelect"
-                            visible="{= ${appView>/userRole} === 'hr'}"
+                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'hr'}"
                             style="background:transparent; color:#cbd5e1;">
                             <customData>
                                 <core:CustomData key="target" value="all-employees" />

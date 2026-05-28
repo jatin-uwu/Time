@@ -7,13 +7,25 @@
     displayBlock="true">
 
     <Page id="managerPage"
-          title="{mgrView>/pageTitle}"
-          showNavButton="{mgrView>/showDetail}"
-          navButtonPress=".onNavBack"
+          showHeader="false"
           class="tsDashboardPage"
           enableScrolling="true">
 
         <content>
+
+            <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone" alignItems="Center" justifyContent="SpaceBetween">
+                <HBox alignItems="Center">
+                    <Button icon="sap-icon://nav-back"
+                            type="Transparent"
+                            visible="{mgrView>/showDetail}"
+                            press=".onNavBack"
+                            tooltip="Back"
+                            class="tsPageBackBtn" />
+                    <core:Icon src="sap-icon://approvals" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                    <Text text="{mgrView>/pageTitle}"
+                          style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                </HBox>
+            </HBox>
 
             <!-- ════════════════════════════════════════════════════════════
                  STATE 1 — Approval queue with two tabs:

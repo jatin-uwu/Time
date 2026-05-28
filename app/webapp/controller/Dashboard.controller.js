@@ -1,7 +1,8 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
-    "sap/ui/model/json/JSONModel"
-], (Controller, JSONModel) => {
+    "sap/ui/model/json/JSONModel",
+    "sap/ui/core/Core"
+], (Controller, JSONModel, Core) => {
     "use strict";
 
     const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -104,7 +105,6 @@ sap.ui.define([
                 greetingEmoji: "👋",
                 greetingHTML: "",
                 attendanceBtnLabel: "Checking...",
-                attendanceBtnType: "Default",
                 attendanceBtnEnabled: false,
                 attendanceMarked: false,
             });
@@ -130,6 +130,35 @@ sap.ui.define([
             this.getView().addEventDelegate({
                 onAfterRendering: () => this._scrollToTop()
             });
+
+            // ── Live refresh on task status changes ─────────────────────────
+            // TaskDescription / TaskDetail publish "tasks/statusChanged" on
+            // the global EventBus whenever a status flips. We re-fetch the
+            // backend-backed task summary + my-tasks cards so the donut and
+            // pending-counts reflect reality instantly — no route round-trip,
+            // no manual refresh. Throttled to coalesce bursts.
+            this._fnOnTaskStatusChanged = () => {
+                if (this._taskRefreshTimer) clearTimeout(this._taskRefreshTimer);
+                this._taskRefreshTimer = setTimeout(() => {
+                    this._loadTaskSummary();
+                    this._loadMyTasks();
+                }, 150);
+            };
+            try {
+                const oBus = Core.getEventBus ? Core.getEventBus() : sap.ui.getCore().getEventBus();
+                oBus.subscribe("tasks", "statusChanged", this._fnOnTaskStatusChanged, this);
+            } catch (e) { /* ignore */ }
+        },
+
+        // Unsubscribe to avoid leaks if the view is ever destroyed.
+        // Note: onExit was previously defined later — augment it carefully.
+        _unsubscribeTaskBus() {
+            try {
+                const oBus = Core.getEventBus ? Core.getEventBus() : sap.ui.getCore().getEventBus();
+                if (this._fnOnTaskStatusChanged) {
+                    oBus.unsubscribe("tasks", "statusChanged", this._fnOnTaskStatusChanged, this);
+                }
+            } catch (e) { /* ignore */ }
         },
 
         // ─────────────────────────────────────────────────────────────────────
@@ -146,16 +175,16 @@ sap.ui.define([
 
             const buildHTML = (name) => {
                 const namePart = name
-                    ? `, <span style="color:black;font-style:italic;">${name}!</span>`
+                    ? `, <span style="color:#ffffff;font-style:italic;">${name}!</span>`
                     : `!`;
                 return `
         <div>
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-                <span style="font-size:1.85rem;font-weight:800;color:#232823;
+                <span style="font-size:1.85rem;font-weight:800;color:#ffffff;
                              letter-spacing:-0.4px;font-family:'Segoe UI',Arial,sans-serif;
                              line-height:1.1;">${timeGreet}${namePart}</span>
             </div>
-            <div style="font-size:1.05rem;font-weight:500;color:#151719;margin:0;">
+            <div style="font-size:1.05rem;font-weight:500;color:rgba(255,255,255,0.80);margin:0;">
                 Here's what's happening with you today.
             </div>
         </div>`;
@@ -444,7 +473,6 @@ sap.ui.define([
             })
                 .then(() => {
                     this._oDashModel.setProperty("/attendanceBtnLabel", "✓ Active");
-                    this._oDashModel.setProperty("/attendanceBtnType", "Success");
                     this._oDashModel.setProperty("/attendanceBtnEnabled", false);
                     this._oDashModel.setProperty("/attendanceMarked", true);
 
@@ -462,7 +490,6 @@ sap.ui.define([
                 .catch(oErr => {
                     // Re-enable so user can retry
                     this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
-                    this._oDashModel.setProperty("/attendanceBtnType", "Accept");
                     this._oDashModel.setProperty("/attendanceBtnEnabled", true);
 
                     sap.m.MessageBox.error(oErr?.message || "Failed to mark attendance.");
@@ -478,6 +505,10 @@ sap.ui.define([
                 clearInterval(this._notifRefreshInterval);
                 this._notifRefreshInterval = null;
             }
+            if (this._taskRefreshTimer) {
+                clearTimeout(this._taskRefreshTimer);
+            }
+            this._unsubscribeTaskBus();
         },
         // ─────────────────────────────────────────────────────────────────────
         // Week navigation (unchanged)
@@ -810,78 +841,6 @@ sap.ui.define([
             }).finally(() => this._refreshDash());
         },
 
-        _loadMyTasks() {
-            const oComp = this.getOwnerComponent();
-            const oMgrModel = oComp.getModel("manager");  // ← manager model not employee
-            const sEmpId = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
-
-            if (oMgrModel && sEmpId) {
-                oMgrModel.bindList("/Tasks", null, null, null, {
-                    $$groupId: "$direct"
-                })
-                    .requestContexts(0, 200)
-                    .then(aCtx => {
-                        const allTasks = aCtx.map(c => c.getObject()).filter(Boolean);
-                        console.log("All tasks:", allTasks);
-
-                        // Filter by employee - try all possible field names
-                        const myTasks = allTasks.filter(t =>
-                            t.assignedTo_employeeId === sEmpId ||
-                            t.assignedTo_ID === sEmpId ||
-                            t.employeeId === sEmpId ||
-                            t.employee_employeeId === sEmpId
-                        );
-
-                        console.log("My tasks:", myTasks);
-
-                        const pending = myTasks.filter(t =>
-                            (t.status || "").toLowerCase() !== "completed"
-                        );
-
-                        const high = pending.filter(t =>
-                            (t.priority || "").toLowerCase() === "high").length;
-                        const medium = pending.filter(t =>
-                            (t.priority || "").toLowerCase() === "medium").length;
-                        const low = pending.filter(t =>
-                            (t.priority || "").toLowerCase() === "low").length;
-
-                        this._oDashModel.setProperty("/myTasks", {
-                            totalPending: pending.length,
-                            highPriorityCount: high,
-                            mediumPriorityCount: medium,
-                            lowPriorityCount: low
-                        });
-                    })
-                    .catch(err => {
-                        console.error("_loadMyTasks failed:", err);
-                        this._loadMyTasksFallback();
-                    })
-                    .finally(() => this._refreshDash());
-            } else {
-                this._loadMyTasksFallback();
-            }
-        },
-
-        _loadMyTasksFallback() {
-            this._callAction("getMyTasks")
-                .then(oData => {
-                    this._oDashModel.setProperty("/myTasks", {
-                        totalPending: oData.totalPending || 0,
-                        highPriorityCount: oData.highPriorityCount || 0,
-                        mediumPriorityCount: oData.mediumPriorityCount || 0,
-                        lowPriorityCount: oData.lowPriorityCount || 0
-                    });
-                })
-                .catch(() => {
-                    this._oDashModel.setProperty("/myTasks",
-                        {
-                            totalPending: 0, highPriorityCount: 0,
-                            mediumPriorityCount: 0, lowPriorityCount: 0
-                        });
-                })
-                .finally(() => this._refreshDash());
-        },
-
         // ─────────────────────────────────────────────────────────────────────
         // Loaders — new 4
         // ─────────────────────────────────────────────────────────────────────
@@ -1042,23 +1001,17 @@ sap.ui.define([
             this._callAction("getTodayAttendance", { attendanceDate: today })
                 .then(oData => {
                     if (oData && oData.alreadyMarked) {
-                        // Already marked — show green active
                         this._oDashModel.setProperty("/attendanceBtnLabel", "✓ Active");
-                        this._oDashModel.setProperty("/attendanceBtnType", "Success");
                         this._oDashModel.setProperty("/attendanceBtnEnabled", false);
                         this._oDashModel.setProperty("/attendanceMarked", true);
                     } else {
-                        // Not yet marked — show enabled Mark Active
                         this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
-                        this._oDashModel.setProperty("/attendanceBtnType", "Accept");
                         this._oDashModel.setProperty("/attendanceBtnEnabled", true);
                         this._oDashModel.setProperty("/attendanceMarked", false);
                     }
                 })
                 .catch(() => {
-                    // On error — enable button so user can still try
                     this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
-                    this._oDashModel.setProperty("/attendanceBtnType", "Accept");
                     this._oDashModel.setProperty("/attendanceBtnEnabled", true);
                 });
 
@@ -1095,7 +1048,6 @@ sap.ui.define([
             this._attendanceResetTimer = setTimeout(() => {
                 // Reset button to "Mark Active"
                 this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
-                this._oDashModel.setProperty("/attendanceBtnType", "Accept");
                 this._oDashModel.setProperty("/attendanceBtnEnabled", true);
                 this._oDashModel.setProperty("/attendanceMarked", false);
 
@@ -1113,56 +1065,57 @@ sap.ui.define([
             this._loadPerformanceTrend(parseInt(sYear, 10));
         },
 
+        _resyncTasksModel() {
+            try {
+                const raw = localStorage.getItem("tsTasks");
+                if (!raw) return;
+                const data = JSON.parse(raw);
+                const oModel = this.getOwnerComponent().getModel("tasks");
+                if (oModel) oModel.setData(data);
+            } catch (e) { /* silent */ }
+        },
+
         // Task Summary (reuses existing TaskMaster backend)
         _loadTaskSummary() {
-            const oComp = this.getOwnerComponent();
-            const oMgrModel = oComp.getModel("manager");  // ← manager model
-            const sEmpId = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
-
-            if (oMgrModel && sEmpId) {
-                oMgrModel.bindList("/Tasks", null, null, null, {
-                    $$groupId: "$direct"
+            // Call the CAP action — reads directly from DB, always fresh
+            this._callAction("getTaskSummary")
+                .then(oData => {
+                    this._oDashModel.setProperty("/taskSummary", {
+                        total: oData.total || 0,
+                        notStarted: oData.notStarted || 0,
+                        inProgress: oData.inProgress || 0,
+                        inReview: oData.inReview || 0,
+                        completed: oData.completed || 0
+                    });
                 })
-                    .requestContexts(0, 200)
-                    .then(aCtx => {
-                        const allTasks = aCtx.map(c => c.getObject()).filter(Boolean);
+                .catch(() => {
+                    this._oDashModel.setProperty("/taskSummary",
+                        { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 });
+                })
+                .finally(() => this._refreshDash());
+        },
 
-                        // Filter by this employee
-                        const myTasks = allTasks.filter(t =>
-                            t.assignedTo_employeeId === sEmpId ||
-                            t.assignedTo_ID === sEmpId ||
-                            t.employeeId === sEmpId ||
-                            t.employee_employeeId === sEmpId
-                        );
+        // Helper: count statuses and write to model
+        _applyTaskSummary(tasks) {
+            const n = (s) => (s || "").toLowerCase().trim();
 
-                        console.log("TaskSummary myTasks:", myTasks.map(t => ({
-                            status: t.status, priority: t.priority
-                        })));
+            const notStarted = tasks.filter(t =>
+                n(t.status) === "not started" ||
+                n(t.status) === "open" ||        // legacy value
+                n(t.status) === "pending"        // legacy value
+            ).length;
+            const inProgress = tasks.filter(t => n(t.status) === "in progress").length;
+            const inReview = tasks.filter(t => n(t.status) === "in review").length;
+            const completed = tasks.filter(t => n(t.status) === "completed").length;
 
-                        const normalize = (s) => (s || "").toLowerCase().trim();
-
-                        const notStarted = myTasks.filter(t =>
-                            normalize(t.status) === "not started").length;
-                        const inProgress = myTasks.filter(t =>
-                            normalize(t.status) === "in progress").length;
-                        const inReview = myTasks.filter(t =>
-                            normalize(t.status) === "in review").length;
-                        const completed = myTasks.filter(t =>
-                            normalize(t.status) === "completed").length;
-
-                        this._oDashModel.setProperty("/taskSummary", {
-                            total: myTasks.length,
-                            notStarted, inProgress, inReview, completed
-                        });
-                    })
-                    .catch(err => {
-                        console.error("_loadTaskSummary failed:", err);
-                        this._loadTaskSummaryFallback();
-                    })
-                    .finally(() => this._refreshDash());
-            } else {
-                this._loadTaskSummaryFallback();
-            }
+            this._oDashModel.setProperty("/taskSummary", {
+                total: tasks.length,
+                notStarted,
+                inProgress,
+                inReview,
+                completed
+            });
+            this._refreshDash();
         },
 
         _loadTaskSummaryFallback() {
@@ -1179,6 +1132,57 @@ sap.ui.define([
                 .catch(() => {
                     this._oDashModel.setProperty("/taskSummary",
                         { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 });
+                })
+                .finally(() => this._refreshDash());
+        },
+
+
+        // ── REPLACE _loadMyTasks() ────────────────────────────────────────────────────
+        _loadMyTasks() {
+            // Call the CAP action — reads directly from DB
+            this._callAction("getMyTasks")
+                .then(oData => {
+                    this._oDashModel.setProperty("/myTasks", {
+                        totalPending: oData.totalPending || 0,
+                        highPriorityCount: oData.highPriorityCount || 0,
+                        mediumPriorityCount: oData.mediumPriorityCount || 0,
+                        lowPriorityCount: oData.lowPriorityCount || 0
+                    });
+                })
+                .catch(() => {
+                    this._oDashModel.setProperty("/myTasks",
+                        { totalPending: 0, highPriorityCount: 0, mediumPriorityCount: 0, lowPriorityCount: 0 });
+                })
+                .finally(() => this._refreshDash());
+        },
+
+        // Helper: pending counts by priority
+        _applyMyTasks(tasks) {
+            const n = (s) => (s || "").toLowerCase().trim();
+            const pending = tasks.filter(t => n(t.status) !== "completed");
+
+            this._oDashModel.setProperty("/myTasks", {
+                totalPending: pending.length,
+                highPriorityCount: pending.filter(t => n(t.priority) === "high").length,
+                mediumPriorityCount: pending.filter(t => n(t.priority) === "medium").length,
+                lowPriorityCount: pending.filter(t => n(t.priority) === "low").length
+            });
+            this._refreshDash();
+        },
+
+        _loadMyTasksFallback() {
+            this._callAction("getMyTasks")
+                .then(oData => {
+                    this._oDashModel.setProperty("/myTasks", {
+                        totalPending: oData.totalPending || 0,
+                        highPriorityCount: oData.highPriorityCount || 0,
+                        mediumPriorityCount: oData.mediumPriorityCount || 0,
+                        lowPriorityCount: oData.lowPriorityCount || 0
+                    });
+                })
+                .catch(() => {
+                    this._oDashModel.setProperty("/myTasks",
+                        { totalPending: 0, highPriorityCount: 0, mediumPriorityCount: 0, lowPriorityCount: 0 });
                 })
                 .finally(() => this._refreshDash());
         },
@@ -1360,8 +1364,10 @@ sap.ui.define([
         _buildDashGridHTML(o) {
 
             // ── card helpers ─────────────────────────────────────────────────
-            const card = (body) =>
-                `<div style="flex:1;min-width:0;background:#fff;border-radius:12px;
+            // Each KPI tile gets a category class (tsDashTile-anniv, -leave, etc.)
+            // so style.css can apply a soft category-coloured gradient background.
+            const card = (body, klass) =>
+                `<div class="tsDashTile ${klass || ''}" style="flex:1;min-width:0;border-radius:12px;
                              box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;
                              box-sizing:border-box;">${body}</div>`;
 
@@ -1406,7 +1412,7 @@ sap.ui.define([
                 <div style="font-size:0.8rem;color:#6b7280;margin-bottom:6px;">with the organization</div>
                 <div style="font-size:0.75rem;color:#9ca3af;">${joinedTxt}</div>
                 <div style="font-size:0.75rem;color:#6b7280;margin-top:8px;font-style:italic;">${annexMsg}</div>
-            `);
+            `, "tsDashTile-anniv");
 
             // ── 2. Leave Balance ─────────────────────────────────────────────
             const leave = o.leave || {};
@@ -1432,7 +1438,7 @@ sap.ui.define([
                     <span style="color:#d1d5db;">|</span>
                     <span> Paid: <b style="color:#374151;">${annual}</b></span>
                 </div>
-            `);
+            `, "tsDashTile-leave");
 
             // ── 3. My Tasks ──────────────────────────────────────────────────
             const tasks = o.tasks || {};
@@ -1470,7 +1476,7 @@ sap.ui.define([
             <b style="color:#16a34a;">${tLow}</b>
         </div>
     </div>
-`);
+`, "tsDashTile-tasks");
 
             // ── 4. Attendance ────────────────────────────────────────────────
             const attend = o.attend || {};
@@ -1497,7 +1503,7 @@ sap.ui.define([
                         Absent : <b style="color:#111827;">${absent}</b>
                     </span>
                 </div>
-            `);
+            `, "tsDashTile-attendance");
 
             // ── 5. Performance Rating ────────────────────────────────────────
             const perf = o.perf || {};
@@ -1525,7 +1531,7 @@ sap.ui.define([
                 </div>
                 ${starsHTML}
                 <div style="font-size:0.88rem;font-weight:600;color:${rColor};margin-top:4px;">${rCat}</div>
-            `);
+            `, "tsDashTile-perf");
 
             // ── Row 1: 5 cards ───────────────────────────────────────────────
             const sRow1 = `
@@ -1645,7 +1651,7 @@ sap.ui.define([
             ).join("");
 
             const sTrend = `
-                <div style="flex:1.4;min-width:0;background:#fff;border-radius:12px;
+                <div class="tsDashTile" style="flex:1.4;min-width:0;background:#fff;border-radius:12px;
                             box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
                         <span style="font-size:0.95rem;font-weight:600;color:#111827;">My Performance Trend</span>
@@ -1728,7 +1734,7 @@ sap.ui.define([
     <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1rem;">
 
         <!-- Task Summary donut -->
-        <div style="background:#fff;border-radius:12px;
+        <div class="tsDashTile" style="background:#fff;border-radius:12px;
                     box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
             <div style="font-size:0.95rem;font-weight:600;color:#111827;margin-bottom:14px;">Task Summary</div>
             <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
@@ -1748,7 +1754,7 @@ sap.ui.define([
         </div>
 
         <!-- Total Timesheets pie -->
-<div style="background:#fff;border-radius:12px;flex:1;
+<div class="tsDashTile" style="background:#fff;border-radius:12px;flex:1;
             box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;
             box-sizing:border-box;display:flex;flex-direction:column;">
 
@@ -1922,7 +1928,7 @@ sap.ui.define([
                 }).join("");
 
             const sCalendar = `
-    <div style="flex:1;min-width:0;background:#fff;border-radius:12px;
+    <div class="tsDashTile" style="flex:1;min-width:0;background:#fff;border-radius:12px;
                 box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
             <span style="font-size:0.95rem;font-weight:600;color:#111827;">Upcoming Calendar</span>
@@ -2018,7 +2024,7 @@ sap.ui.define([
                 }).join("");
 
             const sNotifications = `
-    <div style="flex:1;min-width:0;background:#fff;border-radius:12px;
+    <div class="tsDashTile" style="flex:1;min-width:0;background:#fff;border-radius:12px;
                 box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
             <span style="font-size:0.95rem;font-weight:600;color:#111827;">Recent Notifications</span>
@@ -2050,7 +2056,7 @@ sap.ui.define([
 <div style="display:flex;flex-direction:row;gap:1rem;width:100%;box-sizing:border-box;">
 
     <!-- Left: Daily Hours Bar Chart -->
-    <div style="flex:1.4;background:#fff;border-radius:12px;
+    <div class="tsDashTile" style="flex:1.4;background:#fff;border-radius:12px;
                 box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
         <div style="padding:14px 18px 10px;border-bottom:1px solid #f3f4f6;">
             <div style="font-size:0.95rem;font-weight:600;color:#111827;">Daily Hours Breakdown</div>
@@ -2063,7 +2069,7 @@ sap.ui.define([
     <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1rem;">
 
         <!-- Week Completion -->
-        <div style="background:#fff;border-radius:12px;
+        <div class="tsDashTile" style="background:#fff;border-radius:12px;
                     box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
             <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
                 <div style="font-size:0.95rem;font-weight:600;color:#111827;">Week Completion</div>
@@ -2081,8 +2087,7 @@ sap.ui.define([
         </div>
 
         <!-- My Leave Overview -->
-        <!-- My Leave Overview -->
-<div style="background:#fff;border-radius:12px;flex:1;
+<div class="tsDashTile" style="background:#fff;border-radius:12px;flex:1;
             box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;
             box-sizing:border-box;display:flex;flex-direction:column;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">

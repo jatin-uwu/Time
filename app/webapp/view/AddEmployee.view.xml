@@ -8,9 +8,20 @@
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
-    <Page id="addEmpPage" title="Add New Employee" class="tsHrPage" showNavButton="false">
+    <Page id="addEmpPage" showHeader="false" class="tsHrPage">
         <content>
-            <ObjectHeader title="New Employee" intro="HR · Onboarding" responsive="true" class="sapUiSmallMargin" />
+
+            <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone" alignItems="Center" justifyContent="SpaceBetween">
+                <HBox alignItems="Center">
+                    <core:Icon src="sap-icon://add-employee" class="tsPageHeaderIcon" style="color:#ffffff;font-size:1.25rem;" />
+                    <Text text="Add New Employee"
+                          style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                </HBox>
+                <ObjectStatus text="HR · Onboarding" state="None"
+                              icon="sap-icon://employee"
+                              style="color:#ffffff;"
+                              class="tsHeaderBadge" />
+            </HBox>
 
             <f:Form id="addEmpForm" editable="true" class="sapUiSmallMargin">
                 <f:layout>

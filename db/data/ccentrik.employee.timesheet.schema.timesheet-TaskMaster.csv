@@ -1,2 +1,8 @@
-taskId,taskName,taskDescription,assignedTo_employeeId,priority,status,startDate,dueDate
-
+taskId,taskName,taskDescription,assignedTo_employeeId,priority,status,reviewer_employeeId,reviewerStatus,startDate,dueDate
+TASK001,Build dashboard widget,Create a reusable widget for the manager dashboard showing weekly hours per project. Bind to existing OData service.,EMP1001,High,In Progress,,,2026-05-15,2026-06-05
+TASK002,CAP backend extension,Add a new OData entity for ProjectAllocation and expose it through the EmployeeService.,EMP1001,Medium,Not Started,,,2026-05-25,2026-06-12
+TASK003,HR onboarding checklist,Prepare an onboarding checklist for new hires covering laptop setup and the first-week orientation.,EMP1002,Medium,In Progress,,,2026-05-22,2026-06-08
+TASK004,Client follow-up Q2 leads,Reach out to the 12 Q2 leads from last quarter and capture interest level in the CRM.,EMP1003,High,In Progress,,,2026-05-18,2026-05-30
+TASK005,Sales deck refresh,Refresh the Q3 sales deck — update numbers and customer logos. Final version due before the regional review.,EMP1003,Low,Not Started,,,2026-05-25,2026-06-15
+TASK006,Quarter-end reconciliation,Reconcile vendor invoices for the quarter and prepare a short summary report.,EMP1004,High,Completed,,,2026-05-10,2026-05-23
+TASK007,Expense audit,Audit travel expenses for March and April. Flag anything above policy.,EMP1004,Medium,Not Started,,,2026-05-25,2026-06-02

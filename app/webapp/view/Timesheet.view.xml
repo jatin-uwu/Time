@@ -12,45 +12,47 @@
 
     <Page
         id="timesheetPage"
-        showNavButton="false"
+        showHeader="false"
         backgroundDesign="List">
-
-        <!-- ── Header Bar — buttons only, no title here ───────────────────── -->
-        <customHeader>
-            <Bar>
-                <contentLeft>
-                    <Title text="Weekly Timesheet" level="H1" />
-                </contentLeft>
-                <contentRight>
-                    <ObjectStatus
-                        id="timesheetStatusBadge"
-                        text="{viewModel>/weekStatus}"
-                        state="{viewModel>/weekStatusState}"
-                        icon="{viewModel>/weekStatusIcon}"
-                        class="sapUiSmallMarginEnd" />
-                    <Button
-                        id="btnSave"
-                        text="Save"
-                        type="Default"
-                        icon="sap-icon://save"
-                        press=".onSaveEntries"
-                        enabled="{viewModel>/canEdit}" />
-                    <Button
-                        id="btnSubmit"
-                        text="{= ${viewModel>/isViewingPrevWeek} ? 'Save &amp; Submit' : 'Submit for Approval'}"
-                        type="Emphasized"
-                        icon="sap-icon://paper-plane"
-                        press=".onSubmitTimesheet"
-                        enabled="{viewModel>/canSubmit}"
-                        class="sapUiSmallMarginBegin" />
-                </contentRight>
-            </Bar>
-        </customHeader>
 
         <content>
             <VBox class="sapUiSmallMargin">
 
-                <!-- ── Title + week range — lives in page content, not Bar ── -->
+                <!-- ── Page header card ────────────────────────────────────── -->
+                <HBox class="tsPageHeaderCard" alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center">
+                        <core:Icon src="sap-icon://time-entry-request" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                        <Text text="Weekly Timesheet"
+                              style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                    </HBox>
+                    <HBox alignItems="Center">
+                        <ObjectStatus
+                            id="timesheetStatusBadge"
+                            text="{viewModel>/weekStatus}"
+                            state="None"
+                            icon="{viewModel>/weekStatusIcon}"
+                            style="color:#ffffff;"
+                            class="tsHeaderBadge sapUiSmallMarginEnd" />
+                        <Button
+                            id="btnSave"
+                            text="Save"
+                            type="Default"
+                            icon="sap-icon://save"
+                            press=".onSaveEntries"
+                            enabled="{viewModel>/canEdit}"
+                            class="tsTeamAttExportBtn" />
+                        <Button
+                            id="btnSubmit"
+                            text="{= ${viewModel>/isViewingPrevWeek} ? 'Save &amp; Submit' : 'Submit for Approval'}"
+                            type="Emphasized"
+                            icon="sap-icon://paper-plane"
+                            press=".onSubmitTimesheet"
+                            enabled="{viewModel>/canSubmit}"
+                            class="sapUiSmallMarginBegin" />
+                    </HBox>
+                </HBox>
+
+                <!-- ── Week range navigation ────────────────────────────── -->
                 <HBox
                     justifyContent="SpaceBetween"
                     alignItems="Center"

@@ -526,7 +526,75 @@ sap.ui.define([
                     });
                 })
                 .catch(reject);
-            });
+            });;       
+         },
+        // ── Formatters ────────────────────────────────────────────────────────
+        formatTypeIcon(sType) {
+            const map = {
+                TIMESHEET_APPROVED:     "sap-icon://accept",
+                TIMESHEET_REJECTED:     "sap-icon://decline",
+                TASK_ASSIGNED:          "sap-icon://task",
+                TASK_REVIEW_REQUESTED:  "sap-icon://approvals",
+                PERFORMANCE_RATED:      "sap-icon://survey",
+                LEAVE_APPROVED:         "sap-icon://accept",
+                LEAVE_REJECTED:         "sap-icon://decline",
+                approved:               "sap-icon://accept",
+                rejected:               "sap-icon://decline"
+            };
+            return map[sType] || "sap-icon://bell";
+        },
+
+        formatTypeColor(sType) {
+            return ["approved","TIMESHEET_APPROVED","LEAVE_APPROVED","TASK_REVIEW_REQUESTED","TASK_ASSIGNED"].includes(sType)
+                ? "#16a34a" : "#dc2626";
+        },
+
+        formatTypeLabel(sType) {
+            const map = {
+                TIMESHEET_APPROVED:    "Approved",     TIMESHEET_REJECTED: "Rejected",
+                TASK_ASSIGNED:         "Task",         PERFORMANCE_RATED:  "Rating",
+                TASK_REVIEW_REQUESTED: "Review",
+                LEAVE_APPROVED:        "Leave OK",     LEAVE_REJECTED:     "Leave Rejected",
+                approved:              "Approved",     rejected:           "Rejected"
+            };
+            return map[sType] || "Info";
+        },
+
+        formatTypeState(sType) {
+            return ["approved","TIMESHEET_APPROVED","LEAVE_APPROVED","TASK_ASSIGNED","PERFORMANCE_RATED","TASK_REVIEW_REQUESTED"]
+                .includes(sType) ? "Success" : "Error";
+        },
+
+        formatTimestamp(sTimestamp) {
+            if (!sTimestamp) return "";
+            const d = new Date(sTimestamp);
+            return d.toLocaleDateString(undefined, {
+                day: "numeric", month: "short", year: "numeric"
+            }) + "  " +
+            d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+        },
+
+        formatTypeAccentClass(sType) {
+            return ["approved","TIMESHEET_APPROVED","LEAVE_APPROVED"].includes(sType)
+                ? "tsNotifAccentApproved" : "tsNotifAccentRejected";
+        },
+
+        formatTypeIconClass(sType) {
+            return ["approved","TIMESHEET_APPROVED","LEAVE_APPROVED"].includes(sType)
+                ? "tsNotifIconApproved" : "tsNotifIconRejected";
+        },
+
+        // Time-ago formatter for the view
+        formatTimeAgo(sTimestamp) {
+            if (!sTimestamp) return "";
+            const diff  = Date.now() - new Date(sTimestamp).getTime();
+            const mins  = Math.floor(diff / 60000);
+            const hours = Math.floor(diff / 3600000);
+            const days  = Math.floor(diff / 86400000);
+            if (mins  < 1)  return "Just now";
+            if (mins  < 60) return `${mins}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            return `${days}d ago`;
         }
     });
 });
