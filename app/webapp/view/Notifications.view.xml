@@ -42,36 +42,8 @@
                                     press=".onCloseNotifications"
                                     class="tsNotifCloseBtn" />
                         </HBox>
-                <!-- ── Header ──────────────────────────────────────────────── -->
-                <HBox justifyContent="SpaceBetween" alignItems="Center"
-                    style="padding:16px 0 12px;">
-                    <HBox alignItems="Center">
-                        <core:Icon src="sap-icon://bell"
-                            size="1.4rem" color="#111827"
-                            class="sapUiSmallMarginEnd" />
-                        <Title text="Notifications" level="H2" />
-                        <!-- Unread badge -->
-                        <Text
-                            visible="{= ${notifView>/unreadCount} > 0 }"
-                            text="{= ${notifView>/unreadCount} + ' unread' }"
-                            style="margin-left:10px;background:#3b82f6;color:#fff;font-size:0.72rem;
-           font-weight:700;padding:2px 9px;border-radius:12px;" />
                     </HBox>
-                    <HBox alignItems="Center">
-                        <Button
-                            text="Mark all read"
-                            type="Transparent"
-                            icon="sap-icon://accept"
-                            visible="{= ${notifView>/unreadCount} > 0 }"
-                            press=".onMarkAllRead"
-                            class="sapUiSmallMarginEnd" />
-                        <Button
-                            icon="sap-icon://nav-back"
-                            type="Transparent"
-                            tooltip="Back to Dashboard"
-                            press=".onCloseNotifications" />
-                    </HBox>
-                </HBox>
+                </VBox>
 
                 <!-- ── Loading state ───────────────────────────────────────── -->
                 <VBox visible="{notifView>/loading}"
