@@ -85,150 +85,150 @@
 
         <masterPages>
             <Page id="navPage" showHeader="false"
-                class="timesheetSidebar"
+                class="timesheetSidebar tsSideNav"
                 backgroundDesign="Transparent">
 
-                <!-- Unified navigation -->
-                <List id="mainNavList"
-                    mode="None"
-                    backgroundDesign="Transparent"
-                    style="background:transparent;">
-                    <items>
-                        <StandardListItem title="Overview"
-                            icon="sap-icon://home"
-                            type="Active"
-                            press=".onNavSelect"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="dashboard" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem title="Timesheet"
-                            icon="sap-icon://calendar"
-                            type="Active"
-                            press=".onNavSelect"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="timesheet" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem title="Task Descriptions"
-                            icon="sap-icon://wallet"
-                            type="Active"
-                            press=".onNavSelect"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="task-description" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem title="Apply Leave"
-                            icon="sap-icon://away"
-                            type="Active"
-                            press=".onNavSelect"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="apply-leave" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem title="Timesheet History"
-                            icon="sap-icon://history"
-                            type="Active"
-                            press=".onNavSelect"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="history" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem title="Approvals"
-                            icon="sap-icon://approvals"
-                            type="Active"
-                            press=".onNavSelect"
-                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="manager" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem title="Assign Task"
-                            icon="sap-icon://create-form"
-                            type="Active"
-                            press=".onNavSelect"
-                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="task-assignment" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem title="Task Status"
-                            icon="sap-icon://activity-items"
-                            type="Active"
-                            press=".onNavSelect"
-                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="task-status" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem
-                            id="navPerfRating"
-                            title="Performance Rating"
-                            icon="sap-icon://survey"
-                            type="Active"
-                            press=".onNavPerfRating"
-                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
-                            style="background:transparent; color:#cbd5e1;" />
-                        <StandardListItem title="Approval History"
-                            icon="sap-icon://history"
-                            type="Active"
-                            press=".onNavSelect"
-                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="approval-history" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem title="Team Attendance"
-                            icon="sap-icon://employee-pane"
-                            type="Active"
-                            press=".onNavSelect"
-                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="team-attendance" />
-                            </customData>
-                        </StandardListItem>
+                <!-- ── Workspace / role badge ─────────────────────────────── -->
+                <VBox class="tsSideHeader">
+                    <Text text="WORKSPACE" class="tsSideKicker" />
+                    <HBox alignItems="Center" class="tsSideRoleRow">
+                        <core:Icon class="tsSideRoleIcon"
+                            src="{= ${appView>/userRole} === 'manager' ? 'sap-icon://manager' : (${appView>/userRole} === 'hr' ? 'sap-icon://employee' : 'sap-icon://person-placeholder') }" />
+                        <Text class="tsSideRoleText"
+                            text="{= ${appView>/userRole} === 'manager' ? 'Manager' : (${appView>/userRole} === 'hr' ? 'HR Admin' : 'Employee') }" />
+                    </HBox>
+                </VBox>
 
-                        <!-- HR-only entries -->
-                        <StandardListItem title="Add Employee"
-                            icon="sap-icon://add-employee"
-                            type="Active"
-                            press=".onNavSelect"
-                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'hr'}"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="add-employee" />
-                            </customData>
-                        </StandardListItem>
-                        <StandardListItem title="All Employees"
-                            icon="sap-icon://employee"
-                            type="Active"
-                            press=".onNavSelect"
-                            visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'hr'}"
-                            style="background:transparent; color:#cbd5e1;">
-                            <customData>
-                                <core:CustomData key="target" value="all-employees" />
-                            </customData>
-                        </StandardListItem>
-                    </items>
+                <!-- ── Overview (standalone) ──────────────────────────────── -->
+                <List id="navOverviewList" mode="None" backgroundDesign="Transparent" class="tsNavList">
+                    <StandardListItem title="Overview" icon="sap-icon://home"
+                        type="Active" press=".onNavSelect" class="tsNavItem">
+                        <customData><core:CustomData key="target" value="dashboard" /></customData>
+                    </StandardListItem>
                 </List>
 
-                <!-- Empty placeholder kept so existing code referencing managerNavList still
-                resolves safely -->
-                <List id="managerNavList"
-                    mode="None"
-                    backgroundDesign="Transparent"
-                    visible="false"
-                    style="background:transparent;" />
+                <!-- ── Group: Timesheet ───────────────────────────────────── -->
+                <Button class="tsNavGroupHeader" type="Transparent" width="100%" iconFirst="false"
+                    text="Timesheet" press=".onToggleGroup"
+                    icon="{= ${side>/timesheetOpen} ? 'sap-icon://slim-arrow-down' : 'sap-icon://slim-arrow-right' }">
+                    <customData><core:CustomData key="group" value="timesheet" /></customData>
+                </Button>
+                <VBox id="navTimesheetBody" class="tsNavGroupBody">
+                    <List id="navTimesheetList" mode="None" backgroundDesign="Transparent" class="tsNavList">
+                        <StandardListItem title="Fill Timesheet" icon="sap-icon://add-activity"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="timesheet" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="Timesheet History" icon="sap-icon://history"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="history" /></customData>
+                        </StandardListItem>
+                    </List>
+                </VBox>
+
+                <!-- ── Group: Leave ───────────────────────────────────────── -->
+                <Button class="tsNavGroupHeader" type="Transparent" width="100%" iconFirst="false"
+                    text="Leave" press=".onToggleGroup"
+                    icon="{= ${side>/leaveOpen} ? 'sap-icon://slim-arrow-down' : 'sap-icon://slim-arrow-right' }">
+                    <customData><core:CustomData key="group" value="leave" /></customData>
+                </Button>
+                <VBox id="navLeaveBody" class="tsNavGroupBody">
+                    <List id="navLeaveList" mode="None" backgroundDesign="Transparent" class="tsNavList">
+                        <StandardListItem title="Apply Leave" icon="sap-icon://away"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="apply-leave" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="Leave History" icon="sap-icon://appointment-2"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="leave-history" /></customData>
+                        </StandardListItem>
+                    </List>
+                </VBox>
+
+                <!-- ── Group: Task ────────────────────────────────────────── -->
+                <Button class="tsNavGroupHeader" type="Transparent" width="100%" iconFirst="false"
+                    text="Task" press=".onToggleGroup"
+                    icon="{= ${side>/taskOpen} ? 'sap-icon://slim-arrow-down' : 'sap-icon://slim-arrow-right' }">
+                    <customData><core:CustomData key="group" value="task" /></customData>
+                </Button>
+                <VBox id="navTaskBody" class="tsNavGroupBody">
+                    <List id="navTaskList" mode="None" backgroundDesign="Transparent" class="tsNavList">
+                        <StandardListItem title="Task Description" icon="sap-icon://notes"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="task-description" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="Task Status" icon="sap-icon://activity-items"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="task-status" /></customData>
+                        </StandardListItem>
+                    </List>
+                </VBox>
+
+                <!-- ── Rating History (standalone, outside Task group) ────── -->
+                <List id="navRatingList" mode="None" backgroundDesign="Transparent" class="tsNavList">
+                    <StandardListItem title="Rating History" icon="sap-icon://survey"
+                        type="Active" press=".onNavSelect" class="tsNavItem">
+                        <customData><core:CustomData key="target" value="rating-history" /></customData>
+                    </StandardListItem>
+                </List>
+
+                <!-- ── Group: Management (manager only) ───────────────────── -->
+                <Button class="tsNavGroupHeader tsNavGroupHeaderMgr" type="Transparent" width="100%" iconFirst="false"
+                    text="Management" press=".onToggleGroup"
+                    visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}"
+                    icon="{= ${side>/managerOpen} ? 'sap-icon://slim-arrow-down' : 'sap-icon://slim-arrow-right' }">
+                    <customData><core:CustomData key="group" value="manager" /></customData>
+                </Button>
+                <VBox id="navManagerBody" class="tsNavGroupBody"
+                    visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'manager'}">
+                    <List id="navManagerList" mode="None" backgroundDesign="Transparent" class="tsNavList">
+                        <StandardListItem title="Assign Task" icon="sap-icon://create-form"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="task-assignment" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="Approvals" icon="sap-icon://approvals"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="manager" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="Approval History" icon="sap-icon://history"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="approval-history" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="Team Attendance" icon="sap-icon://employee-pane"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="team-attendance" /></customData>
+                        </StandardListItem>
+                        <StandardListItem id="navPerfRating" title="Performance Rating" icon="sap-icon://line-chart"
+                            type="Active" press=".onNavPerfRating" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="performance-rating" /></customData>
+                        </StandardListItem>
+                    </List>
+                </VBox>
+
+                <!-- ── Group: Human Resources (hr only) ───────────────────── -->
+                <Button class="tsNavGroupHeader tsNavGroupHeaderHr" type="Transparent" width="100%" iconFirst="false"
+                    text="Human Resources" press=".onToggleGroup"
+                    visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'hr'}"
+                    icon="{= ${side>/hrOpen} ? 'sap-icon://slim-arrow-down' : 'sap-icon://slim-arrow-right' }">
+                    <customData><core:CustomData key="group" value="hr" /></customData>
+                </Button>
+                <VBox id="navHrBody" class="tsNavGroupBody"
+                    visible="{= ${appView>/roleResolved} === true &amp;&amp; ${appView>/userRole} === 'hr'}">
+                    <List id="navHrList" mode="None" backgroundDesign="Transparent" class="tsNavList">
+                        <StandardListItem title="Add Employee" icon="sap-icon://add-employee"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="add-employee" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="All Employees" icon="sap-icon://employee"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="all-employees" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="HR Approvals" icon="sap-icon://approvals"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="hr-approvals" /></customData>
+                        </StandardListItem>
+                    </List>
+                </VBox>
 
             </Page>
         </masterPages>

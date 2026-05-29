@@ -18,7 +18,7 @@ sap.ui.define([
         "Rejected": "Error"
     };
 
-    return Controller.extend("timesheet.app.controller.HRApprovals", {
+    return Controller.extend("timesheet.app.controller.HrApproval", {
 
         onInit() {
             this._bInitialized = false;

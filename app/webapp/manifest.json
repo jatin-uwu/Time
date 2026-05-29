@@ -47,7 +47,7 @@
         },
         "resources": {
             "css": [
-                { "uri": "css/style.css?v=3" }
+                { "uri": "css/style.css?v=6" }
             ]
         },
         "models": {
@@ -117,7 +117,10 @@
                 { "name": "leave-approvals", "pattern": "leave-approvals", "target": "leave-approvals" },
                 { "name": "performance-rating", "pattern": "performance-rating", "target": "performance-rating" },
                 { "name": "team-attendance", "pattern": "team-attendance", "target": "team-attendance" },
-                { "name": "approval-history", "pattern": "approval-history", "target": "approval-history" }
+                { "name": "approval-history", "pattern": "approval-history", "target": "approval-history" },
+                { "name": "leave-history", "pattern": "leave-history", "target": "leave-history" },
+                { "name": "rating-history", "pattern": "rating-history", "target": "rating-history" },
+                { "name": "hr-approvals", "pattern": "hr-approvals", "target": "hr-approvals" }
             ],
             "targets": {
                 "dashboard":     { "viewName": "Dashboard"     },
@@ -135,7 +138,10 @@
                 "leave-approvals":{ "viewName": "LeaveApprovals"},
                 "performance-rating": { "viewName": "PerformanceRating" },
                 "team-attendance": { "viewName": "TeamAttendance" },
-                "approval-history": { "viewName": "ApprovalHistory" }
+                "approval-history": { "viewName": "ApprovalHistory" },
+                "leave-history":  { "viewName": "LeaveHistory" },
+                "rating-history": { "viewName": "RatingHistory" },
+                "hr-approvals":   { "viewName": "HrApproval" }
             }
         }
     }

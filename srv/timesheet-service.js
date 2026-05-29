@@ -331,9 +331,6 @@ class EmployeeService extends cds.ApplicationService {
         this.on('markAllNotificationsRead', async (req) => {
             const user = req.user || {};
             const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(NOTIFICATION_ENTITY).columns('notificationId')
-                .where({ employee_employeeId: 'placeholder' });
-            // Re-fetch employee
             const empRow = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
             if (!empRow) return req.error(404, 'Employee not found.');
 
@@ -351,6 +348,63 @@ class EmployeeService extends cds.ApplicationService {
 
             cds.log('notif').info(`${updated} notifications marked as read for ${empRow.employeeId}`);
             return { updated };
+        });
+
+        // ── Paginated notifications (bell icon + Notifications page) ───────────
+        // Declared in the CDS but previously had no handler → 501, so the bell
+        // and Notifications page received nothing even though rows existed in DB
+        // (getRecentNotifications showed them). Implemented here.
+        this.on('getNotifications', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            if (!emp) return { itemsJSON: '[]', totalCount: 0, unreadCount: 0 };
+
+            const page     = Math.max(1, parseInt(req.data.page, 10) || 1);
+            const pageSize = Math.max(1, parseInt(req.data.pageSize, 10) || 20);
+            const offset   = (page - 1) * pageSize;
+
+            const all = await SELECT.from(NOTIFICATION)
+                .where({ employee_employeeId: emp.employeeId })
+                .orderBy({ notifiedAt: 'desc' });
+
+            const totalCount  = all.length;
+            const unreadCount = all.filter(n => !n.isRead).length;
+            const pageRows = all.slice(offset, offset + pageSize).map(n => ({
+                notificationId: n.notificationId,
+                type:           n.type || '',
+                title:          n.title || '',
+                message:        n.message || '',
+                isRead:         n.isRead || false,
+                referenceId:    n.referenceId || '',
+                notifiedAt:     n.notifiedAt ? new Date(n.notifiedAt).toISOString() : ''
+            }));
+
+            return { itemsJSON: JSON.stringify(pageRows), totalCount, unreadCount };
+        });
+
+        // ── Mark a single notification as read ─────────────────────────────────
+        this.on('markNotificationRead', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const { notificationId } = req.data;
+            if (!emp || !notificationId) return { success: false };
+            await UPDATE(NOTIFICATION).set({ isRead: true })
+                .where({ notificationId, employee_employeeId: emp.employeeId });
+            return { success: true };
+        });
+
+        // ── Delete / dismiss a single notification ─────────────────────────────
+        this.on('deleteNotification', async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const { notificationId } = req.data;
+            if (!emp || !notificationId) return { success: false };
+            await DELETE.from(NOTIFICATION)
+                .where({ notificationId, employee_employeeId: emp.employeeId });
+            return { success: true };
         });
 
         // ── Dashboard: Upcoming Calendar (Google Calendar API) ─────────────────────

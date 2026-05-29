@@ -64,74 +64,181 @@ html, body { margin: 0; height: 100%; }
     transition: width 0.25s ease;
 }
 
-/* ── Sidebar dark theme — targeted via timesheetSidebar class ────── */
+/* ══════════════════════════════════════════════════════════════════════════
+   SIDEBAR  —  modern enterprise dark navigation
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Deep gradient surface + subtle glass edge */
 .timesheetSidebar,
 .timesheetSidebar .sapMPageBg,
 .timesheetSidebar > section,
 .timesheetSidebar .sapMList,
 .timesheetSidebar .sapMListUl,
-.timesheetSidebar .sapMListItems,
-.timesheetSidebar .sapMListHdrTxt {
-    background-color: #111827 !important;
+.timesheetSidebar .sapMListItems {
+    background: transparent !important;
+}
+.timesheetSidebar.tsSideNav {
+    background: linear-gradient(180deg, #0f172a 0%, #111827 55%, #0b1220 100%) !important;
+    border-right: 1px solid rgba(148, 163, 184, 0.10) !important;
+    box-shadow: inset -1px 0 0 rgba(255,255,255,0.03) !important;
+}
+.tsSideNav .sapMPage,
+.tsSideNav section {
+    padding: 6px 12px 24px !important;
 }
 
-.timesheetSidebar .sapMLIB {
-    background-color: #111827 !important;
-    border-bottom-color: #1f2937 !important;
+/* Scrollable sidebar, but hide the scrollbar chrome (all engines) */
+.tsSideNav .sapMPageEnableScrolling,
+.tsSideNav .sapMPageScroll,
+.tsSideNav section,
+.tsSideNav .sapMPage {
+    overflow-y: auto !important;
+}
+.tsSideNav,
+.tsSideNav * {
+    scrollbar-width: none !important;        /* Firefox */
+    -ms-overflow-style: none !important;     /* IE/Edge legacy */
+}
+.tsSideNav::-webkit-scrollbar,
+.tsSideNav *::-webkit-scrollbar {
+    width: 0 !important;
+    height: 0 !important;
+    display: none !important;                /* Chrome / Safari / Edge */
 }
 
-.timesheetSidebar .sapMLIB .sapMSLITitle,
-.timesheetSidebar .sapMLIB .sapUiIcon {
-    color: #9ca3af !important;
+/* ── Workspace / role badge ─────────────────────────────────────────── */
+.tsSideHeader {
+    padding: 16px 10px 14px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid rgba(148,163,184,0.10);
 }
-
-.timesheetSidebar .sapMLIB:hover {
-    background-color: rgba(96,165,250,0.12) !important;
-    border-left: 3px solid #60a5fa !important;
+.tsSideKicker.sapMText {
+    color: #64748b !important;
+    font-size: 0.62rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.18em !important;
 }
-
-.timesheetSidebar .sapMLIB:hover .sapMSLITitle,
-.timesheetSidebar .sapMLIB:hover .sapUiIcon {
+.tsSideRoleRow { margin-top: 8px; gap: 10px; }
+.tsSideRoleIcon.sapUiIcon {
     color: #60a5fa !important;
+    font-size: 1.1rem !important;
+    background: rgba(96,165,250,0.12);
+    border-radius: 9px;
+    padding: 8px;
+    box-shadow: 0 0 0 1px rgba(96,165,250,0.18);
+}
+.tsSideRoleText.sapMText {
+    color: #e2e8f0 !important;
+    font-size: 0.95rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.01em;
 }
 
-.timesheetSidebar .sapMLIBSelected,
-.timesheetSidebar .sapMLIBSelected:hover {
-    background-color: rgba(96,165,250,0.15) !important;
-    border-left: 3px solid #60a5fa !important;
+/* ── Section / group headers (rendered as a Button) ─────────────────── */
+.tsNavGroupHeader.sapMBtn {
+    margin: 14px 4px 2px !important;
+    min-height: 38px !important;
+    background: transparent !important;
+}
+.tsNavGroupHeader .sapMBtnInner {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    width: 100% !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    padding: 0 10px !important;
+    height: 38px !important;
+}
+.tsNavGroupHeader .sapMBtnContent {
+    color: #8595ab !important;
+    font-size: 0.82rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.12em !important;
+    text-transform: uppercase !important;
+    order: 0;
+}
+.tsNavGroupHeader .sapUiIcon {
+    color: #64748b !important;
+    font-size: 1rem !important;
+    order: 1;
+    transition: color 0.2s ease, transform 0.2s ease;
+}
+.tsNavGroupHeader:hover .sapMBtnContent { color: #cbd5e1 !important; }
+.tsNavGroupHeader:hover .sapUiIcon { color: #cbd5e1 !important; }
+
+/* ── Collapsible group body (smooth max-height animation) ───────────── */
+.tsNavGroupBody {
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height 0.30s cubic-bezier(0.4, 0, 0.2, 1),
+                opacity 0.22s ease;
+}
+.tsNavGroupBody.tsNavOpen {
+    max-height: 460px;
+    opacity: 1;
 }
 
-.timesheetSidebar .sapMLIBSelected .sapMSLITitle,
-.timesheetSidebar .sapMLIBSelected .sapUiIcon {
-    color: #60a5fa !important;
+/* ── Nav items ──────────────────────────────────────────────────────── */
+.tsNavList .sapMLIB.tsNavItem {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 10px !important;
+    margin: 2px 4px !important;
+    min-height: 42px !important;
+    padding-left: 6px !important;
+    transition: background 0.18s ease, transform 0.12s ease, box-shadow 0.18s ease;
+}
+/* Title — UI5 renders title-only items with .sapMSLITitleOnly (NOT .sapMSLITitle) */
+.tsNavList .sapMLIB.tsNavItem .sapMSLITitleOnly,
+.tsNavList .sapMLIB.tsNavItem .sapMSLITitle,
+.tsNavList .sapMLIB.tsNavItem .sapMSLITitleDiv {
+    color: #cbd5e1 !important;
+    font-size: 0.875rem !important;
+    font-weight: 500 !important;
+}
+.tsNavList .sapMLIB.tsNavItem .sapUiIcon,
+.tsNavList .sapMLIB.tsNavItem .sapMSLIImgIcon {
+    color: #94a3b8 !important;
+    font-size: 1.02rem !important;
+    transition: color 0.18s ease;
 }
 
-/* Active nav item highlight (replaces SingleSelectMaster selection since lists use mode="None") */
-.timesheetSidebar .tsNavItemActive {
-    background-color: rgba(96,165,250,0.15) !important;
-    border-left: 3px solid #60a5fa !important;
+/* Hover — soft glass lift */
+.tsNavList .sapMLIB.tsNavItem:hover {
+    background: rgba(148,163,184,0.10) !important;
+    transform: translateX(2px);
+}
+.tsNavList .sapMLIB.tsNavItem:hover .sapMSLITitleOnly,
+.tsNavList .sapMLIB.tsNavItem:hover .sapMSLITitle,
+.tsNavList .sapMLIB.tsNavItem:hover .sapUiIcon,
+.tsNavList .sapMLIB.tsNavItem:hover .sapMSLIImgIcon {
+    color: #e2e8f0 !important;
 }
 
-.timesheetSidebar .tsNavItemActive .sapMSLITitle,
-.timesheetSidebar .tsNavItemActive .sapUiIcon {
-    color: #60a5fa !important;
+/* Active — gradient pill + left accent + glow */
+.tsNavList .sapMLIB.tsNavItem.tsNavItemActive {
+    background: linear-gradient(90deg, rgba(59,130,246,0.95) 0%, rgba(37,99,235,0.92) 100%) !important;
+    box-shadow: 0 6px 16px rgba(37,99,235,0.35), inset 3px 0 0 #93c5fd !important;
+    transform: none;
+}
+.tsNavList .sapMLIB.tsNavItem.tsNavItemActive .sapMSLITitleOnly,
+.tsNavList .sapMLIB.tsNavItem.tsNavItemActive .sapMSLITitle {
+    color: #ffffff !important;
+    font-weight: 600 !important;
+}
+.tsNavList .sapMLIB.tsNavItem.tsNavItemActive .sapUiIcon,
+.tsNavList .sapMLIB.tsNavItem.tsNavItemActive .sapMSLIImgIcon {
+    color: #ffffff !important;
 }
 
-.timesheetSidebar .sapMListHdr,
-.timesheetSidebar .sapMListHdrText {
-    background-color: #111827 !important;
-    color: #6b7280 !important;
-    font-size: 0.72rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-}
-
-/* Sidebar footer */
-.timesheetSidebar .sapMPageFooter,
-.timesheetSidebar .sapMOverflowToolbar,
-.timesheetSidebar .sapMTB {
-    background-color: #111827 !important;
-    border-top: 1px solid #1f2937 !important;
+/* Kill UI5's default list item borders / selection bg inside the sidebar */
+.timesheetSidebar .sapMLIB { border-bottom: none !important; }
+.timesheetSidebar .sapMLIBActive,
+.timesheetSidebar .sapMLIBSelected {
+    background: transparent !important;
 }
 
 /* ── Dashboard page ─────────────────────────────────────────────── */
@@ -2177,3 +2284,104 @@ html .sapUiBlockLayer {
 }
 .tsLeaveHistHead .sapUiIcon { color: #1d4ed8 !important; font-size: 1.2rem; margin-right: 10px; }
 .tsLeaveHistHead .sapMTitle .sapMTitleInner { color: #1e3a5f !important; font-weight: 700 !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LEAVE HISTORY page
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsLhHeader {
+    background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+    border-radius: 14px;
+    padding: 18px 22px;
+    box-shadow: 0 6px 20px rgba(37,99,235,0.20);
+}
+.tsLhHeaderIcon.sapUiIcon {
+    color: #ffffff !important;
+    font-size: 1.5rem !important;
+    background: rgba(255,255,255,0.16);
+    border-radius: 10px;
+    padding: 10px;
+}
+.tsLhTitle .sapMTitleInner { color: #ffffff !important; font-weight: 700 !important; }
+.tsLhSub.sapMText { color: rgba(255,255,255,0.82) !important; font-size: 0.82rem !important; }
+
+.tsLhStatsRow { gap: 14px; }
+.tsLhStatCard {
+    flex: 1; min-width: 130px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 16px 18px;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.05);
+    border-top: 3px solid #94a3b8;
+}
+.tsLhStatTotal    { border-top-color: #3b82f6; }
+.tsLhStatApproved { border-top-color: #16a34a; }
+.tsLhStatPending  { border-top-color: #d97706; }
+.tsLhStatNum.sapMText  { font-size: 1.6rem !important; font-weight: 800 !important; color: #1e293b !important; }
+.tsLhStatLabel.sapMText{ font-size: 0.76rem !important; color: #64748b !important; font-weight: 600 !important; }
+
+.tsLhTable {
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.06);
+    overflow: hidden;
+}
+.tsLhTable .sapMListTblHeader { background: #f8fafc; }
+.tsLhTable .sapMLIB:hover { background: #f0f7ff !important; }
+.tsLhEmpty { padding: 60px 0; }
+.tsLhEmptyText.sapMText { color: #94a3b8 !important; font-size: 0.9rem !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   RATING HISTORY page
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsRhHeader {
+    background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%);
+    border-radius: 14px;
+    padding: 18px 22px;
+    box-shadow: 0 6px 20px rgba(124,58,237,0.20);
+}
+.tsRhHeaderIcon.sapUiIcon {
+    color: #ffffff !important;
+    font-size: 1.5rem !important;
+    background: rgba(255,255,255,0.16);
+    border-radius: 10px;
+    padding: 10px;
+}
+.tsRhTitle .sapMTitleInner { color: #ffffff !important; font-weight: 700 !important; }
+.tsRhSub.sapMText { color: rgba(255,255,255,0.82) !important; font-size: 0.82rem !important; }
+
+.tsRhStatsRow { gap: 14px; }
+.tsRhStatCard {
+    flex: 1; min-width: 130px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 16px 18px;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.05);
+    border-top: 3px solid #a855f7;
+}
+.tsRhStatAvg    { border-top-color: #a855f7; }
+.tsRhStatCount  { border-top-color: #3b82f6; }
+.tsRhStatLatest { border-top-color: #16a34a; }
+.tsRhStatNum.sapMText  { font-size: 1.6rem !important; font-weight: 800 !important; color: #1e293b !important; }
+.tsRhStatNumSm.sapMText{ font-size: 1.0rem !important; }
+.tsRhStatLabel.sapMText{ font-size: 0.76rem !important; color: #64748b !important; font-weight: 600 !important; }
+
+.tsRhCardItem { border: none !important; background: transparent !important; }
+.tsRhCard {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin: 6px 0;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.05);
+    transition: box-shadow 0.2s ease, transform 0.12s ease;
+}
+.tsRhCard:hover { box-shadow: 0 6px 18px rgba(15,23,42,0.10); transform: translateY(-1px); }
+.tsRhCardLeft { flex: 1; min-width: 0; padding-right: 16px; }
+.tsRhCardPeriod.sapMText  { font-size: 0.98rem !important; font-weight: 700 !important; color: #1e293b !important; }
+.tsRhCardComment.sapMText { font-size: 0.82rem !important; color: #64748b !important; margin-top: 4px; }
+.tsRhStars.sapMText { color: #f59e0b !important; font-size: 1.05rem !important; letter-spacing: 2px; }
+.tsRhScore.sapMText { font-size: 1.25rem !important; font-weight: 800 !important; color: #7c3aed !important; }
+.tsRhEmpty { padding: 60px 0; }
+.tsRhEmptyText.sapMText { color: #94a3b8 !important; font-size: 0.9rem !important; }

@@ -1,0 +1,78 @@
+<mvc:View
+    controllerName="timesheet.app.controller.RatingHistory"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="ratingHistoryPage" showHeader="false" enableScrolling="true" class="tsDashboardPage">
+        <content>
+            <VBox class="sapUiSmallMargin">
+
+                <!-- Header card -->
+                <HBox class="tsRhHeader" alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center">
+                        <core:Icon src="sap-icon://survey" class="tsRhHeaderIcon" />
+                        <VBox class="sapUiTinyMarginBegin">
+                            <Title text="Rating History" level="H4" class="tsRhTitle" />
+                            <Text text="Your performance ratings over time" class="tsRhSub" />
+                        </VBox>
+                    </HBox>
+                </HBox>
+
+                <!-- Summary chips -->
+                <HBox class="tsRhStatsRow sapUiSmallMarginTop sapUiSmallMarginBottom" wrap="Wrap">
+                    <VBox class="tsRhStatCard tsRhStatAvg">
+                        <Text text="{rhView>/avgRating}" class="tsRhStatNum" />
+                        <Text text="Average Rating" class="tsRhStatLabel" />
+                    </VBox>
+                    <VBox class="tsRhStatCard tsRhStatCount">
+                        <Text text="{rhView>/count}" class="tsRhStatNum" />
+                        <Text text="Reviews" class="tsRhStatLabel" />
+                    </VBox>
+                    <VBox class="tsRhStatCard tsRhStatLatest">
+                        <Text text="{rhView>/latestLabel}" class="tsRhStatNum tsRhStatNumSm" />
+                        <Text text="Latest Review" class="tsRhStatLabel" />
+                    </VBox>
+                </HBox>
+
+                <!-- Loading -->
+                <VBox visible="{rhView>/loading}" alignItems="Center" class="sapUiMediumMarginTop">
+                    <BusyIndicator size="1.6rem" />
+                </VBox>
+
+                <!-- Empty state -->
+                <VBox visible="{= !${rhView>/loading} &amp;&amp; !${rhView>/hasRatings} }"
+                      alignItems="Center" class="tsRhEmpty">
+                    <core:Icon src="sap-icon://survey" size="2.5rem" color="#9ca3af" />
+                    <Text text="No performance ratings yet." class="sapUiSmallMarginTop tsRhEmptyText" />
+                </VBox>
+
+                <!-- Rating cards -->
+                <List items="{rhView>/ratings}"
+                      showSeparators="None"
+                      visible="{= !${rhView>/loading} &amp;&amp; ${rhView>/hasRatings} }">
+                    <CustomListItem class="tsRhCardItem">
+                        <HBox class="tsRhCard" justifyContent="SpaceBetween" alignItems="Center">
+                            <VBox class="tsRhCardLeft">
+                                <Text text="{rhView>period}" class="tsRhCardPeriod" />
+                                <Text text="{rhView>comment}" class="tsRhCardComment" />
+                            </VBox>
+                            <VBox class="tsRhCardRight" alignItems="End">
+                                <Text text="{rhView>stars}" class="tsRhStars" />
+                                <HBox alignItems="Center">
+                                    <Text text="{rhView>ratingValue}" class="tsRhScore" />
+                                    <ObjectStatus text="{rhView>category}"
+                                                  state="{rhView>categoryState}"
+                                                  class="sapUiTinyMarginBegin" />
+                                </HBox>
+                            </VBox>
+                        </HBox>
+                    </CustomListItem>
+                </List>
+
+            </VBox>
+        </content>
+    </Page>
+
+</mvc:View>

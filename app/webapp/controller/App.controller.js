@@ -96,6 +96,25 @@ sap.ui.define([
             });
             this.getView().setModel(this._oAppModel, "appView");
 
+            // Sidebar collapsible-group state (drives chevron icons via binding;
+            // the body max-height class is toggled imperatively in onToggleGroup).
+            this._oSideModel = new JSONModel({
+                timesheetOpen: false,
+                leaveOpen:     false,
+                taskOpen:      false,
+                managerOpen:   false,
+                hrOpen:        false
+            });
+            this.getView().setModel(this._oSideModel, "side");
+            // Maps a group key → the id of the VBox body it expands/collapses.
+            this._mGroupBody = {
+                timesheet: "navTimesheetBody",
+                leave:     "navLeaveBody",
+                task:      "navTaskBody",
+                manager:   "navManagerBody",
+                hr:        "navHrBody"
+            };
+
             // Reference to the popover's Avatar control — set in _openProfilePopover,
             // cleared in afterClose. Allows _applyProfilePhoto to update it async.
             this._oCurrentPopoverAvatar = null;
@@ -151,15 +170,11 @@ sap.ui.define([
 
             this.getOwnerComponent().getRouter().attachRouteMatched(this._onRouteMatched, this);
 
+            // Hide the SplitApp's built-in master toggle button — the sidebar is
+            // always shown on desktop and toggled via our own header button on
+            // mobile. All sidebar visuals are now handled in style.css
+            // (.timesheetSidebar / .tsSideNav), not via imperative DOM styling.
             setTimeout(() => {
-                const oPage = this.byId("navPage");
-                if (!oPage || !oPage.getDomRef()) return;
-
-                oPage.getDomRef().style.backgroundColor = "#1e293b";
-                oPage.getDomRef().style.borderRadius = "0";
-                oPage.getDomRef().querySelectorAll(".sapMPageBg, .sapMPage, .sapMList, .sapMListUl")
-                    .forEach(el => { el.style.borderRadius = "0"; el.style.background = "transparent"; });
-
                 const oApp = this.byId("app");
                 if (oApp) {
                     oApp.setMasterButtonText("");
@@ -167,7 +182,6 @@ sap.ui.define([
                     const oMasterBtn = oApp.getMasterButton?.();
                     if (oMasterBtn) oMasterBtn.setVisible(false);
                 }
-
                 setTimeout(() => {
                     document.querySelectorAll(
                         ".sapMSplitAppMasterBtn, .sapMSplitContainerMasterBtn, .sapMSplitAppMasterBtn button, [id*='MasterBtn']"
@@ -179,74 +193,6 @@ sap.ui.define([
                         if (el.textContent.includes("Navigation") || el.title === "Navigation") el.style.display = "none";
                     });
                 }, 500);
-
-                ["mainNavList"].forEach(sId => {
-                    const oList = this.byId(sId);
-                    if (!oList || !oList.getDomRef()) return;
-                    oList.getDomRef().style.background = "transparent";
-                    const oHeader = oList.getDomRef().querySelector(".sapMListHdr, .sapMListHdrText");
-                    if (oHeader) {
-                        oHeader.style.color = "#ffffff";
-                        oHeader.style.background = "transparent";
-                        oHeader.style.fontWeight = "600";
-                        oHeader.style.fontSize = "0.75rem";
-                        oHeader.style.letterSpacing = "1px";
-                    }
-                    oList.getItems().forEach(oItem => {
-                        if (!oItem.getDomRef()) return;
-                        oItem.getDomRef().style.background = "transparent";
-                        oItem.getDomRef().style.borderBottom = "none";
-                        oItem.getDomRef().querySelectorAll("*").forEach(el => {
-                            el.style.color = "#94a3b8"; el.style.background = "transparent";
-                        });
-                        oItem.getDomRef().addEventListener("mouseenter", () => {
-                            oItem.getDomRef().style.background = "#334155";
-                            oItem.getDomRef().style.borderRadius = "8px";
-                        });
-                        oItem.getDomRef().addEventListener("mouseleave", () => {
-                            if (!oItem.hasStyleClass("tsNavItemActive")) {
-                                oItem.getDomRef().style.background = "transparent";
-                                oItem.getDomRef().style.borderRadius = "0";
-                            }
-                        });
-                    });
-                });
-
-                setTimeout(() => {
-                    const oManagerList = this.byId("managerNavList");
-                    if (!oManagerList || !oManagerList.getDomRef()) return;
-                    oManagerList.getDomRef().style.background = "transparent";
-                    oManagerList.getItems().forEach(oItem => {
-                        if (!oItem.getDomRef()) return;
-                        oItem.getDomRef().style.background = "transparent";
-                        oItem.getDomRef().style.borderBottom = "none";
-                        oItem.getDomRef().querySelectorAll("*").forEach(el => {
-                            el.style.color = "#94a3b8"; el.style.background = "transparent";
-                        });
-                        oItem.getDomRef().addEventListener("mouseenter", () => {
-                            oItem.getDomRef().style.background = "#334155";
-                            oItem.getDomRef().style.borderRadius = "8px";
-                        });
-                        oItem.getDomRef().addEventListener("mouseleave", () => {
-                            if (!oItem.hasStyleClass("tsNavItemActive")) {
-                                oItem.getDomRef().style.background = "transparent";
-                                oItem.getDomRef().style.borderRadius = "0";
-                            }
-                        });
-                    });
-                }, 600);
-
-                const oFooter = oPage.getDomRef().querySelector(".sapMPageFooter, .sapMTB");
-                if (oFooter) {
-                    oFooter.style.background = "#1e293b";
-                    oFooter.style.borderTop = "1px solid #334155";
-                    oFooter.querySelectorAll("*").forEach(el => {
-                        el.style.background = "transparent";
-                        el.style.border = "none";
-                        el.style.color = "#94a3b8";
-                        el.style.boxShadow = "none";
-                    });
-                }
             }, 300);
 
             const _handleResize = () => {
@@ -435,40 +381,56 @@ sap.ui.define([
             }
         },
 
-        // ── Route matched ─────────────────────────────────────────────────────
+        // ── Sidebar nav lists (used for active-route highlighting) ────────────
+        _aNavListIds: [
+            "navOverviewList", "navTimesheetList", "navLeaveList",
+            "navTaskList", "navRatingList", "navManagerList", "navHrList"
+        ],
+
+        // Maps a route name → the group it lives in, so navigating to a route
+        // inside a collapsed group auto-expands that group. Standalone items
+        // (Overview, Rating History) have no entry here.
+        _mRouteToGroup: {
+            timesheet: "timesheet", history: "timesheet",
+            "apply-leave": "leave", "leave-history": "leave",
+            "task-description": "task", "task-status": "task",
+            "task-assignment": "manager", manager: "manager",
+            "approval-history": "manager", "team-attendance": "manager",
+            "performance-rating": "manager",
+            "add-employee": "hr", "all-employees": "hr", "hr-approvals": "hr"
+        },
+
+        // ── Group expand/collapse ─────────────────────────────────────────────
+        onToggleGroup(oEvent) {
+            const sGroup = oEvent.getSource().data("group");
+            this._setGroupOpen(sGroup, !this._oSideModel.getProperty("/" + sGroup + "Open"));
+        },
+
+        _setGroupOpen(sGroup, bOpen) {
+            if (!sGroup) return;
+            this._oSideModel.setProperty("/" + sGroup + "Open", bOpen);
+            const oBody = this.byId(this._mGroupBody[sGroup]);
+            if (oBody) oBody.toggleStyleClass("tsNavOpen", bOpen);
+        },
+
+        // ── Route matched — highlight the active item, auto-expand its group ──
         _onRouteMatched(oEvent) {
             const sRouteName = oEvent.getParameter("name");
-            const oRouteToList = {
-                dashboard: "mainNavList", timesheet: "mainNavList",
-                "task-description": "mainNavList", "apply-leave": "mainNavList",
-                history: "mainNavList", manager: "mainNavList",
-                "task-assignment": "mainNavList", "task-status": "mainNavList",
-                notifications: "mainNavList", "add-employee": "mainNavList",
-                "all-employees": "mainNavList", "leave-approvals": "mainNavList"
-            };
-            ["mainNavList", "managerNavList", "accountNavList"].forEach(sId => {
+
+            // Make sure the group containing the active route is expanded.
+            const sGroup = this._mRouteToGroup[sRouteName];
+            if (sGroup) this._setGroupOpen(sGroup, true);
+
+            // Toggle the active style class on the matching item across all lists.
+            // CSS (.tsNavItem.tsNavItemActive) handles all visuals — no inline DOM.
+            this._aNavListIds.forEach(sId => {
                 const oList = this.byId(sId);
                 if (!oList) return;
                 oList.getItems().forEach(oItem => {
-                    const isActive = oItem.data("target") === sRouteName && oRouteToList[sRouteName] === sId;
-                    oItem.toggleStyleClass("tsNavItemActive", isActive);
-                    if (!oItem.getDomRef()) return;
-                    if (isActive) {
-                        oItem.getDomRef().style.background = "#3b82f6";
-                        oItem.getDomRef().style.borderRadius = "8px";
-                        const title = oItem.getDomRef().querySelector(".sapMSLITitle, .sapMLIBTitle");
-                        if (title) title.style.color = "#ffffff";
-                        const icon = oItem.getDomRef().querySelector(".sapUiIcon");
-                        if (icon) icon.style.color = "#ffffff";
-                    } else {
-                        oItem.getDomRef().style.background = "transparent";
-                        const title = oItem.getDomRef().querySelector(".sapMSLITitle, .sapMLIBTitle");
-                        if (title) title.style.color = "#cbd5e1";
-                        const icon = oItem.getDomRef().querySelector(".sapUiIcon");
-                        if (icon) icon.style.color = "#94a3b8";
-                    }
+                    oItem.toggleStyleClass("tsNavItemActive", oItem.data("target") === sRouteName);
                 });
             });
+
             setTimeout(() => {
                 document.querySelectorAll(".sapMSplitAppMasterBtn, .sapMSplitContainerMasterBtn, [id*='MasterBtn']")
                     .forEach(el => { el.style.display = "none"; el.style.visibility = "hidden"; });

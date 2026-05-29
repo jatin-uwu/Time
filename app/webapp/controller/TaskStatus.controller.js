@@ -1,7 +1,9 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
-    "sap/ui/model/json/JSONModel"
-], (Controller, JSONModel) => {
+    "sap/ui/model/json/JSONModel",
+    "sap/ui/model/Filter",
+    "sap/ui/model/FilterOperator"
+], (Controller, JSONModel, Filter, FilterOperator) => {
     "use strict";
 
     const PRIORITY_STATE = { "High": "Error", "Medium": "Warning", "Low": "Success" };
@@ -47,7 +49,8 @@ sap.ui.define([
                 openCount:          0,
                 inProgressCount:    0,
                 completedCount:     0,
-                totalLabel:         "0 tasks"
+                totalLabel:         "0 tasks",
+                isManagerView:      false
             });
             this.getView().setModel(this._oTsModel, "tsView");
 
@@ -56,8 +59,29 @@ sap.ui.define([
                 .attachPatternMatched(this._onRouteMatched, this);
         },
 
+        // Managers see every team member's tasks (with the employee filter);
+        // employees/HR see only the tasks assigned to them.
+        _resolveRole() {
+            const oComp = this.getOwnerComponent();
+            let sRole = (oComp._oCurrentUser && oComp._oCurrentUser.role) || "";
+            if (!sRole) {
+                try { sRole = (localStorage.getItem("tsRole") || "").toLowerCase(); } catch (e) { /* ignore */ }
+            }
+            return (sRole || "employee").toLowerCase();
+        },
+
         _onRouteMatched() {
-            this._loadEmployees();
+            const bManager = this._resolveRole() === "manager";
+            this._oTsModel.setProperty("/isManagerView", bManager);
+            if (bManager) {
+                this._loadEmployees();
+            } else {
+                // No employee picker for non-managers; scope strictly to self.
+                this._oTsModel.setProperty("/employees", []);
+                this._oTsModel.setProperty("/employeeFilterList",
+                    [{ employeeId: "", employeeName: "All employees" }]);
+                this._oTsModel.setProperty("/filterEmployee", "");
+            }
             this._loadTasks();
         },
 
@@ -81,15 +105,37 @@ sap.ui.define([
             const oTasksModel = this.getOwnerComponent().getModel("tasks");
             const local = (oTasksModel && oTasksModel.getProperty("/items")) || [];
 
-            const oModel = this.getOwnerComponent().getModel();
+            const oComp     = this.getOwnerComponent();
+            const oModel    = oComp.getModel();
+            const bManager  = !!this._oTsModel.getProperty("/isManagerView");
+            const sSelfId   = (!bManager && oComp.getCurrentEmployeeId)
+                ? oComp.getCurrentEmployeeId() : null;
+
+            const ownOnly = (list) => {
+                if (bManager || !sSelfId) return list;
+                return (list || []).filter(t => {
+                    const tEmp = t.assignedTo_employeeId ||
+                                 (t.assignedTo && t.assignedTo.employeeId) || t.assignedTo;
+                    return tEmp === sSelfId;
+                });
+            };
+
             const finish = (remote) => {
-                const merged = this._merge(local, remote || []);
+                // Scope BOTH the local model and the remote result to self for
+                // non-managers so list + counters never leak others' tasks.
+                const merged = this._merge(ownOnly(local), ownOnly(remote || []));
                 this._oTsModel.setProperty("/allTasks", merged);
                 this._applyFilter();
             };
 
             if (!oModel) { finish([]); return; }
-            oModel.bindList("/MyTasks").requestContexts(0, 500)
+
+            // Employees/HR: fetch only their own tasks. Managers: fetch all.
+            const aFilters = sSelfId
+                ? [new Filter("assignedTo_employeeId", FilterOperator.EQ, sSelfId)]
+                : [];
+
+            oModel.bindList("/MyTasks", null, null, aFilters).requestContexts(0, 500)
                 .then(aCtx => finish(aCtx.map(c => c.getObject())))
                 .catch(() => finish([]));
         },

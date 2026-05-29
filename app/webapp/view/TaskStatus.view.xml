@@ -53,6 +53,7 @@
                             selectedKey="{tsView>/filterEmployee}"
                             change=".onFilterChange"
                             items="{tsView>/employeeFilterList}"
+                            visible="{tsView>/isManagerView}"
                             width="220px">
                         <core:Item key="{tsView>employeeId}" text="{tsView>employeeName}" />
                     </Select>

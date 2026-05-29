@@ -1,5 +1,5 @@
 <mvc:View
-    controllerName="timesheet.app.controller.HRApprovals"
+    controllerName="timesheet.app.controller.HrApproval"
     xmlns:mvc="sap.ui.core.mvc"
     xmlns="sap.m"
     xmlns:core="sap.ui.core"

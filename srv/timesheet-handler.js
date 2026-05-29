@@ -318,8 +318,20 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
                 .set({ isLocked: true, entryStatus: 'Locked' })
                 .where({ timesheet_timesheetId: tsId });
 
-            // Notify manager
+            // Notify manager — in-app notification (always) + email (if SMTP set)
             if (emp.manager_employeeId) {
+                // In-app notification so the manager sees it in the bell / page
+                // even when SMTP is not configured.
+                if (createNotification) {
+                    await createNotification(
+                        emp.manager_employeeId,
+                        'TIMESHEET_SUBMITTED',
+                        'Timesheet Awaiting Approval',
+                        `${emp.employeeName} submitted their timesheet (${hdr.weekStartDate} to ${hdr.weekEndDate}) for your approval.`,
+                        tsId
+                    );
+                }
+
                 const manager = await SELECT.one.from(EMPLOYEE).where({ employeeId: emp.manager_employeeId });
                 if (manager && manager.email) {
                     const mailer  = getMailer();

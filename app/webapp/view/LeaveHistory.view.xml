@@ -1,0 +1,102 @@
+<mvc:View
+    controllerName="timesheet.app.controller.LeaveHistory"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="leaveHistoryPage" showHeader="false" enableScrolling="true" class="tsDashboardPage">
+        <content>
+            <VBox class="sapUiSmallMargin">
+
+                <!-- Header card -->
+                <HBox class="tsLhHeader" alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center">
+                        <core:Icon src="sap-icon://history" class="tsLhHeaderIcon" />
+                        <VBox class="sapUiTinyMarginBegin">
+                            <Title text="Leave History" level="H4" class="tsLhTitle" />
+                            <Text text="All your leave requests and their status" class="tsLhSub" />
+                        </VBox>
+                    </HBox>
+                    <Button text="Apply Leave" type="Emphasized" icon="sap-icon://add"
+                            press=".onNavToApply" />
+                </HBox>
+
+                <!-- Summary chips -->
+                <HBox class="tsLhStatsRow sapUiSmallMarginTop sapUiSmallMarginBottom" wrap="Wrap">
+                    <VBox class="tsLhStatCard tsLhStatTotal">
+                        <Text text="{lhView>/totalCount}" class="tsLhStatNum" />
+                        <Text text="Total Requests" class="tsLhStatLabel" />
+                    </VBox>
+                    <VBox class="tsLhStatCard tsLhStatApproved">
+                        <Text text="{lhView>/approvedCount}" class="tsLhStatNum" />
+                        <Text text="Approved" class="tsLhStatLabel" />
+                    </VBox>
+                    <VBox class="tsLhStatCard tsLhStatPending">
+                        <Text text="{lhView>/pendingCount}" class="tsLhStatNum" />
+                        <Text text="Pending" class="tsLhStatLabel" />
+                    </VBox>
+                </HBox>
+
+                <!-- Filter -->
+                <HBox class="sapUiSmallMarginBottom" alignItems="Center">
+                    <SegmentedButton selectedKey="{lhView>/statusFilter}"
+                                     selectionChange=".onStatusFilterChange">
+                        <items>
+                            <SegmentedButtonItem key="all"      text="All" />
+                            <SegmentedButtonItem key="Pending"  text="Pending" />
+                            <SegmentedButtonItem key="Approved" text="Approved" />
+                            <SegmentedButtonItem key="Rejected" text="Rejected" />
+                        </items>
+                    </SegmentedButton>
+                </HBox>
+
+                <!-- Loading -->
+                <VBox visible="{lhView>/loading}" alignItems="Center" class="sapUiMediumMarginTop">
+                    <BusyIndicator size="1.6rem" />
+                </VBox>
+
+                <!-- Empty state -->
+                <VBox visible="{= !${lhView>/loading} &amp;&amp; !${lhView>/hasHistory} }"
+                      alignItems="Center" class="tsLhEmpty">
+                    <core:Icon src="sap-icon://inbox" size="2.5rem" color="#9ca3af" />
+                    <Text text="No leave records found." class="sapUiSmallMarginTop tsLhEmptyText" />
+                </VBox>
+
+                <!-- Table -->
+                <Table id="leaveHistoryTable"
+                       items="{lhView>/history}"
+                       class="tsLhTable"
+                       visible="{= !${lhView>/loading} &amp;&amp; ${lhView>/hasHistory} }">
+                    <columns>
+                        <Column><Text text="Leave Type" /></Column>
+                        <Column><Text text="From" /></Column>
+                        <Column><Text text="To" /></Column>
+                        <Column hAlign="Center"><Text text="Days" /></Column>
+                        <Column><Text text="Reason" /></Column>
+                        <Column hAlign="Center"><Text text="Status" /></Column>
+                    </columns>
+                    <items>
+                        <ColumnListItem>
+                            <cells>
+                                <HBox alignItems="Center">
+                                    <Text text="{lhView>leaveType}" />
+                                    <ObjectStatus text="Unpaid" state="Warning"
+                                                  visible="{lhView>isUnpaid}"
+                                                  class="sapUiTinyMarginBegin" />
+                                </HBox>
+                                <Text text="{lhView>fromDate}" />
+                                <Text text="{lhView>toDate}" />
+                                <Text text="{lhView>days}" />
+                                <Text text="{lhView>reason}" />
+                                <ObjectStatus text="{lhView>status}" state="{lhView>statusState}" />
+                            </cells>
+                        </ColumnListItem>
+                    </items>
+                </Table>
+
+            </VBox>
+        </content>
+    </Page>
+
+</mvc:View>

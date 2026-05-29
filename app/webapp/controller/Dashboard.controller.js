@@ -1,8 +1,10 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
-    "sap/ui/core/Core"
-], (Controller, JSONModel, Core) => {
+    "sap/ui/core/Core",
+    "sap/ui/model/Filter",
+    "sap/ui/model/FilterOperator"
+], (Controller, JSONModel, Core, Filter, FilterOperator) => {
     "use strict";
 
     const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -544,13 +546,38 @@ sap.ui.define([
         // ─────────────────────────────────────────────────────────────────────
         // Stats (unchanged)
         // ─────────────────────────────────────────────────────────────────────
+        // All-time timesheet stats for the "Total Timesheets" donut.
+        // Read directly from the backend (/MyTimesheets) so the counts reflect
+        // approvals/rejections immediately. The local "history" model is a
+        // localStorage cache that is never populated from the server, which is
+        // why the donut always showed 0.
         _computeStats() {
-            const oHistModel = this.getOwnerComponent().getModel("history");
-            const submissions = oHistModel ? (oHistModel.getProperty("/submissions") || []) : [];
-            this._oDashModel.setProperty("/approved", submissions.filter(s => s.status === "Approved").length);
-            this._oDashModel.setProperty("/pending", submissions.filter(s => s.status === "Pending").length);
-            this._oDashModel.setProperty("/rejected", submissions.filter(s => s.status === "Rejected").length);
-            this._oDashModel.setProperty("/total", submissions.length);
+            const oComp  = this.getOwnerComponent();
+            const oModel = oComp.getModel();
+            const sEmpId = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
+
+            const setCounts = (rows) => {
+                const approved = rows.filter(s => s.status === "Approved" || s.status === "AutoApproved").length;
+                const pending  = rows.filter(s => s.status === "Pending"  || s.status === "Submitted").length;
+                const rejected = rows.filter(s => s.status === "Rejected").length;
+                this._oDashModel.setProperty("/approved", approved);
+                this._oDashModel.setProperty("/pending",  pending);
+                this._oDashModel.setProperty("/rejected", rejected);
+                this._oDashModel.setProperty("/total",    approved + pending + rejected);
+                this._refreshDash();
+            };
+
+            if (!oModel || !sEmpId) { setCounts([]); return; }
+
+            oModel.bindList("/MyTimesheets", null, null, [
+                new Filter("employee_employeeId", FilterOperator.EQ, sEmpId)
+            ]).requestContexts(0, 500)
+                .then(aCtx => setCounts(aCtx.map(c => c.getObject()).filter(Boolean)))
+                .catch(() => {
+                    // Fallback to the (possibly stale) local cache if the request fails
+                    const oHist = oComp.getModel("history");
+                    setCounts(oHist ? (oHist.getProperty("/submissions") || []) : []);
+                });
         },
 
         // ─────────────────────────────────────────────────────────────────────
@@ -569,16 +596,11 @@ sap.ui.define([
             })
                 .then(data => {
                     const entries = JSON.parse(data.entries || "[]");
-                    const weekStatus = data.weekStatus || "None";
-
-                    // Update timesheet status counts from backend
-                    const approved = weekStatus === "Approved" ? 1 : 0;
-                    const pending = weekStatus === "Pending" ? 1 : 0;
-                    const rejected = weekStatus === "Rejected" ? 1 : 0;
-                    this._oDashModel.setProperty("/approved", approved);
-                    this._oDashModel.setProperty("/pending", pending);
-                    this._oDashModel.setProperty("/rejected", rejected);
-                    this._oDashModel.setProperty("/total", approved + pending + rejected);
+                    // NOTE: the all-time Approved/Pending/Rejected/Total donut counts
+                    // are owned solely by _computeStats() (backend /MyTimesheets).
+                    // This method computes only the SELECTED week's hours/bar/
+                    // completion — it must NOT overwrite the aggregate counts with
+                    // a single week's status (that was the bug that pinned them to 0/1).
 
                     // Build day totals from entries
                     const dayTotals = {};

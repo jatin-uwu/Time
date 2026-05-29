@@ -211,7 +211,7 @@ service EmployeeService @(path: '/employee') {
     };
 
     @(requires: 'authenticated-user')
-    action submitTimesheet(timesheetId: String(15))                        returns String;
+    action submitTimesheet(timesheetId: String(50))                        returns String;
 
     @(requires: 'authenticated-user')
     action getUserRole()                                                   returns {
@@ -406,8 +406,8 @@ service ManagerService @(path: '/manager')@(requires: 'Manager') {
         status  : String;
     };
 
-    action approveTimesheet(timesheetId: String(15), remarks: String(255)) returns String;
-    action rejectTimesheet(timesheetId: String(15), remarks: String(255))  returns String;
+    action approveTimesheet(timesheetId: String(50), remarks: String(255)) returns String;
+    action rejectTimesheet(timesheetId: String(50), remarks: String(255))  returns String;
 
     action notifyTaskAssignment(taskId: String(20),
                                 taskName: String(100),
