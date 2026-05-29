@@ -15,10 +15,21 @@
         <content>
 
             <!-- ── Compact page header ─────────────────────────────────── -->
-            <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone" alignItems="Center">
-                <core:Icon src="sap-icon://history" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
-                <Text text="Timesheet History"
-                      style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+            <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone" alignItems="Center" justifyContent="SpaceBetween">
+                <HBox alignItems="Center">
+                    <core:Icon src="sap-icon://history" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                    <Text text="Timesheet History"
+                          style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                </HBox>
+                <!-- Calendar button — reopens the week picker -->
+                <Button
+                    text="Change Week"
+                    icon="sap-icon://calendar"
+                    type="Transparent"
+                    press=".onCalendarToggle"
+                    visible="{histView>/weekSelected}"
+                    tooltip="Pick another week"
+                    class="tsHistChangeWeek" />
             </HBox>
 
             <!-- ① No week selected yet: centered calendar -->

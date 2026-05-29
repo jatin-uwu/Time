@@ -500,7 +500,17 @@ class EmployeeService extends cds.ApplicationService {
             const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
             if (!emp) return { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 };
 
-            const tasks = await SELECT.from(TASK).where({ assignedTo_employeeId: emp.employeeId });
+            // Include tasks assigned to the employee AND tasks where they are the
+            // reviewer (matches the Task Description table, which shows both).
+            const [assignedTasks, reviewTasks] = await Promise.all([
+                SELECT.from(TASK).where({ assignedTo_employeeId: emp.employeeId }),
+                SELECT.from(TASK).where({ reviewer_employeeId: emp.employeeId })
+            ]);
+            const taskMap = new Map();
+            [...(assignedTasks || []), ...(reviewTasks || [])].forEach(t => {
+                if (t && t.taskId) taskMap.set(t.taskId, t);
+            });
+            const tasks = Array.from(taskMap.values());
 
             let notStarted = 0, inProgress = 0, inReview = 0, completed = 0;
             (tasks || []).forEach(t => {
@@ -538,7 +548,17 @@ class EmployeeService extends cds.ApplicationService {
             const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
             if (!emp) return { totalPending: 0, highPriorityCount: 0, mediumPriorityCount: 0, lowPriorityCount: 0 };
 
-            const tasks = await SELECT.from(TASK).where({ assignedTo_employeeId: emp.employeeId });
+            // Include tasks assigned to the employee AND tasks where they are the
+            // reviewer (matches the Task Description table, which shows both).
+            const [assignedTasks, reviewTasks] = await Promise.all([
+                SELECT.from(TASK).where({ assignedTo_employeeId: emp.employeeId }),
+                SELECT.from(TASK).where({ reviewer_employeeId: emp.employeeId })
+            ]);
+            const taskMap = new Map();
+            [...(assignedTasks || []), ...(reviewTasks || [])].forEach(t => {
+                if (t && t.taskId) taskMap.set(t.taskId, t);
+            });
+            const tasks = Array.from(taskMap.values());
 
             let totalPending = 0, highPriorityCount = 0, mediumPriorityCount = 0, lowPriorityCount = 0;
             (tasks || []).forEach(t => {
@@ -846,11 +866,29 @@ class ManagerService extends cds.ApplicationService {
             const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
             const existing = await SELECT.one.from(PERF).where({ employee_employeeId: employeeId, reviewMonth, reviewYear });
             const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2, '0')}`;
+
+            // Notify the rated employee (shows in recent + Notifications tab).
+            const MN = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const period = `${MN[reviewMonth] || reviewMonth} ${reviewYear}`;
+            const notifyEmployee = async (bUpdated) => {
+                await createNotification(
+                    employeeId,
+                    'PERFORMANCE_RATED',
+                    bUpdated ? 'Performance Rating Updated ⭐' : 'New Performance Rating ⭐',
+                    `${manager.employeeName || 'Your manager'} rated you ${ratingValue}/5` +
+                        `${ratingCategory ? ' (' + ratingCategory + ')' : ''} for ${period}.` +
+                        `${reviewComment ? ' Comment: ' + reviewComment : ''}`,
+                    ratingId
+                );
+            };
+
             if (existing) {
                 await UPDATE(PERF).set({ ratingValue, reviewComment: reviewComment || '', ratingCategory: ratingCategory || '' }).where({ ratingId: existing.ratingId });
+                await notifyEmployee(true);
                 return { ratingId: existing.ratingId, message: `Rating updated for ${employeeId} — ${reviewMonth}/${reviewYear}` };
             }
             await INSERT.into(PERF).entries({ ratingId, employee_employeeId: employeeId, ratingValue, reviewMonth, reviewYear, reviewComment: reviewComment || '', ratingCategory: ratingCategory || '' });
+            await notifyEmployee(false);
             return { ratingId, message: `Rating submitted for ${employeeId} — ${reviewMonth}/${reviewYear}` };
         });
 

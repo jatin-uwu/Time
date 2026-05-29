@@ -202,7 +202,6 @@ sap.ui.define([
                         })
                         .then(r => r.ok ? r.json() : Promise.reject(new Error("Approve failed: " + r.status)))
                         .then(() => {
-                            this._postNotification(sub.weekStart, sub.weekRange, "approved", "", sub.employeeId);
                             this._loadSubmissions();
                             MessageToast.show("Timesheet approved.");
                         })
@@ -253,7 +252,6 @@ sap.ui.define([
                         })
                         .then(r => r.ok ? r.json() : Promise.reject(new Error("Reject failed: " + r.status)))
                         .then(() => {
-                            this._postNotification(sub.weekStart, sub.weekRange, "rejected", sComment, sub.employeeId);
                             this._loadSubmissions();
                             MessageToast.show(`Timesheet rejected. ${sub.employeeName || "Employee"} has been notified.`);
                         })
@@ -406,7 +404,6 @@ sap.ui.define([
             .then(() => {
                 this._oMgrModel.setProperty("/selectedStatus",  "Approved");
                 this._oMgrModel.setProperty("/selectedRemarks", "");
-                this._postNotification(sub.weekStart, sub.weekRange, "approved", "", sub.employeeId);
                 this._loadSubmissions();
                 this._rebuildStatus("Approved");
                 MessageToast.show("Timesheet approved.");
@@ -473,7 +470,6 @@ sap.ui.define([
             .then(() => {
                 this._oMgrModel.setProperty("/selectedStatus",  "Rejected");
                 this._oMgrModel.setProperty("/selectedRemarks", sComment);
-                this._postNotification(sub.weekStart, sub.weekRange, "rejected", sComment, sub.employeeId);
                 this._loadSubmissions();
                 this._rebuildStatus("Rejected");
                 MessageToast.show(`Timesheet rejected. ${sub.employeeName || "Employee"} has been notified.`);
@@ -779,36 +775,6 @@ sap.ui.define([
         // ════════════════════════════════════════════════════════════════════
         // SHARED HELPERS
         // ════════════════════════════════════════════════════════════════════
-
-        _postNotification(sWeekStart, sWeekRange, sType, sComment, sRecipientId) {
-            const oComp       = this.getOwnerComponent();
-            const oNotifModel = oComp.getModel("notifications");
-            if (!oNotifModel) return;
-
-            const items = oNotifModel.getProperty("/items") || [];
-            const message = sType === "approved"
-                ? `Your timesheet for ${sWeekRange} has been approved by your manager.`
-                : `Your timesheet for ${sWeekRange} was rejected. Reason: ${sComment}`;
-
-            const notif = {
-                weekStart,
-                weekRange:           sWeekRange,
-                type:                sType,
-                message,
-                read:                false,
-                timestamp:           new Date().toISOString(),
-                recipientEmployeeId: sRecipientId || null
-            };
-
-            const idx = items.findIndex(n =>
-                n.weekStart === sWeekStart &&
-                (n.recipientEmployeeId || null) === (sRecipientId || null)
-            );
-            if (idx >= 0) { items[idx] = notif; } else { items.unshift(notif); }
-
-            oNotifModel.setProperty("/items", items);
-            oComp.persistNotifications();
-        },
 
         _rebuildStatus(sNewStatus) {
             if (!this._selectedSub) return;

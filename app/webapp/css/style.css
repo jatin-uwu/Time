@@ -1458,6 +1458,20 @@ html, body { margin: 0; height: 100%; }
     color: #ffffff;
     font-size: 1.25rem;
 }
+/* Calendar "Change Week" button on the History blue header */
+.tsHistChangeWeek .sapMBtnInner {
+    background: rgba(255, 255, 255, 0.15) !important;
+    border: 1px solid rgba(255, 255, 255, 0.45) !important;
+    border-radius: 8px !important;
+}
+.tsHistChangeWeek .sapMBtnInner:hover {
+    background: rgba(255, 255, 255, 0.28) !important;
+}
+.tsHistChangeWeek .sapMBtnContent,
+.tsHistChangeWeek .sapUiIcon {
+    color: #ffffff !important;
+    font-weight: 600 !important;
+}
 .tsPageHeaderTitle .sapMTitleInner {
     font-weight: 600 !important;
     color: #ffffff !important;

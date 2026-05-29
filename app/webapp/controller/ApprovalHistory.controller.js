@@ -41,26 +41,63 @@ sap.ui.define([
         },
 
         _loadAll() {
+            this._pTeamIds = null; // refresh team scope on each (re)load
             this._loadTimesheetHistory();
             this._loadPrevWeekHistory();
             this._loadLeaveHistory();
         },
 
-        // ── Timesheet History ─────────────────────────────────────────────
-        _loadTimesheetHistory() {
+        // Set of employeeIds reporting to the logged-in manager.
+        // /manager/Employees has a READ handler that already returns only the
+        // manager's active direct reports — we reuse it to scope all 3 tabs.
+        _getTeamIds() {
+            if (this._pTeamIds) return this._pTeamIds;
             const oMgrModel = this.getOwnerComponent().getModel("manager");
-            if (!oMgrModel) return;
+            if (!oMgrModel) { this._pTeamIds = Promise.resolve(null); return this._pTeamIds; }
+            this._pTeamIds = oMgrModel.bindList("/Employees").requestContexts(0, 500)
+                .then(aCtx => new Set(aCtx.map(c => c.getObject()).filter(Boolean).map(e => e.employeeId)))
+                .catch(() => null); // null → no scoping (show all) rather than break
+            return this._pTeamIds;
+        },
 
-            oMgrModel.bindList("/PendingApprovals", null, null, null, {
-                $expand: "employee"
-            }).requestContexts(0, 500)
-                .then(aCtx => {
-                    const all = aCtx.map(c => c.getObject()).filter(Boolean);
-                    const records = all.map(ts => {
+        // Resolve an employee name via the component cache / builtin directory.
+        _resolveName(sEmpId) {
+            const oComp = this.getOwnerComponent();
+            if (oComp.getEmployeeById) {
+                return oComp.getEmployeeById(sEmpId)
+                    .then(emp => (emp && emp.employeeName) || sEmpId)
+                    .catch(() => sEmpId);
+            }
+            return Promise.resolve(sEmpId);
+        },
+
+        // ── Timesheet History ─────────────────────────────────────────────
+        // FIX: PendingApprovals only returns status='Pending', so approved/
+        // rejected history was never shown. Read ALL headers from /MyTimesheets
+        // (unscoped projection) and scope to the manager's team client-side.
+        _loadTimesheetHistory() {
+            const oModel = this.getOwnerComponent().getModel(); // default /employee
+            if (!oModel) return;
+
+            Promise.all([
+                this._getTeamIds(),
+                oModel.bindList("/MyTimesheets").requestContexts(0, 1000)
+            ])
+                .then(([teamIds, aCtx]) => {
+                    let all = aCtx.map(c => c.getObject()).filter(Boolean);
+                    // Only items that went through (or are in) the approval flow.
+                    all = all.filter(ts => ts.status && ts.status !== "Draft" && ts.status !== "PrevWeekApproved");
+                    if (teamIds) all = all.filter(ts => teamIds.has(ts.employee_employeeId));
+                    return Promise.all(all.map(ts =>
+                        this._resolveName(ts.employee_employeeId).then(name => { ts.__name = name; return ts; })
+                    ));
+                })
+                .then(rows => {
+                    const records = rows.map(ts => {
                         const ws = ts.weekStartDate ? new Date(ts.weekStartDate + "T00:00:00") : null;
                         const we = ts.weekEndDate   ? new Date(ts.weekEndDate   + "T00:00:00") : null;
                         return {
-                            employeeName: (ts.employee && ts.employee.employeeName) || ts.employee_employeeId || "—",
+                            employeeName: ts.__name || ts.employee_employeeId || "—",
                             weekRange:    ws && we ? `${toShortLabel(ws)} – ${toShortLabel(we)}` : ts.weekStartDate || "",
                             submittedOn:  ts.submittedOn ? new Date(ts.submittedOn).toLocaleString() : "",
                             status:       ts.status || "—",
@@ -68,6 +105,7 @@ sap.ui.define([
                             weekStartDate: ts.weekStartDate || ""
                         };
                     });
+                    records.sort((a, b) => (b.weekStartDate || "").localeCompare(a.weekStartDate || ""));
                     this._oModel.setProperty("/allTimesheetRecords", records);
                     this._applyTimesheetFilter();
                 })
@@ -79,20 +117,16 @@ sap.ui.define([
             const oMgrModel = this.getOwnerComponent().getModel("manager");
             if (!oMgrModel) return;
 
-            oMgrModel.bindList("/PrevWeekRequests").requestContexts(0, 500)
-                .then(aCtx => {
-                    const all = aCtx.map(c => c.getObject()).filter(Boolean);
-                    const oComp = this.getOwnerComponent();
-                    const empPromises = all.map(r => {
-                        if (oComp.getEmployeeById) {
-                            return oComp.getEmployeeById(r.employee_employeeId)
-                                .then(emp => { r.employeeName = emp ? emp.employeeName : r.employee_employeeId; return r; })
-                                .catch(() => { r.employeeName = r.employee_employeeId; return r; });
-                        }
-                        r.employeeName = r.employee_employeeId;
-                        return Promise.resolve(r);
-                    });
-                    return Promise.all(empPromises);
+            Promise.all([
+                this._getTeamIds(),
+                oMgrModel.bindList("/PrevWeekRequests").requestContexts(0, 500)
+            ])
+                .then(([teamIds, aCtx]) => {
+                    let all = aCtx.map(c => c.getObject()).filter(Boolean);
+                    if (teamIds) all = all.filter(r => teamIds.has(r.employee_employeeId));
+                    return Promise.all(all.map(r =>
+                        this._resolveName(r.employee_employeeId).then(name => { r.employeeName = name; return r; })
+                    ));
                 })
                 .then(enriched => {
                     const records = enriched.map(r => {
@@ -108,6 +142,7 @@ sap.ui.define([
                             weekStartDate:   r.weekStartDate || ""
                         };
                     });
+                    records.sort((a, b) => (b.weekStartDate || "").localeCompare(a.weekStartDate || ""));
                     this._oModel.setProperty("/allPrevWeekRecords", records);
                     this._applyPrevWeekFilter();
                 })
@@ -119,20 +154,16 @@ sap.ui.define([
             const oMgrModel = this.getOwnerComponent().getModel("manager");
             if (!oMgrModel) return;
 
-            oMgrModel.bindList("/LeaveRequests").requestContexts(0, 500)
-                .then(aCtx => {
-                    const all = aCtx.map(c => c.getObject()).filter(Boolean);
-                    const oComp = this.getOwnerComponent();
-                    const empPromises = all.map(r => {
-                        if (oComp.getEmployeeById) {
-                            return oComp.getEmployeeById(r.employee_employeeId)
-                                .then(emp => { r.employeeName = emp ? emp.employeeName : r.employee_employeeId; return r; })
-                                .catch(() => { r.employeeName = r.employee_employeeId; return r; });
-                        }
-                        r.employeeName = r.employee_employeeId;
-                        return Promise.resolve(r);
-                    });
-                    return Promise.all(empPromises);
+            Promise.all([
+                this._getTeamIds(),
+                oMgrModel.bindList("/LeaveRequests").requestContexts(0, 500)
+            ])
+                .then(([teamIds, aCtx]) => {
+                    let all = aCtx.map(c => c.getObject()).filter(Boolean);
+                    if (teamIds) all = all.filter(r => teamIds.has(r.employee_employeeId));
+                    return Promise.all(all.map(r =>
+                        this._resolveName(r.employee_employeeId).then(name => { r.employeeName = name; return r; })
+                    ));
                 })
                 .then(enriched => {
                     const records = enriched.map(r => ({
@@ -143,8 +174,9 @@ sap.ui.define([
                         days:         r.days       || 0,
                         reason:       r.reason     || "",
                         status:       r.status     || "—",
-                        remarks:      r.remarks    || ""
+                        remarks:      r.managerRemarks || r.remarks || ""
                     }));
+                    records.sort((a, b) => (b.fromDate || "").localeCompare(a.fromDate || ""));
                     this._oModel.setProperty("/allLeaveRecords", records);
                     this._applyLeaveFilter();
                 })
