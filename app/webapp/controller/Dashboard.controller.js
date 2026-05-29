@@ -1253,7 +1253,15 @@ sap.ui.define([
                 return;
             }
 
-            oMgrModel.getMetaModel().requestObject("/Notifications").then(() => {
+            oMgrModel.getMetaModel().requestObject("/Notifications").then((oEntityType) => {
+
+                // ManagerService does not expose a Notifications entity, so
+                // requestObject resolves to undefined. Skip the bindList (which
+                // would 404) and use the action-based fallback instead.
+                if (!oEntityType) {
+                    this._loadNotificationsFallback();
+                    return;
+                }
 
                 oMgrModel.bindList("/Notifications", null, null, null, {
                     $$groupId: "$direct"

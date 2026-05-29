@@ -196,31 +196,22 @@ sap.ui.define([
                     return new Date(b.notifiedAt || 0) - new Date(a.notifiedAt || 0);
                 });
 
-                // Priority: action items (freshest from backend action),
-                // then OData backend items, then local model items
-                const merged = dedup([...actionItems, ...backendItems, ...localMine]);
-
-                // Sort newest first
-                merged.sort((a, b) =>
-                    new Date(b.notifiedAt || 0) - new Date(a.notifiedAt || 0)
-                );
-
-                // Apply persisted read state — overrides backend isRead:false after mark-all-read
-                const readKeys = new Set(JSON.parse(localStorage.getItem("tsNotifReadKeys") || "[]"));
-                merged.forEach(n => {
-                    if (readKeys.has((n.title || "") + "|" + (n.notifiedAt || ""))) {
-                        n.isRead = true;
-                    }
-                });
-
-                const unread = merged.filter(n => !n.isRead).length;
-
-                this._oNotifViewModel.setProperty("/notifications",    merged);
-                this._oNotifViewModel.setProperty("/unreadCount",      unread);
-                this._oNotifViewModel.setProperty("/hasNotifications", merged.length > 0);
-                this._oNotifViewModel.setProperty("/loading",          false);
-                this._applyFiltersAndRender();
+            // Apply persisted read state — overrides isRead:false after mark-all-read
+            // so the state survives navigation and a backend re-fetch.
+            var readKeys = new Set(JSON.parse(localStorage.getItem("tsNotifReadKeys") || "[]"));
+            mine.forEach(function (n) {
+                if (readKeys.has((n.title || "") + "|" + (n.notifiedAt || ""))) {
+                    n.isRead = true;
+                }
             });
+
+            var unread = mine.filter(function (n) { return !n.isRead; }).length;
+            this._oNotifViewModel.setProperty("/notifications",    mine);
+            this._oNotifViewModel.setProperty("/unreadCount",      unread);
+            this._oNotifViewModel.setProperty("/totalCount",       mine.length);
+            this._oNotifViewModel.setProperty("/hasNotifications", mine.length > 0);
+            this._oNotifViewModel.setProperty("/hasMore",          false);
+            this._applyFiltersAndRender();
         },
 
         // ═══════════════════════════════════════════════════════════════════════
