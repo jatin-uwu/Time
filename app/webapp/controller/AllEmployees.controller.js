@@ -215,11 +215,6 @@ sap.ui.define([
             }).catch(() => MessageToast.show("Could not download document."));
         },
 
-        // ── View complete profile → expand all sections ──────────────────────
-        onViewCompleteProfile() {
-            this._oDetailModel.setProperty("/showAll", true);
-        },
-
         // ── Activate / Deactivate ─────────────────────────────────────────────
         onToggleStatus() {
             const emp = this._oDetailModel.getProperty("/emp");

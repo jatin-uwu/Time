@@ -46,27 +46,27 @@
                          rowSelectionChange=".onRowSelect"
                          class="tsEmpTable">
                     <t:columns>
-                        <t:Column width="6rem" sortProperty="employeeId">
+                        <t:Column width="9%" sortProperty="employeeId">
                             <Label text="ID" />
                             <t:template><Text text="{emp>employeeId}" /></t:template>
                         </t:Column>
-                        <t:Column width="11rem" sortProperty="employeeName">
+                        <t:Column width="18%" sortProperty="employeeName">
                             <Label text="Name" />
                             <t:template><Text text="{emp>employeeName}" /></t:template>
                         </t:Column>
-                        <t:Column width="15rem" sortProperty="email">
+                        <t:Column width="27%" sortProperty="email">
                             <Label text="Email" />
                             <t:template><Text text="{emp>email}" /></t:template>
                         </t:Column>
-                        <t:Column width="10rem" sortProperty="department">
+                        <t:Column width="16%" sortProperty="department">
                             <Label text="Department" />
                             <t:template><Text text="{emp>department}" /></t:template>
                         </t:Column>
-                        <t:Column width="10rem" sortProperty="designation">
+                        <t:Column width="18%" sortProperty="designation">
                             <Label text="Designation" />
                             <t:template><Text text="{emp>designation}" /></t:template>
                         </t:Column>
-                        <t:Column width="7rem" sortProperty="status">
+                        <t:Column width="12%" sortProperty="status">
                             <Label text="Status" />
                             <t:template>
                                 <ObjectStatus text="{emp>status}"
@@ -103,16 +103,14 @@
                                 tooltip="Close" press=".onCloseDrawer" class="tsEmpDrawerClose" />
                     </HBox>
 
-                    <!-- Action buttons -->
-                    <HBox class="tsEmpDrawerActions" wrap="Wrap">
+                    <!-- Action buttons (single line) -->
+                    <HBox class="tsEmpDrawerActions" alignItems="Center">
                         <Button text="Edit" icon="sap-icon://edit" type="Emphasized"
-                                press=".onEditEmployee" class="sapUiTinyMarginEnd sapUiTinyMarginBottom" />
+                                press=".onEditEmployee" />
                         <Button text="{detail>/statusActionText}" icon="{detail>/statusActionIcon}"
-                                press=".onToggleStatus" class="sapUiTinyMarginEnd sapUiTinyMarginBottom" />
-                        <Button text="Complete Profile" icon="sap-icon://expand-group"
-                                press=".onViewCompleteProfile" class="sapUiTinyMarginEnd sapUiTinyMarginBottom" />
+                                press=".onToggleStatus" />
                         <Button text="Reset Password" icon="sap-icon://key"
-                                press=".onResetPassword" class="sapUiTinyMarginBottom" />
+                                press=".onResetPassword" />
                     </HBox>
 
                     <!-- Scrollable content -->
@@ -137,7 +135,7 @@
                                 </VBox>
                             </Panel>
 
-                            <Panel headerText="Identity" expandable="true" expanded="{detail>/showAll}" class="tsEmpDrawerPanel">
+                            <Panel headerText="Identity" expandable="true" expanded="true" class="tsEmpDrawerPanel">
                                 <VBox class="tsEmpDrawerFields">
                                     <HBox class="tsEmpField"><core:Icon src="sap-icon://birthday-invite" class="tsEmpFieldIcon" /><VBox><Text text="Date of Birth" class="tsEmpFieldLabel" /><Text text="{= ${detail>/emp/dateOfBirth} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
                                     <HBox class="tsEmpField"><core:Icon src="sap-icon://person-placeholder" class="tsEmpFieldIcon" /><VBox><Text text="Gender" class="tsEmpFieldLabel" /><Text text="{= ${detail>/emp/gender} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
