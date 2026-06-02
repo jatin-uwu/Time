@@ -6,7 +6,7 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
-    "sap/m/MessageBox",
+    "timesheet/app/util/MessageBox",
     "sap/m/MessageToast",
     "sap/m/Input",
     "sap/m/Select",
@@ -17,11 +17,16 @@ sap.ui.define([
     "sap/m/Label",
     "sap/m/ObjectStatus",
     "sap/ui/core/Item",
-    "sap/ui/core/HTML"
+    "sap/ui/core/HTML",
+    "timesheet/app/util/CustomDialog",
+    "sap/m/TextArea",
+    "sap/m/MessageStrip",
+    "sap/ui/core/ListItem"
 ], function (
     Controller, JSONModel,
     MessageBox, MessageToast,
-    Input, Select, Text, Button, HBox, VBox, Label, ObjectStatus, Item, HTML
+    Input, Select, Text, Button, HBox, VBox, Label, ObjectStatus, Item, HTML,
+    CustomDialog, TextArea, MessageStrip, ListItem
 ) {
     "use strict";
 
@@ -994,7 +999,63 @@ sap.ui.define([
                 await this._loadHREmployees();
             }
 
-            this.byId("hrUnlockDialog").open();
+            this._getHrUnlockDialog().open();
+        },
+
+        // Lazily build the HR-unlock dialog (custom dialog control). Bound to the
+        // same hrUnlockModel / hrListModel as before — logic unchanged.
+        _getHrUnlockDialog: function () {
+            if (this._oHrUnlockDialog) return this._oHrUnlockDialog;
+
+            this._oHrApproverSelect = new Select({
+                width: "100%",
+                selectedKey: "{hrUnlockModel>/selectedHrId}"
+            });
+            this._oHrApproverSelect.bindItems({
+                path: "hrListModel>/hrEmployees",
+                template: new ListItem({
+                    key: "{hrListModel>employeeId}",
+                    text: "{hrListModel>employeeName}",
+                    additionalText: "{hrListModel>designation}"
+                })
+            });
+
+            this._oHrUnlockDialog = new CustomDialog({
+                title: "Request HR Approval to Fill Missed Day",
+                contentWidth: "480px",
+                content: [
+                    new VBox({
+                        items: [
+                            new Label({ text: "Missed Date", required: true }),
+                            new Input({ editable: false, value: "{hrUnlockModel>/targetDate}" })
+                                .addStyleClass("sapUiTinyMarginBottom"),
+                            new Label({ text: "Select HR Approver", required: true })
+                                .addStyleClass("sapUiSmallMarginTop"),
+                            this._oHrApproverSelect,
+                            new Label({ text: "Reason for Missing" })
+                                .addStyleClass("sapUiSmallMarginTop"),
+                            new TextArea({
+                                rows: 3, width: "100%", maxLength: 255,
+                                value: "{hrUnlockModel>/employeeRemarks}",
+                                placeholder: "Briefly explain why this date was missed..."
+                            }),
+                            new MessageStrip({
+                                text: "HR will receive an email. Once approved, you can fill this date.",
+                                type: "Information", showIcon: true, showCloseButton: false
+                            }).addStyleClass("sapUiSmallMarginTop")
+                        ]
+                    })
+                ],
+                beginButton: new Button({
+                    text: "Send Request", type: "Emphasized", icon: "sap-icon://paper-plane",
+                    press: this.onSubmitHRUnlockRequest.bind(this)
+                }),
+                endButton: new Button({
+                    text: "Cancel", press: this.onCloseHRUnlockDialog.bind(this)
+                })
+            });
+            this.getView().addDependent(this._oHrUnlockDialog);
+            return this._oHrUnlockDialog;
         },
 
         _loadHREmployees: async function () {
@@ -1021,7 +1082,9 @@ sap.ui.define([
         },
 
         onSubmitHRUnlockRequest: async function () {
-            const hrId = this.byId("hrApproverSelect").getSelectedKey();
+            const hrId = this._oHrApproverSelect
+                ? this._oHrApproverSelect.getSelectedKey()
+                : this.getView().getModel("hrUnlockModel").getProperty("/selectedHrId");
             const hrModel = this.getView().getModel("hrUnlockModel");
 
             if (!hrId) {
@@ -1037,7 +1100,7 @@ sap.ui.define([
                     employeeRemarks: hrModel.getProperty("/employeeRemarks")
                 });
                 MessageToast.show("HR unlock request sent successfully!");
-                this.byId("hrUnlockDialog").close();
+                if (this._oHrUnlockDialog) this._oHrUnlockDialog.close();
                 await this._loadTimesheetData();
             } catch (e) {
                 MessageBox.error("Failed to send HR unlock request: " + (e.message || e));
@@ -1047,7 +1110,7 @@ sap.ui.define([
         },
 
         onCloseHRUnlockDialog: function () {
-            this.byId("hrUnlockDialog").close();
+            if (this._oHrUnlockDialog) this._oHrUnlockDialog.close();
         },
 
         // ══════════════════════════════════════════════════════════════════════
@@ -1079,7 +1142,50 @@ sap.ui.define([
             }
             prevModel.setProperty("/managerName", managerName);
 
-            this.byId("prevWeekDialog").open();
+            this._getPrevWeekDialog().open();
+        },
+
+        // Lazily build the previous-week approval dialog (custom dialog control).
+        _getPrevWeekDialog: function () {
+            if (this._oPrevWeekDialog) return this._oPrevWeekDialog;
+
+            this._oPrevWeekDialog = new CustomDialog({
+                title: "Request Previous Week Timesheet Approval",
+                contentWidth: "460px",
+                content: [
+                    new VBox({
+                        items: [
+                            new MessageStrip({
+                                text: "{prevWeekModel>/infoText}",
+                                type: "Warning", showIcon: true, showCloseButton: false
+                            }).addStyleClass("sapUiSmallMarginBottom"),
+                            new Label({ text: "Previous Week" }),
+                            new Input({ editable: false, value: "{prevWeekModel>/weekRangeLabel}" })
+                                .addStyleClass("sapUiTinyMarginBottom"),
+                            new Label({ text: "Your Manager" })
+                                .addStyleClass("sapUiSmallMarginTop"),
+                            new Input({ editable: false, value: "{prevWeekModel>/managerName}" })
+                                .addStyleClass("sapUiTinyMarginBottom"),
+                            new Label({ text: "Reason (optional)" })
+                                .addStyleClass("sapUiSmallMarginTop"),
+                            new TextArea({
+                                rows: 3, width: "100%", maxLength: 255,
+                                value: "{prevWeekModel>/employeeRemarks}",
+                                placeholder: "Explain why the previous week was not submitted..."
+                            })
+                        ]
+                    })
+                ],
+                beginButton: new Button({
+                    text: "Send for Approval", type: "Emphasized", icon: "sap-icon://paper-plane",
+                    press: this.onConfirmPrevWeekRequest.bind(this)
+                }),
+                endButton: new Button({
+                    text: "Cancel", press: this.onClosePrevWeekDialog.bind(this)
+                })
+            });
+            this.getView().addDependent(this._oPrevWeekDialog);
+            return this._oPrevWeekDialog;
         },
 
         onConfirmPrevWeekRequest: async function () {
@@ -1093,7 +1199,7 @@ sap.ui.define([
                     employeeRemarks: remarks
                 });
                 MessageToast.show("Approval request sent to your manager!");
-                this.byId("prevWeekDialog").close();
+                if (this._oPrevWeekDialog) this._oPrevWeekDialog.close();
                 await this._loadTimesheetData();
             } catch (e) {
                 MessageBox.error("Failed to send request: " + (e.message || e));
@@ -1103,7 +1209,7 @@ sap.ui.define([
         },
 
         onClosePrevWeekDialog: function () {
-            this.byId("prevWeekDialog").close();
+            if (this._oPrevWeekDialog) this._oPrevWeekDialog.close();
         },
 
         // ══════════════════════════════════════════════════════════════════════

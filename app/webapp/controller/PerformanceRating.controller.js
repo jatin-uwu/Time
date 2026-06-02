@@ -1,7 +1,8 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
-    "sap/ui/model/json/JSONModel"
-], (Controller, JSONModel) => {
+    "sap/ui/model/json/JSONModel",
+    "timesheet/app/util/MessageBox"
+], (Controller, JSONModel, MessageBox) => {
     "use strict";
 
     const MONTH_NAMES = [
@@ -242,7 +243,7 @@ sap.ui.define([
             const form = this._oModel.getProperty("/form");
 
             if (!form.employeeId) {
-                sap.m.MessageBox.warning("Please select an employee.");
+                MessageBox.warning("Please select an employee.");
                 return;
             }
 
@@ -283,7 +284,7 @@ sap.ui.define([
                     } catch (e) {
                         if (oErr?.message) msg = oErr.message;
                     }
-                    sap.m.MessageBox.error(msg);
+                    MessageBox.error(msg);
                 });
         },
 

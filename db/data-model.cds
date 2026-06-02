@@ -96,7 +96,10 @@ entity TaskUpdate : managed {
 }
 
 entity TimesheetHeader : managed {
-    key timesheetId    : String(15);
+    // Generated as "<employeeId>-<weekStart>" (e.g. EMP1002-2026-05-25 = 18 chars),
+    // so 15 was too short and overflowed on HANA (NVARCHAR length is enforced on
+    // HANA but ignored on SQLite — the cause of the deployed-only 500s). Widened.
+    key timesheetId    : String(50);
 
     employee           : Association to EmployeeMaster;
 
@@ -120,7 +123,9 @@ entity TimesheetHeader : managed {
 }
 
 entity TimesheetEntry : managed {
-    key entryId        : String(15);
+    // Generated as "<timesheetId>-<taskId>-<workDate>" (~37 chars) — 15 overflowed
+    // on HANA. Widened so saves persist in the deployed environment.
+    key entryId        : String(60);
 
     timesheet          : Association to TimesheetHeader;
     task               : Association to TaskMaster;
@@ -156,7 +161,9 @@ entity TimesheetDayUnlockRequest : managed {
 // to manager. Manager approves → TimesheetHeader for that week is created
 // (or unlocked) and the employee can fill + submit it directly.
 entity TimesheetPrevWeekRequest : managed {
-    key requestId       : String(30);       // e.g. EMP1001-PREV-1716000000000
+    // Generated as "<employeeId>-PREV-<timestamp>-<rand>" (~31 chars) — 30 was
+    // 1 char short and overflowed on HANA (deployed-only 500 on prev-week request).
+    key requestId       : String(50);       // e.g. EMP1001-PREV-1716000000000-AB12
 
     employee            : Association to EmployeeMaster;
     weekStartDate       : Date;             // Monday of the previous week
@@ -174,12 +181,14 @@ entity TimesheetPrevWeekRequest : managed {
     resolvedOn          : Timestamp;
 
     // Once approved, this links to the TimesheetHeader that was unlocked
-    timesheetId         : String(15);
+    // (same 18-char "<employeeId>-<weekStart>" format → must match the widened key).
+    timesheetId         : String(50);
 }
 
 
 entity LeaveRequest : managed {
-    key leaveId        : String(20);
+    // Generated as "<employeeId>-LV-<timestamp>" (~24 chars) — 20 overflowed on HANA.
+    key leaveId        : String(40);
     employee           : Association to EmployeeMaster;
     leaveType          : String(20);   // Casual / Sick / Paid / Maternity / Paternity
     fromDate           : Date;

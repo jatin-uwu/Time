@@ -2,8 +2,8 @@ sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
-    "sap/m/MessageBox",
-    "sap/m/Dialog",
+    "timesheet/app/util/MessageBox",
+    "timesheet/app/util/CustomDialog",
     "sap/m/Button",
     "sap/m/Select",
     "sap/m/Label",
@@ -636,7 +636,6 @@ sap.ui.define([
 
             const oDialog = new Dialog({
                 title: "Select Reviewer",
-                type: "Message",
                 content: [
                     new VBox({
                         items: [

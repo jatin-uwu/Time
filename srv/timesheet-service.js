@@ -836,6 +836,10 @@ class ManagerService extends cds.ApplicationService {
             const header = await SELECT.one.from(HEADER).where({ timesheetId });
             if (!header) return req.error(404, `Timesheet '${timesheetId}' not found.`);
             if (header.status !== 'Pending') return req.error(400, `Cannot approve — current status is '${header.status}'.`);
+            // Issue 4: only the employee's assigned manager may approve.
+            if (!(await this._managesEmployee(req, header.employee_employeeId))) {
+                return req.error(403, 'You are not authorised to approve this timesheet.');
+            }
             await UPDATE(HEADER).set({ status: 'Approved', approvedOn: new Date(), remarks: remarks || '' }).where({ timesheetId });
             const hdr = await SELECT.one.from(HEADER).columns('employee_employeeId').where({ timesheetId });
             if (hdr) await createNotification(hdr.employee_employeeId, 'TIMESHEET_APPROVED', 'Timesheet Approved ✓', `Your timesheet ${timesheetId} has been approved.${remarks ? ' Remarks: ' + remarks : ''}`, timesheetId);
@@ -919,6 +923,10 @@ class ManagerService extends cds.ApplicationService {
             const header = await SELECT.one.from(HEADER).where({ timesheetId });
             if (!header) return req.error(404, `Timesheet '${timesheetId}' not found.`);
             if (header.status !== 'Pending') return req.error(400, `Cannot reject — current status is '${header.status}'.`);
+            // Issue 4: only the employee's assigned manager may reject.
+            if (!(await this._managesEmployee(req, header.employee_employeeId))) {
+                return req.error(403, 'You are not authorised to reject this timesheet.');
+            }
             await UPDATE(HEADER).set({ status: 'Rejected', rejectedOn: new Date(), remarks: remarks || '' }).where({ timesheetId });
             const hdr2 = await SELECT.one.from(HEADER).columns('employee_employeeId').where({ timesheetId });
             if (hdr2) await createNotification(hdr2.employee_employeeId, 'TIMESHEET_REJECTED', 'Timesheet Returned ✗', `Your timesheet ${timesheetId} was returned.${remarks ? ' Reason: ' + remarks : ''}`, timesheetId);
@@ -983,6 +991,51 @@ class ManagerService extends cds.ApplicationService {
                     isActive: true
                 })
                 .orderBy('employeeName');
+        });
+
+        // ── Issue 4: strict manager-scoped visibility ─────────────────────────
+        // The projections (PendingApprovals / PrevWeekRequests / LeaveRequests)
+        // had no manager filter, so EVERY manager could see (and act on) other
+        // managers' employees' requests. These before-READ hooks restrict every
+        // read to the logged-in manager's own team. Using req.query.where keeps
+        // OData $expand / paging / the projection's status filter intact.
+        const _resolveManager = async (req) => {
+            const user = req.user || {};
+            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            return email
+                ? await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email })
+                : null;
+        };
+        const _teamIdsOf = async (managerId) => {
+            const rows = await SELECT.from(EMPLOYEE).columns('employeeId')
+                .where({ manager_employeeId: managerId });
+            return rows.map(r => r.employeeId);
+        };
+        // Impossible value → guarantees an empty result set (avoids `IN ()`).
+        const NO_MATCH = '___no_manager_match___';
+
+        // Timesheet approvals: header has no manager field → scope via the
+        // employee's manager (the manager's direct-report ids).
+        this.before('READ', 'PendingApprovals', async (req) => {
+            const mgr = await _resolveManager(req);
+            if (!mgr) { req.query.where('employee_employeeId =', NO_MATCH); return; }
+            const ids = await _teamIdsOf(mgr.employeeId);
+            req.query.where('employee_employeeId in', ids.length ? ids : [NO_MATCH]);
+        });
+
+        // Leave requests: same scoping via the employee's manager.
+        this.before('READ', 'LeaveRequests', async (req) => {
+            const mgr = await _resolveManager(req);
+            if (!mgr) { req.query.where('employee_employeeId =', NO_MATCH); return; }
+            const ids = await _teamIdsOf(mgr.employeeId);
+            req.query.where('employee_employeeId in', ids.length ? ids : [NO_MATCH]);
+        });
+
+        // Prev-week requests store the target manager directly → strict routing:
+        // only the manager the request was assigned to can see it.
+        this.before('READ', 'PrevWeekRequests', async (req) => {
+            const mgr = await _resolveManager(req);
+            req.query.where('manager_employeeId =', mgr ? mgr.employeeId : NO_MATCH);
         });
 
         // ── Team Attendance grid ──────────────────────────────────────────
@@ -1129,6 +1182,21 @@ class ManagerService extends cds.ApplicationService {
 
         await registerManagerTimesheetHandlers(this, getMailer, createNotification);
         return super.init();
+    }
+
+    // Issue 4: true only when the logged-in manager is the assigned manager of
+    // the given employee. Used to gate approve/reject so a manager can never act
+    // on another team's request, even via a direct API call.
+    async _managesEmployee(req, sEmployeeId) {
+        if (!sEmployeeId) return false;
+        const user = req.user || {};
+        const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+        if (!email) return false;
+        const manager = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+        if (!manager) return false;
+        const emp = await SELECT.one.from(EMPLOYEE)
+            .columns('manager_employeeId').where({ employeeId: sEmployeeId });
+        return !!(emp && emp.manager_employeeId === manager.employeeId);
     }
 }
 

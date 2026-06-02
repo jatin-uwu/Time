@@ -4,7 +4,7 @@ sap.ui.define([
     "sap/ui/model/Filter",
     "sap/ui/model/FilterOperator",
     "sap/m/MessageToast",
-    "sap/m/MessageBox"
+    "timesheet/app/util/MessageBox"
 ], (Controller, JSONModel, Filter, FilterOperator, MessageToast, MessageBox) => {
     "use strict";
 

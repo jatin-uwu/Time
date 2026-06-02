@@ -2146,58 +2146,167 @@ html, body { margin: 0; height: 100%; }
 }
 
 
-/* ── Dialog backdrop ─────────────────────────────────────────────────
-   SAPUI5 creates exactly one block-layer element with a fixed id.
-   Targeting by id (specificity 1-0-0) beats any class-based theme rule.
-   Three selectors cover the id, the primary class, and the fallback class.
-   --sapBackdropBackground overrides the CSS-variable the theme reads.    */
-:root {
-    --sapBackdropBackground: rgba(15, 23, 42, 0.68);
-}
+/* ══════════════════════════════════════════════════════════════════════════
+   DIALOGS  —  modern, app-consistent styling (sap.m.Dialog + MessageBox)
+   IMPORTANT: never make .sapMDialog a flexbox — UI5 sizes its scroll pane via
+   JS and flex layout clips the title. We only cap the scroll area's height so
+   the footer (action buttons) is always fully visible.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Dark glass backdrop */
+:root { --sapBackdropBackground: rgba(15, 23, 42, 0.55); }
 #sap-ui-blocklayer-popup,
 html .sapUiBLy,
 html .sapUiBlyTop,
 html .sapUiBlockLayer {
-    background:       rgba(15, 23, 42, 0.68) !important;
-    background-color: rgba(15, 23, 42, 0.68) !important;
+    background:       rgba(15, 23, 42, 0.55) !important;
+    background-color: rgba(15, 23, 42, 0.55) !important;
     opacity: 1 !important;
+    backdrop-filter: blur(3px) !important;
+    -webkit-backdrop-filter: blur(3px) !important;
 }
 
-/* ── Dialog shape ────────────────────────────────────────────────────── */
+/* Dialog card — VISUAL ONLY. We do NOT override the dialog's height, display,
+   or the scroll container's overflow: the sap_horizon theme already lays the
+   dialog out as a flex column and scrolls its content natively. Overriding
+   those is what was clipping the content, so all structural rules are removed. */
 .sapMDialog {
-    border-radius: 14px !important;
-    box-shadow: 0 8px 40px rgba(15,23,42,0.22) !important;
-    border: 1px solid #e2e8f0 !important;
+    border-radius: 16px !important;
+    box-shadow: 0 20px 60px rgba(15,23,42,0.35), 0 2px 8px rgba(15,23,42,0.12) !important;
+    border: 1px solid rgba(226,232,240,0.9) !important;
 }
-.sapMDialogTitleGroup {
-    border-radius: 14px 14px 0 0 !important;
-    border-bottom: 1px solid #e2e8f0 !important;
+/* Blue gradient accent bar across the top of every dialog.
+   ::before anchors to the dialog (UI5 already positions it absolutely), so we
+   never change the dialog's own positioning. Only the top 4px is covered, so
+   content/title are untouched. */
+.sapMDialog::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%);
+    border-radius: 16px 16px 0 0;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Title bar — centered, bold (no flex override — theme handles layout) */
+.sapMDialogTitleGroup,
+.sapMDialogTitle {
+    border-radius: 16px 16px 0 0 !important;
+    border-bottom: 1px solid #eef2f7 !important;
     background: #ffffff !important;
+    padding: 16px 22px !important;
 }
-.sapMDialogTitleGroup .sapMTitleInner {
-    font-size: 1rem !important;
+.sapMDialogTitleGroup .sapMTitleInner,
+.sapMDialogTitle .sapMTitleInner,
+.sapMDialogTitleGroup .sapMTitle,
+.sapMDialogTitle .sapMTitle {
+    font-size: 1.05rem !important;
     font-weight: 700 !important;
     color: #1e293b !important;
+    letter-spacing: 0.1px !important;
+    text-align: center !important;
+    width: 100% !important;
 }
+
+/* Header close (×) button → rounded outline, matches the screenshot */
+.sapMDialogTitleGroup .sapMBtn .sapMBtnInner,
+.sapMDialog .sapMDialogTitle .sapMBtn .sapMBtnInner {
+    border-radius: 8px !important;
+    border: 1px solid #e2e8f0 !important;
+    background: #ffffff !important;
+    color: #64748b !important;
+    box-shadow: none !important;
+}
+.sapMDialogTitleGroup .sapMBtn .sapMBtnInner:hover {
+    background: #f1f5f9 !important;
+    color: #1e293b !important;
+}
+
+/* Content area background */
+.sapMDialogSection,
 .sapMDialogScrollCont {
-    max-height: calc(100vh - 220px) !important;
+    background: #ffffff !important;
+}
+/* Force the content region to SCROLL instead of clipping. The region between
+   the header bar and the footer bar is the <section>; we also target the inner
+   scroll container, so whichever element actually holds the content becomes
+   scrollable. Capped at 60vh so a scrollbar always appears well before the
+   dialog reaches the screen edges (title + 60vh + footer still fits). */
+.sapMDialog > section,
+.sapMDialogSection,
+.sapMDialogScrollCont {
+    max-height: 60vh !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
-    background: #ffffff !important;
 }
-.sapMDialogSection {
-    background: #ffffff !important;
-}
+
+/* Footer — visual only (no flex override) */
 .sapMDialogFooter {
-    border-radius: 0 0 14px 14px !important;
-    border-top: 1px solid #e2e8f0 !important;
+    border-radius: 0 0 16px 16px !important;
+    border-top: 1px solid #eef2f7 !important;
     background: #f8fafc !important;
+    padding: 10px 16px !important;
 }
+
+/* Footer buttons — base shape */
 .sapMDialogFooter .sapMBtn .sapMBtnInner {
-    border-radius: 8px !important;
+    border-radius: 9px !important;
     font-weight: 600 !important;
     font-size: 0.875rem !important;
+    height: 38px !important;
+    line-height: 36px !important;
+    padding: 0 18px !important;
+    transition: filter .15s ease, transform .08s ease, background .15s ease !important;
 }
+.sapMDialogFooter .sapMBtn .sapMBtnInner:active { transform: translateY(1px) !important; }
+
+/* Primary / emphasized → app blue gradient */
+.sapMDialogFooter .sapMBtnEmphasized .sapMBtnInner {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+    border: none !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 12px rgba(37,99,235,0.30) !important;
+}
+.sapMDialogFooter .sapMBtnEmphasized .sapMBtnInner:hover { filter: brightness(1.07) !important; }
+.sapMDialogFooter .sapMBtnEmphasized .sapMBtnInner .sapMBtnIcon { color: #ffffff !important; }
+
+/* Accept (success) → green */
+.sapMDialogFooter .sapMBtnAccept .sapMBtnInner {
+    background: linear-gradient(135deg, #16a34a 0%, #15803d 100%) !important;
+    border: none !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 12px rgba(22,163,74,0.28) !important;
+}
+.sapMDialogFooter .sapMBtnAccept .sapMBtnInner .sapMBtnIcon { color: #ffffff !important; }
+
+/* Reject (danger) → red */
+.sapMDialogFooter .sapMBtnReject .sapMBtnInner {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+    border: none !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 12px rgba(220,38,38,0.26) !important;
+}
+.sapMDialogFooter .sapMBtnReject .sapMBtnInner .sapMBtnIcon { color: #ffffff !important; }
+
+/* Secondary (Cancel / default / transparent) → subtle outline */
+.sapMDialogFooter .sapMBtnDefault .sapMBtnInner,
+.sapMDialogFooter .sapMBtnTransparent .sapMBtnInner {
+    background: transparent !important;
+    border: 1px solid #e2e8f0 !important;
+    color: #475569 !important;
+}
+.sapMDialogFooter .sapMBtnDefault .sapMBtnInner:hover,
+.sapMDialogFooter .sapMBtnTransparent .sapMBtnInner:hover {
+    background: #eef2f7 !important;
+    color: #1e293b !important;
+}
+
+/* MessageBox content a touch softer */
+.sapMMsgBoxText, .sapMDialog .sapMMsgBoxText { color: #334155 !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
    Leave Portal page
    ══════════════════════════════════════════════════════════════════════════ */
 
@@ -2399,3 +2508,151 @@ html .sapUiBlockLayer {
 .tsRhScore.sapMText { font-size: 1.25rem !important; font-weight: 800 !important; color: #7c3aed !important; }
 .tsRhEmpty { padding: 60px 0; }
 .tsRhEmptyText.sapMText { color: #94a3b8 !important; font-size: 0.9rem !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CUSTOM DIALOG  (util/CustomDialog.js)  —  replaces sap.m.Dialog everywhere.
+   Full control over layout: flex column with a scrollable body, so content
+   never gets clipped. Matches the app's blue/slate aesthetic.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Modal backdrop (Popup block layer gets this class) */
+.tsCustDialogBLY {
+    background: rgba(15, 23, 42, 0.55) !important;
+    opacity: 1 !important;
+    backdrop-filter: blur(3px) !important;
+    -webkit-backdrop-filter: blur(3px) !important;
+}
+
+/* The dialog card */
+.tsCustDialog {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    max-width: calc(100vw - 32px);
+    max-height: 90vh;
+    background: #ffffff;
+    border: 1px solid rgba(226, 232, 240, 0.9);
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.35), 0 2px 8px rgba(15, 23, 42, 0.12);
+    overflow: hidden;            /* clip children to the rounded corners */
+    font-family: "72", "72full", Arial, Helvetica, sans-serif;
+}
+/* Blue gradient accent bar across the very top */
+.tsCustDialog::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%);
+    z-index: 1;
+}
+
+/* Header */
+.tsCustDialogHeader {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 18px 14px 22px;
+    border-bottom: 1px solid #eef2f7;
+}
+.tsCustDialogTitle {
+    flex: 1 1 auto;
+    text-align: center;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #1e293b;
+    letter-spacing: 0.1px;
+    /* keep the title visually centered even with the close button on the right */
+    padding-left: 34px;
+}
+.tsCustDialogClose {
+    flex: 0 0 auto;
+    width: 32px; height: 32px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #64748b;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+}
+.tsCustDialogClose:hover { background: #f1f5f9; color: #1e293b; }
+
+/* State icons (MessageBox) */
+.tsCustDlgIcon {
+    flex: 0 0 auto;
+    width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    font-size: 0.95rem; font-weight: 700;
+    margin-left: 0;
+}
+.tsCustDialogStated .tsCustDialogTitle { padding-left: 0; text-align: left; }
+.tsCustDlgIconError   { background: #fee2e2; color: #dc2626; }
+.tsCustDlgIconWarning { background: #fef3c7; color: #d97706; }
+.tsCustDlgIconSuccess { background: #dcfce7; color: #16a34a; }
+.tsCustDlgIconInfo    { background: #dbeafe; color: #2563eb; }
+
+/* Body — the reliable scroll area */
+.tsCustDialogBody {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 16px 22px;
+    background: #ffffff;
+}
+.tsCustMsgBody { padding: 6px 2px; }
+.tsCustMsgText .sapMText, .tsCustMsgText { color: #334155 !important; font-size: 0.92rem !important; }
+
+/* Footer */
+.tsCustDialogFooter {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 12px 18px;
+    border-top: 1px solid #eef2f7;
+    background: #f8fafc;
+}
+.tsCustDialogFooter .sapMBtn { margin: 0 !important; }
+.tsCustDialogFooter .sapMBtn .sapMBtnInner {
+    border-radius: 9px !important;
+    font-weight: 600 !important;
+    font-size: 0.875rem !important;
+    height: 38px !important;
+    line-height: 36px !important;
+    padding: 0 18px !important;
+    transition: filter .15s ease, transform .08s ease, background .15s ease !important;
+}
+.tsCustDialogFooter .sapMBtn .sapMBtnInner:active { transform: translateY(1px) !important; }
+.tsCustDialogFooter .sapMBtnEmphasized .sapMBtnInner {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+    border: none !important; color: #fff !important;
+    box-shadow: 0 4px 12px rgba(37,99,235,0.30) !important;
+}
+.tsCustDialogFooter .sapMBtnEmphasized .sapMBtnInner:hover { filter: brightness(1.07) !important; }
+.tsCustDialogFooter .sapMBtnAccept .sapMBtnInner {
+    background: linear-gradient(135deg, #16a34a 0%, #15803d 100%) !important;
+    border: none !important; color: #fff !important;
+    box-shadow: 0 4px 12px rgba(22,163,74,0.28) !important;
+}
+.tsCustDialogFooter .sapMBtnReject .sapMBtnInner {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+    border: none !important; color: #fff !important;
+    box-shadow: 0 4px 12px rgba(220,38,38,0.26) !important;
+}
+.tsCustDialogFooter .sapMBtnDefault .sapMBtnInner,
+.tsCustDialogFooter .sapMBtnTransparent .sapMBtnInner {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    color: #475569 !important;
+}
+.tsCustDialogFooter .sapMBtnDefault .sapMBtnInner:hover,
+.tsCustDialogFooter .sapMBtnTransparent .sapMBtnInner:hover {
+    background: #f1f5f9 !important; color: #1e293b !important;
+}

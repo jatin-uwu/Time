@@ -2,7 +2,7 @@ sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
-    "sap/m/MessageBox"
+    "timesheet/app/util/MessageBox"
 ], (Controller, JSONModel, MessageToast, MessageBox) => {
     "use strict";
 

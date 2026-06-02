@@ -1,9 +1,9 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
-    "sap/m/MessageBox",
+    "timesheet/app/util/MessageBox",
     "sap/m/MessageToast",
-    "sap/m/Dialog",
+    "timesheet/app/util/CustomDialog",
     "sap/m/Button",
     "sap/m/VBox",
     "sap/m/Text",

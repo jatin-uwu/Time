@@ -3,8 +3,9 @@ sap.ui.define([
     "sap/ui/model/json/JSONModel",
     "sap/ui/core/Core",
     "sap/ui/model/Filter",
-    "sap/ui/model/FilterOperator"
-], (Controller, JSONModel, Core, Filter, FilterOperator) => {
+    "sap/ui/model/FilterOperator",
+    "timesheet/app/util/MessageBox"
+], (Controller, JSONModel, Core, Filter, FilterOperator, MessageBox) => {
     "use strict";
 
     const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -495,7 +496,7 @@ sap.ui.define([
                     this._oDashModel.setProperty("/attendanceBtnLabel", "● Mark Active");
                     this._oDashModel.setProperty("/attendanceBtnEnabled", true);
 
-                    sap.m.MessageBox.error(oErr?.message || "Failed to mark attendance.");
+                    MessageBox.error(oErr?.message || "Failed to mark attendance.");
                 });
         },
 
