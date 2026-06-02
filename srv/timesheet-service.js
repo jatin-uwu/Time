@@ -11,8 +11,6 @@ const ATTENDANCE = 'ccentrik.employee.timesheet.schema.timesheet.AttendanceRecor
 const TASK_REVIEW = 'ccentrik.employee.timesheet.schema.timesheet.TaskReview';
 const HOLIDAY = 'ccentrik.employee.timesheet.schema.timesheet.HolidayMaster';
 
-// SQLite table name derived from CDS namespace + entity name
-const EMPLOYEE_TABLE = 'ccentrik_employee_timesheet_schema_timesheet_EmployeeMaster';
 
 const PRIORITY_PREFIX = {
     'High': '[HIGH PRIORITY]',
@@ -143,26 +141,17 @@ class EmployeeService extends cds.ApplicationService {
                 return req.error(400, 'Profile photo must be under 2 MB.');
             }
 
-            // ── Raw SQL UPDATE — the ONLY reliable way to write LargeBinary
-            // columns annotated with @Core.MediaType in CAP + SQLite.
-            // CAP's ORM skips these columns entirely in UPDATE().set({}).
-            const db = await cds.connect.to('db');
-            await db.run(
-                `UPDATE "${EMPLOYEE_TABLE}"
-                 SET "profilePhoto" = ?, "profilePhotoMimeType" = ?
-                 WHERE "employeeId" = ?`,
-                [buf, mimeType, emp.employeeId]
-            );
+            // ── Persist via CQN against the CDS entity (DB-agnostic) ──────────
+            // The previous implementation used raw SQL with a hard-coded SQLite
+            // physical table name, which does not exist on HANA → upload failed
+            // only in the deployed environment. CQN lets CAP resolve the correct
+            // table for whichever DB is bound (SQLite locally, HANA deployed).
+            await UPDATE(EMPLOYEE)
+                .set({ profilePhoto: buf, profilePhotoMimeType: mimeType })
+                .where({ employeeId: emp.employeeId });
 
-            // Verify it actually saved
-            const rows = await db.run(
-                `SELECT length("profilePhoto") as photoLen, "profilePhotoMimeType" as mime
-                 FROM "${EMPLOYEE_TABLE}" WHERE "employeeId" = ?`,
-                [emp.employeeId]
-            );
-            const row = Array.isArray(rows) ? rows[0] : rows;
             cds.log('profile').info(
-                `✓ Photo saved: emp=${emp.employeeId} | bytes=${row && row.photoLen} | mime=${row && row.mime}`
+                `✓ Photo saved: emp=${emp.employeeId} | bytes=${buf.length} | mime=${mimeType}`
             );
 
             return { success: true, message: `Photo saved (${mimeType}, ${buf.length} bytes).` };
@@ -181,14 +170,10 @@ class EmployeeService extends cds.ApplicationService {
                 .where({ email: email });
             if (!emp) return { dataBase64: '', mimeType: '' };
 
-            // Read BLOB via raw SQL
-            const db = await cds.connect.to('db');
-            const rows = await db.run(
-                `SELECT "profilePhoto", "profilePhotoMimeType"
-                 FROM "${EMPLOYEE_TABLE}" WHERE "employeeId" = ?`,
-                [emp.employeeId]
-            );
-            const row = Array.isArray(rows) ? rows[0] : rows;
+            // Read BLOB via CQN (DB-agnostic — works on SQLite and HANA alike).
+            const row = await SELECT.one.from(EMPLOYEE)
+                .columns('profilePhoto', 'profilePhotoMimeType')
+                .where({ employeeId: emp.employeeId });
 
             cds.log('profile').info(
                 `getProfilePhoto: emp=${emp.employeeId} | hasPhoto=${!!(row && row.profilePhoto)} | mime=${row && row.profilePhotoMimeType}`
@@ -210,7 +195,17 @@ class EmployeeService extends cds.ApplicationService {
                 if (Buffer.isBuffer(photo)) buf = photo;
                 else if (photo instanceof Uint8Array) buf = Buffer.from(photo);
                 else if (typeof photo === 'string') buf = Buffer.from(photo, 'utf8');
-                else buf = Buffer.from(photo);
+                else if (photo && typeof photo.pipe === 'function') {
+                    // CAP returns LargeBinary as a Readable stream via CQN (both
+                    // SQLite and HANA). Consume it into a Buffer before encoding —
+                    // otherwise the bytes are lost and the photo comes back empty.
+                    const chunks = [];
+                    for await (const chunk of photo) chunks.push(chunk);
+                    buf = Buffer.concat(chunks);
+                } else {
+                    buf = Buffer.from(photo);
+                }
+                if (!buf || !buf.length) return { dataBase64: '', mimeType: '' };
 
                 const isRawImage =
                     (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) || // JPEG
@@ -299,6 +294,16 @@ class EmployeeService extends cds.ApplicationService {
             if (cascadeStr) cds.log('leave').info(`Cascade breakdown for ${leaveId}: ${cascadeStr}`);
 
             if (emp.manager_employeeId) {
+                // Issue 2: in-app notification to the manager (always — independent
+                // of SMTP, which is the reason leave notifications never appeared).
+                await createNotification(
+                    emp.manager_employeeId,
+                    'LEAVE_REQUEST',
+                    'New Leave Request',
+                    `${emp.employeeName} requested ${leaveType} leave (${fromDate} to ${toDate}, ${days} day${days > 1 ? 's' : ''}).`,
+                    leaveId
+                );
+
                 const manager = await SELECT.one.from(EMPLOYEE).where({ employeeId: emp.manager_employeeId });
                 if (manager && manager.email) {
                     const mailer = getMailer();
@@ -320,7 +325,7 @@ class EmployeeService extends cds.ApplicationService {
             const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
             const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
             if (!emp) return [];
-            const rows = await SELECT.from(NOTIFICATION).where({ employee_employeeId: emp.employeeId }).orderBy({ notifiedAt: 'desc' }).limit(5);
+            const rows = await SELECT.from(NOTIFICATION).where({ employee_employeeId: emp.employeeId }).orderBy({ notifiedAt: 'desc' }).limit(4);
             return (rows || []).map(n => ({
                 notificationId: n.notificationId, type: n.type || '', title: n.title || '',
                 message: n.message || '', isRead: n.isRead || false, referenceId: n.referenceId || '',
@@ -638,6 +643,14 @@ class EmployeeService extends cds.ApplicationService {
 
             const task = await SELECT.one.from(TASK).where({ taskId });
             if (!task) return req.error(404, `Task '${taskId}' not found.`);
+
+            // Issue 1: once a reviewer marks a task Completed it is locked.
+            // Employees cannot move it back to In Progress / Not Started / etc.
+            // (Reopening, if ever needed, happens only through the reviewer's
+            // "Issue Found" flow on an In-Review task — never via this action.)
+            if (task.status === 'Completed') {
+                return req.error(403, 'This task is completed and locked. Its status can no longer be changed.');
+            }
 
             // Only patch reviewer fields when a real (non-empty) value is supplied.
             // Sending an empty string would try to set reviewer_employeeId = ""
@@ -958,6 +971,18 @@ class ManagerService extends cds.ApplicationService {
             if (leave.status !== 'Pending') return req.error(400, `Leave is already '${leave.status}'.`);
             const newStatus = approved ? 'Approved' : 'Rejected';
             await UPDATE(LEAVE_REQUEST).set({ status: newStatus, managerRemarks: remarks || '', approvedOn: new Date() }).where({ leaveId });
+
+            // Issue 2: in-app notification to the employee (always — independent of SMTP).
+            await createNotification(
+                leave.employee_employeeId,
+                approved ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
+                approved ? 'Leave Approved ✓' : 'Leave Rejected ✗',
+                approved
+                    ? `Your ${leave.leaveType} leave (${leave.fromDate} to ${leave.toDate}) was approved.${remarks ? ' Remarks: ' + remarks : ''}`
+                    : `Your ${leave.leaveType} leave (${leave.fromDate} to ${leave.toDate}) was rejected.${remarks ? ' Reason: ' + remarks : ''}`,
+                leaveId
+            );
+
             const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId: leave.employee_employeeId });
             if (emp && emp.email) {
                 const mailer = getMailer();
@@ -1255,12 +1280,86 @@ class HRService extends cds.ApplicationService {
             if (!doc.content) return req.error(404, 'Document has no content.');
             let dataBase64 = '';
             try {
-                if (Buffer.isBuffer(doc.content)) dataBase64 = doc.content.toString('base64');
-                else if (typeof doc.content === 'string') dataBase64 = doc.content;
-                else if (doc.content instanceof Uint8Array) dataBase64 = Buffer.from(doc.content).toString('base64');
-                else dataBase64 = Buffer.from(doc.content).toString('base64');
-            } catch (e) { return req.error(500, 'Could not read document.'); }
+                const content = doc.content;
+                if (Buffer.isBuffer(content)) dataBase64 = content.toString('base64');
+                else if (content instanceof Uint8Array) dataBase64 = Buffer.from(content).toString('base64');
+                else if (typeof content === 'string') dataBase64 = content; // legacy base64 text
+                else if (content && typeof content.pipe === 'function') {
+                    // CAP returns LargeBinary as a Readable stream via CQN (both
+                    // SQLite and HANA). Must consume it into a Buffer — the old
+                    // Buffer.from(stream) failed, causing "Could not download".
+                    const chunks = [];
+                    for await (const chunk of content) chunks.push(chunk);
+                    dataBase64 = Buffer.concat(chunks).toString('base64');
+                } else {
+                    dataBase64 = Buffer.from(content).toString('base64');
+                }
+            } catch (e) {
+                cds.log('hr').error('Could not read document:', e.message);
+                return req.error(500, 'Could not read document.');
+            }
+            if (!dataBase64) return req.error(404, 'Document has no content.');
             return { fileName: doc.fileName, mimeType: doc.mimeType || 'application/octet-stream', dataBase64 };
+        });
+
+        // ── Activate / deactivate an employee ─────────────────────────────────
+        this.on('setEmployeeStatus', async (req) => {
+            const { employeeId, isActive } = req.data;
+            if (!employeeId) return req.error(400, 'employeeId is required.');
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ employeeId });
+            if (!emp) return req.error(404, `Employee '${employeeId}' not found.`);
+            const status = isActive ? 'Active' : 'Inactive';
+            await UPDATE(EMPLOYEE).set({ isActive: !!isActive, status }).where({ employeeId });
+            cds.log('hr').info(`Employee ${employeeId} set ${status} by HR`);
+            return { employeeId, isActive: !!isActive, status };
+        });
+
+        // ── Inline edit of an employee's profile fields ───────────────────────
+        // Only fields that are actually provided (non-null/non-undefined) are
+        // applied, so the drawer can send partial updates without wiping data.
+        this.on('updateEmployee', async (req) => {
+            const d = req.data || {};
+            if (!d.employeeId) return req.error(400, 'employeeId is required.');
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ employeeId: d.employeeId });
+            if (!emp) return req.error(404, `Employee '${d.employeeId}' not found.`);
+
+            // Email uniqueness guard (if email is being changed)
+            if (d.email) {
+                const dup = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email: d.email });
+                if (dup && dup.employeeId !== d.employeeId) {
+                    return req.error(409, `Another employee already uses email '${d.email}'.`);
+                }
+            }
+
+            const patch = {};
+            const map = {
+                employeeName: 'employeeName', designation: 'designation', email: 'email',
+                address: 'address', mobileNumber: 'mobileNumber', department: 'department',
+                employmentType: 'employmentType', emergencyContact: 'emergencyContact',
+                managerEmployeeId: 'manager_employeeId'
+            };
+            Object.keys(map).forEach(k => {
+                if (d[k] !== undefined && d[k] !== null) patch[map[k]] = d[k];
+            });
+            if (!Object.keys(patch).length) return { employeeId: d.employeeId, message: 'Nothing to update.' };
+
+            await UPDATE(EMPLOYEE).set(patch).where({ employeeId: d.employeeId });
+            cds.log('hr').info(`Employee ${d.employeeId} updated by HR (${Object.keys(patch).join(', ')})`);
+            return { employeeId: d.employeeId, message: 'Employee updated successfully.' };
+        });
+
+        // ── Reset password ────────────────────────────────────────────────────
+        // Identities are managed by the IdP (XSUAA in prod, mocked in dev) — there
+        // is no local password store, so we return an informative message.
+        this.on('resetEmployeePassword', async (req) => {
+            const { employeeId } = req.data;
+            if (!employeeId) return req.error(400, 'employeeId is required.');
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'email').where({ employeeId });
+            if (!emp) return req.error(404, `Employee '${employeeId}' not found.`);
+            return {
+                success: false,
+                message: `Passwords are managed by the identity provider. Please trigger a reset for ${emp.email || employeeId} from the IdP / SAP BTP cockpit.`
+            };
         });
 
         await registerHRTimesheetHandlers(this, getMailer, createNotification);

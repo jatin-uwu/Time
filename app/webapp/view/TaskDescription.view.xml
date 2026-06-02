@@ -202,7 +202,7 @@
                                   justifyContent="End"
                                   alignItems="Center"
                                   wrap="Wrap"
-                                  visible="{tdView>_isAssignee}">
+                                  visible="{tdView>_canEditStatus}">
 
                                 <Label text="Update status:" class="tsTaskActionLabel sapUiTinyMarginEnd" />
                                 <Select selectedKey="{path: 'tdView>status', mode: 'OneWay'}"

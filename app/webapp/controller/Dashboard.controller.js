@@ -1308,7 +1308,7 @@ sap.ui.define([
                             new Date(a.notifiedAt || a.createdAt || 0)
                         );
 
-                        const items = mine.slice(0, 5).map(n => ({
+                        const items = mine.slice(0, 4).map(n => ({
                             type: n.type || "DEFAULT",
                             title: n.title || "Notification",
                             message: n.message || "",
@@ -1344,6 +1344,12 @@ sap.ui.define([
                     } else if (oData.itemsJSON) {
                         try { items = JSON.parse(oData.itemsJSON); } catch (e) { items = []; }
                     }
+                    // Sort newest first and keep only the latest 4 (dashboard tile).
+                    items.sort((a, b) =>
+                        new Date(b.notifiedAt || b.createdAt || 0) -
+                        new Date(a.notifiedAt || a.createdAt || 0)
+                    );
+                    items = items.slice(0, 4);
                     this._oDashModel.setProperty("/recentNotifications/items", items);
                     this._updateNotifBadge(items);
                 })

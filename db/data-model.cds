@@ -39,9 +39,14 @@ entity EmployeeMaster : managed {
     bankName            : String(60);
     bankIfsc            : String(15);
 
-    // Profile photo (single binary, served via OData media stream).
-    profilePhoto        : LargeBinary @Core.MediaType: profilePhotoMimeType;
-    profilePhotoMimeType: String(100) @Core.IsMediaType;
+    // Profile photo. Stored/retrieved as base64 purely through the
+    // uploadProfilePhoto / getProfilePhoto actions — never streamed via OData
+    // $value. The @Core.MediaType annotation (which marks it as an OData media
+    // stream) made CAP exclude the column from normal CQN read/write, so reads
+    // came back empty on HANA. As a plain LargeBinary, CQN persists & reads it
+    // portably on both SQLite and HANA.
+    profilePhoto        : LargeBinary;
+    profilePhotoMimeType: String(100);
 
     timesheets          : Composition of many timesheet.TimesheetHeader
                           on timesheets.employee = $self;
@@ -54,7 +59,10 @@ entity EmployeeMaster : managed {
 // The binary stream is exposed as an OData media entity so the
 // SAPUI5 FileUploader / Download icons work out-of-the-box.
 entity EmployeeDocument : managed {
-    key documentId   : String(20);
+    // Generated as "<employeeId>-DOC-<timestamp>" (~24 chars) — 20 overflowed on
+    // HANA (enforced) though SQLite ignored it. Widened so uploads persist and
+    // the id round-trips through the getEmployeeDocument action.
+    key documentId   : String(50);
     employee         : Association to EmployeeMaster;
     documentType     : String(40);                 // Aadhaar / PAN / Resume / Certificate / Photo / Other
     fileName         : String(255);

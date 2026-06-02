@@ -504,10 +504,43 @@ service HRService @(path: '/hr')@(requires: 'HR') {
                                   description: String(255),
                                   dataBase64: LargeString)                 returns String;
 
-    action getEmployeeDocument(documentId: String(20))                     returns {
+    action getEmployeeDocument(documentId: String(50))                     returns {
         fileName   : String(255);
         mimeType   : String(100);
         dataBase64 : LargeString;
+    };
+
+    // ── Employee directory actions (HR profile side-panel) ────────────────────
+    // Activate / deactivate an employee. isActive + status are kept in sync.
+    action setEmployeeStatus(employeeId: String(10),
+                             isActive: Boolean)                            returns {
+        employeeId : String(10);
+        isActive   : Boolean;
+        status     : String(20);
+    };
+
+    // Inline edit of an employee's editable profile fields. Only non-null
+    // fields are applied, so partial updates are safe.
+    action updateEmployee(employeeId: String(10),
+                          employeeName: String(100),
+                          designation: String(50),
+                          email: String(100),
+                          address: String(255),
+                          mobileNumber: String(15),
+                          department: String(50),
+                          employmentType: String(20),
+                          emergencyContact: String(15),
+                          managerEmployeeId: String(10))                   returns {
+        employeeId : String(10);
+        message    : String;
+    };
+
+    // Reset password — this app's identities are managed by the IdP (XSUAA in
+    // production, mocked users in dev), so there is no local password store to
+    // reset. The action returns a clear message rather than failing silently.
+    action resetEmployeePassword(employeeId: String(10))                   returns {
+        success : Boolean;
+        message : String;
     };
 
     entity DayUnlockRequests @(requires: 'HR') as projection on db.timesheet.TimesheetDayUnlockRequest;

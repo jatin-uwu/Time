@@ -276,7 +276,10 @@ sap.ui.define([
                         assigneeName:      empMap.get(tAssignee) || "Unassigned",
                         reviewerName:      empMap.get(tReviewer) || "",
                         dueLabel:          formatDueLabel(t.dueDate),
-                        _isAssignee:       isAssignee,        // drives "Update status" row
+                        _isAssignee:       isAssignee,        // assignee of this task
+                        // Issue 1: completed tasks are view-only for the employee —
+                        // hide the status dropdown so it can't be moved back.
+                        _canEditStatus:    isAssignee && t.status !== "Completed",
                         _isReviewerActive: isReviewerActive   // drives "Review decision" row
                     });
                 })

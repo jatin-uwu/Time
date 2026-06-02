@@ -2656,3 +2656,65 @@ html .sapUiBlockLayer {
 .tsCustDialogFooter .sapMBtnTransparent .sapMBtnInner:hover {
     background: #f1f5f9 !important; color: #1e293b !important;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HR EMPLOYEE DIRECTORY  —  full-width table + slide-in profile drawer
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsEmpDirBody { position: relative; height: calc(100vh - 180px); overflow: hidden; }
+.tsEmpTable { height: 100% !important; }
+
+/* Drawer: overlay on the right, non-modal, slides in via transform */
+.tsEmpDrawer {
+    position: absolute; top: 0; right: 0; height: 100%;
+    width: 440px; max-width: 94%;
+    background: #ffffff;
+    box-shadow: -8px 0 28px rgba(15, 23, 42, 0.18);
+    border-left: 1px solid #e2e8f0;
+    transform: translateX(108%);
+    transition: transform .32s cubic-bezier(.4, 0, .2, 1);
+    z-index: 6;
+    display: flex; flex-direction: column;
+}
+.tsEmpDrawer.tsEmpDrawerOpen { transform: translateX(0); }
+
+/* Left-edge drag handle for resizing */
+.tsEmpDrawerResizer {
+    position: absolute; top: 0; left: -3px; width: 6px; height: 100%;
+    cursor: col-resize; z-index: 7; flex: 0 0 auto;
+}
+.tsEmpDrawerResizer:hover { background: rgba(59, 130, 246, 0.25); }
+
+.tsEmpDrawerHeader {
+    padding: 16px 18px; border-bottom: 1px solid #eef2f7;
+    background: linear-gradient(135deg, #f8fafc, #eef2f7); flex: 0 0 auto;
+}
+.tsEmpDrawerName .sapMTitleInner { font-weight: 700 !important; color: #1e293b !important; }
+.tsEmpDrawerSub { color: #64748b; font-size: 0.82rem; margin-top: 2px; }
+.tsEmpDrawerId  { color: #94a3b8; font-size: 0.75rem; }
+.tsEmpDrawerClose .sapMBtnInner { border-radius: 8px !important; }
+
+.tsEmpDrawerActions { padding: 12px 16px; border-bottom: 1px solid #eef2f7; flex: 0 0 auto; }
+.tsEmpDrawerScroll  { flex: 1 1 auto; min-height: 0; }
+.tsEmpDrawerContent { padding: 8px 14px 18px; }
+.tsEmpDrawerPanel   { margin-top: 6px; }
+
+.tsEmpDrawerFields { padding: 4px 2px; gap: 12px; }
+.tsEmpField        { gap: 12px; align-items: flex-start; padding: 4px 0; }
+.tsEmpFieldIcon    { color: #3b82f6; font-size: 1rem; margin-top: 3px; }
+.tsEmpFieldLabel   { font-size: 0.68rem; color: #9ca3af; text-transform: uppercase; letter-spacing: .04em; }
+.tsEmpFieldValue   { font-size: 0.9rem; color: #1f2937; font-weight: 500; }
+
+.tsEmpDocItem { border: none !important; }
+.tsEmpDocRow  { padding: 8px 4px; }
+.tsEmpDocIcon { color: #2563eb; font-size: 1.2rem; }
+.tsEmpDocName { font-size: 0.88rem; font-weight: 600; color: #1e293b; }
+.tsEmpDocMeta { font-size: 0.74rem; color: #94a3b8; margin-top: 1px; }
+.tsEmpNoDocs  { padding: 18px 0; color: #94a3b8; }
+
+/* Highlight the selected table row a bit stronger */
+.tsEmpTable .sapUiTableRowSel,
+.tsEmpTable .sapUiTableRowSel .sapUiTableCell { background-color: rgba(59, 130, 246, 0.10) !important; }
+
+@media (max-width: 700px) {
+    .tsEmpDrawer { width: 100%; max-width: 100%; }
+}

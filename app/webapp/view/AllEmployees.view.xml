@@ -3,65 +3,70 @@
     xmlns:mvc="sap.ui.core.mvc"
     xmlns="sap.m"
     xmlns:t="sap.ui.table"
-    xmlns:l="sap.ui.layout"
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
     <Page id="allEmpPage" showHeader="false" class="tsHrPage">
         <content>
 
-            <!-- ── Unified page header with search + add ── -->
+            <!-- ── Header: title + search + status filter + add ── -->
             <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone" alignItems="Center" justifyContent="SpaceBetween">
                 <HBox alignItems="Center">
                     <core:Icon src="sap-icon://employee" class="tsPageHeaderIcon" style="color:#ffffff;font-size:1.25rem;" />
-                    <Text text="Directory · {emp>/items/length} employees"
+                    <Text text="Directory · {emp>/filtered/length} of {emp>/items/length} employees"
                           style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
                 </HBox>
                 <HBox alignItems="Center">
                     <SearchField id="empSearch"
                                  placeholder="Search by name, email, ID, dept..."
                                  liveChange=".onSearch"
-                                 width="280px"
-                                 class="tsTeamAttSearch" />
+                                 width="260px"
+                                 class="tsTeamAttSearch sapUiTinyMarginEnd" />
+                    <Select id="statusFilter" selectedKey="all" change=".onStatusFilterChange"
+                            width="130px" class="sapUiTinyMarginEnd">
+                        <core:Item key="all"      text="All Status" />
+                        <core:Item key="Active"   text="Active" />
+                        <core:Item key="Inactive" text="Inactive" />
+                    </Select>
                     <Button icon="sap-icon://add-employee" text="Add" type="Emphasized"
-                            press=".onAdd" class="sapUiTinyMarginBegin tsTeamAttExportBtn" />
+                            press=".onAdd" class="tsTeamAttExportBtn" />
                 </HBox>
             </HBox>
 
-            <!-- ── Master/Detail split: list on the left, profile pane on the right ── -->
-            <l:Splitter class="sapUiResponsiveMargin" height="calc(100vh - 200px)">
+            <!-- ── Body: full-width table with an overlay drawer that slides in ── -->
+            <VBox class="tsEmpDirBody">
 
-                <!-- LEFT: Table -->
+                <!-- TABLE (always visible) -->
                 <t:Table id="empTable"
                          rows="{emp>/filtered}"
-                         
                          selectionMode="Single"
-                         selectionBehavior="Row"
+                         selectionBehavior="RowOnly"
                          alternateRowColors="true"
-                        
-                         rowSelectionChange=".onRowSelect">
+                         visibleRowCountMode="Auto"
+                         rowSelectionChange=".onRowSelect"
+                         class="tsEmpTable">
                     <t:columns>
                         <t:Column width="6rem" sortProperty="employeeId">
                             <Label text="ID" />
                             <t:template><Text text="{emp>employeeId}" /></t:template>
                         </t:Column>
-                        <t:Column width="10rem" sortProperty="employeeName">
+                        <t:Column width="11rem" sortProperty="employeeName">
                             <Label text="Name" />
                             <t:template><Text text="{emp>employeeName}" /></t:template>
                         </t:Column>
-                        <t:Column width="14rem" sortProperty="email">
+                        <t:Column width="15rem" sortProperty="email">
                             <Label text="Email" />
                             <t:template><Text text="{emp>email}" /></t:template>
                         </t:Column>
-                        <t:Column width="9rem" sortProperty="department">
+                        <t:Column width="10rem" sortProperty="department">
                             <Label text="Department" />
                             <t:template><Text text="{emp>department}" /></t:template>
                         </t:Column>
-                        <t:Column width="9rem" sortProperty="designation">
+                        <t:Column width="10rem" sortProperty="designation">
                             <Label text="Designation" />
                             <t:template><Text text="{emp>designation}" /></t:template>
                         </t:Column>
-                        <t:Column width="6rem" sortProperty="status">
+                        <t:Column width="7rem" sortProperty="status">
                             <Label text="Status" />
                             <t:template>
                                 <ObjectStatus text="{emp>status}"
@@ -71,76 +76,107 @@
                     </t:columns>
                 </t:Table>
 
-                <!-- RIGHT: Detail pane -->
-                <l:layoutData>
-                    <l:SplitterLayoutData size="auto" />
-                </l:layoutData>
-                <Panel headerText="Employee Profile" expandable="false" class="sapUiTinyMargin">
-                    <layoutData><l:SplitterLayoutData size="420px" minSize="320" /></layoutData>
+                <!-- DRAWER (overlay, slides in from the right; non-modal) -->
+                <VBox id="empDrawer" class="tsEmpDrawer">
 
-                    <VBox visible="{= !${detail>/hasSelection} }" class="sapUiMediumMargin" alignItems="Center">
-                        <core:Icon src="sap-icon://employee" size="2.5rem" color="#9ca3af" />
-                        <Text text="Select an employee to see their full profile and documents." textAlign="Center" class="sapUiSmallMarginTop" />
-                    </VBox>
+                    <!-- Left-edge drag handle (resize) -->
+                    <VBox id="empDrawerResizer" class="tsEmpDrawerResizer" />
 
-                    <VBox visible="{detail>/hasSelection}" class="sapUiSmallMargin">
-                        <Title text="{detail>/emp/employeeName}" level="H3" />
-                        <Text text="{detail>/emp/designation} · {detail>/emp/department}" class="sapUiTinyMarginBottom" />
-                        <Text text="ID: {detail>/emp/employeeId}" class="sapUiTinyMarginBottom" />
-
-                        <Panel headerText="Contact" expandable="true" expanded="true" class="sapUiTinyMarginTop">
-                            <VBox class="sapUiTinyMargin">
-                                <Text text="✉ {detail>/emp/email}" />
-                                <Text text="☎ {detail>/emp/mobileNumber}" />
-                                <Text text="📍 {detail>/emp/address}" />
-                                <Text text="Emergency: {detail>/emp/emergencyContact}" />
+                    <!-- Drawer header -->
+                    <HBox class="tsEmpDrawerHeader" alignItems="Center" justifyContent="SpaceBetween">
+                        <HBox alignItems="Center">
+                            <Avatar displaySize="M"
+                                    initials="{detail>/initials}"
+                                    backgroundColor="Accent6"
+                                    class="sapUiTinyMarginEnd" />
+                            <VBox>
+                                <Title text="{detail>/emp/employeeName}" level="H4" class="tsEmpDrawerName" />
+                                <Text text="{detail>/emp/designation} · {detail>/emp/department}" class="tsEmpDrawerSub" />
+                                <HBox alignItems="Center">
+                                    <Text text="ID: {detail>/emp/employeeId}" class="tsEmpDrawerId sapUiTinyMarginEnd" />
+                                    <ObjectStatus text="{detail>/emp/status}"
+                                                  state="{= ${detail>/emp/status} === 'Active' ? 'Success' : ${detail>/emp/status} === 'Resigned' ? 'Error' : 'Warning'}" />
+                                </HBox>
                             </VBox>
-                        </Panel>
+                        </HBox>
+                        <Button icon="sap-icon://decline" type="Transparent"
+                                tooltip="Close" press=".onCloseDrawer" class="tsEmpDrawerClose" />
+                    </HBox>
 
-                        <Panel headerText="Employment" expandable="true" expanded="true" class="sapUiTinyMarginTop">
-                            <VBox class="sapUiTinyMargin">
-                                <Text text="Joined: {detail>/emp/joiningDate}" />
-                                <Text text="Type: {detail>/emp/employmentType}" />
-                                <Text text="Manager: {detail>/managerName}" />
-                                <Text text="Status: {detail>/emp/status}" />
-                            </VBox>
-                        </Panel>
+                    <!-- Action buttons -->
+                    <HBox class="tsEmpDrawerActions" wrap="Wrap">
+                        <Button text="Edit" icon="sap-icon://edit" type="Emphasized"
+                                press=".onEditEmployee" class="sapUiTinyMarginEnd sapUiTinyMarginBottom" />
+                        <Button text="{detail>/statusActionText}" icon="{detail>/statusActionIcon}"
+                                press=".onToggleStatus" class="sapUiTinyMarginEnd sapUiTinyMarginBottom" />
+                        <Button text="Complete Profile" icon="sap-icon://expand-group"
+                                press=".onViewCompleteProfile" class="sapUiTinyMarginEnd sapUiTinyMarginBottom" />
+                        <Button text="Reset Password" icon="sap-icon://key"
+                                press=".onResetPassword" class="sapUiTinyMarginBottom" />
+                    </HBox>
 
-                        <Panel headerText="Identity" expandable="true" expanded="false" class="sapUiTinyMarginTop">
-                            <VBox class="sapUiTinyMargin">
-                                <Text text="DOB: {detail>/emp/dateOfBirth}" />
-                                <Text text="Gender: {detail>/emp/gender}" />
-                                <Text text="Blood: {detail>/emp/bloodGroup}" />
-                                <Text text="Aadhaar: {detail>/emp/aadhaarNumber}" />
-                                <Text text="PAN: {detail>/emp/panNumber}" />
-                            </VBox>
-                        </Panel>
+                    <!-- Scrollable content -->
+                    <ScrollContainer height="100%" width="100%" vertical="true" class="tsEmpDrawerScroll">
+                        <VBox class="tsEmpDrawerContent">
 
-                        <Panel headerText="Bank" expandable="true" expanded="false" class="sapUiTinyMarginTop">
-                            <VBox class="sapUiTinyMargin">
-                                <Text text="A/C: {detail>/emp/bankAccountNumber}" />
-                                <Text text="Bank: {detail>/emp/bankName}" />
-                                <Text text="IFSC: {detail>/emp/bankIfsc}" />
-                            </VBox>
-                        </Panel>
+                            <Panel headerText="Contact" expandable="true" expanded="true" class="tsEmpDrawerPanel">
+                                <VBox class="tsEmpDrawerFields">
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://email" class="tsEmpFieldIcon" /><VBox><Text text="Email" class="tsEmpFieldLabel" /><Text text="{detail>/emp/email}" class="tsEmpFieldValue" /></VBox></HBox>
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://phone" class="tsEmpFieldIcon" /><VBox><Text text="Phone" class="tsEmpFieldLabel" /><Text text="{= ${detail>/emp/mobileNumber} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://addresses" class="tsEmpFieldIcon" /><VBox><Text text="Address" class="tsEmpFieldLabel" /><Text text="{= ${detail>/emp/address} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://warning" class="tsEmpFieldIcon" /><VBox><Text text="Emergency Contact" class="tsEmpFieldLabel" /><Text text="{= ${detail>/emp/emergencyContact} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
+                                </VBox>
+                            </Panel>
 
-                        <Panel headerText="Documents ({detail>/docs/length})" expandable="true" expanded="true" class="sapUiTinyMarginTop">
-                            <List items="{detail>/docs}" noDataText="No documents uploaded.">
-                                <StandardListItem icon="sap-icon://attachment"
-                                                  title="{detail>fileName}"
-                                                  description="{detail>documentType}"
-                                                  type="Active"
-                                                  press=".onDownloadDoc">
-                                    <customData>
-                                        <core:CustomData key="documentId" value="{detail>documentId}" />
-                                    </customData>
-                                </StandardListItem>
-                            </List>
-                        </Panel>
-                    </VBox>
-                </Panel>
+                            <Panel headerText="Employment" expandable="true" expanded="true" class="tsEmpDrawerPanel">
+                                <VBox class="tsEmpDrawerFields">
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://manager" class="tsEmpFieldIcon" /><VBox><Text text="Reporting Manager" class="tsEmpFieldLabel" /><Text text="{= ${detail>/managerName} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://calendar" class="tsEmpFieldIcon" /><VBox><Text text="Date of Joining" class="tsEmpFieldLabel" /><Text text="{= ${detail>/emp/joiningDate} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://employee-lookup" class="tsEmpFieldIcon" /><VBox><Text text="Employment Type" class="tsEmpFieldLabel" /><Text text="{= ${detail>/emp/employmentType} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://status-positive" class="tsEmpFieldIcon" /><VBox><Text text="Status" class="tsEmpFieldLabel" /><Text text="{detail>/emp/status}" class="tsEmpFieldValue" /></VBox></HBox>
+                                </VBox>
+                            </Panel>
 
-            </l:Splitter>
+                            <Panel headerText="Identity" expandable="true" expanded="{detail>/showAll}" class="tsEmpDrawerPanel">
+                                <VBox class="tsEmpDrawerFields">
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://birthday-invite" class="tsEmpFieldIcon" /><VBox><Text text="Date of Birth" class="tsEmpFieldLabel" /><Text text="{= ${detail>/emp/dateOfBirth} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://person-placeholder" class="tsEmpFieldIcon" /><VBox><Text text="Gender" class="tsEmpFieldLabel" /><Text text="{= ${detail>/emp/gender} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
+                                    <HBox class="tsEmpField"><core:Icon src="sap-icon://heart" class="tsEmpFieldIcon" /><VBox><Text text="Blood Group" class="tsEmpFieldLabel" /><Text text="{= ${detail>/emp/bloodGroup} || '—' }" class="tsEmpFieldValue" /></VBox></HBox>
+                                </VBox>
+                            </Panel>
+
+                            <Panel headerText="Documents ({detail>/docs/length})" expandable="true" expanded="true" class="tsEmpDrawerPanel">
+                                <VBox visible="{= ${detail>/docs/length} === 0 }" class="tsEmpNoDocs" alignItems="Center">
+                                    <core:Icon src="sap-icon://document" size="1.8rem" color="#9ca3af" />
+                                    <Text text="No documents uploaded." class="sapUiTinyMarginTop" />
+                                </VBox>
+                                <List items="{detail>/docs}" showSeparators="Inner"
+                                      visible="{= ${detail>/docs/length} > 0 }">
+                                    <CustomListItem class="tsEmpDocItem">
+                                        <HBox alignItems="Center" justifyContent="SpaceBetween" class="tsEmpDocRow">
+                                            <HBox alignItems="Center">
+                                                <core:Icon src="sap-icon://document-text" class="tsEmpDocIcon sapUiTinyMarginEnd" />
+                                                <VBox>
+                                                    <Text text="{detail>fileName}" class="tsEmpDocName" />
+                                                    <Text text="{detail>documentType} · Uploaded {detail>uploadedLabel}" class="tsEmpDocMeta" />
+                                                </VBox>
+                                            </HBox>
+                                            <Button icon="sap-icon://download" type="Transparent"
+                                                    tooltip="Download" press=".onDownloadDoc">
+                                                <customData>
+                                                    <core:CustomData key="documentId" value="{detail>documentId}" />
+                                                </customData>
+                                            </Button>
+                                        </HBox>
+                                    </CustomListItem>
+                                </List>
+                            </Panel>
+
+                        </VBox>
+                    </ScrollContainer>
+                </VBox>
+
+            </VBox>
 
         </content>
     </Page>
