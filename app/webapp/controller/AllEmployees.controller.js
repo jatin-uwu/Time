@@ -166,7 +166,11 @@ sap.ui.define([
                 new Filter("employee_employeeId", FilterOperator.EQ, employeeId)
             ]).requestContexts(0, 200)
                 .then(aCtx => {
-                    const docs = aCtx.map(c => c.getObject()).filter(Boolean).map(d => Object.assign({}, d, {
+                    const docs = aCtx.map(c => c.getObject()).filter(Boolean)
+                        // Company newsletters are stored as documents too — keep
+                        // them out of an individual employee's document list.
+                        .filter(d => d.documentType !== "Newsletter")
+                        .map(d => Object.assign({}, d, {
                         uploadedLabel: fmtDate(d.createdAt)
                     }));
                     docs.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));

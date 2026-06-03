@@ -101,6 +101,75 @@ class EmployeeService extends cds.ApplicationService {
             };
         });
 
+        // ── Company Newsletter (latest, visible to everyone) ──────────────────
+        // Reuses the EmployeeDocument store: HR publishes via uploadEmployeeDocument
+        // with documentType = 'Newsletter'; this returns the most recent one so any
+        // authenticated user can open it from the dashboard.
+        this.on('getLatestNewsletter', async () => {
+            const empty = { hasNewsletter: false, newsletterId: '', fileName: '', mimeType: '', dataBase64: '', uploadedOn: '' };
+            let doc;
+            try {
+                doc = await SELECT.one.from(DOCUMENT)
+                    .columns('documentId', 'fileName', 'mimeType', 'content', 'createdAt')
+                    .where({ documentType: 'Newsletter' })
+                    .orderBy('createdAt desc');
+            } catch (e) {
+                cds.log('newsletter').warn('Could not query newsletter:', e.message || e);
+                return empty;
+            }
+            if (!doc || !doc.content) return empty;
+
+            let dataBase64 = '';
+            try {
+                const content = doc.content;
+                if (Buffer.isBuffer(content)) dataBase64 = content.toString('base64');
+                else if (content instanceof Uint8Array) dataBase64 = Buffer.from(content).toString('base64');
+                else if (typeof content === 'string') dataBase64 = content;
+                else if (content && typeof content.pipe === 'function') {
+                    const chunks = [];
+                    for await (const chunk of content) chunks.push(chunk);
+                    dataBase64 = Buffer.concat(chunks).toString('base64');
+                } else {
+                    dataBase64 = Buffer.from(content).toString('base64');
+                }
+            } catch (e) {
+                cds.log('newsletter').error('Could not read newsletter content:', e.message);
+                return empty;
+            }
+            if (!dataBase64) return empty;
+
+            return {
+                hasNewsletter: true,
+                newsletterId:  doc.documentId,
+                fileName:      doc.fileName || 'newsletter',
+                mimeType:      doc.mimeType || 'application/octet-stream',
+                dataBase64,
+                uploadedOn:    doc.createdAt ? String(doc.createdAt) : ''
+            };
+        });
+
+        // Lightweight check (no binary) used to drive the "new newsletter" button.
+        this.on('getNewsletterMeta', async () => {
+            const empty = { hasNewsletter: false, newsletterId: '', fileName: '', uploadedOn: '' };
+            let doc;
+            try {
+                doc = await SELECT.one.from(DOCUMENT)
+                    .columns('documentId', 'fileName', 'createdAt')
+                    .where({ documentType: 'Newsletter' })
+                    .orderBy('createdAt desc');
+            } catch (e) {
+                cds.log('newsletter').warn('Could not query newsletter meta:', e.message || e);
+                return empty;
+            }
+            if (!doc) return empty;
+            return {
+                hasNewsletter: true,
+                newsletterId:  doc.documentId,
+                fileName:      doc.fileName || 'newsletter',
+                uploadedOn:    doc.createdAt ? String(doc.createdAt) : ''
+            };
+        });
+
         // ── Upload Profile Photo ──────────────────────────────────────────────
         // CAP's UPDATE().set() silently skips LargeBinary columns annotated
         // with @Core.MediaType in SQLite. We use raw SQL to bypass this.

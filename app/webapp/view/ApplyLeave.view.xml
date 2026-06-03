@@ -48,13 +48,14 @@
                     </VBox>
 
                     <VBox class="tsLeaveBalCard tsLeaveBalMaternity" alignItems="Center"
-                        visible="{= ${appView>/userRole} !== 'manager' }">
+                        visible="{= ${appView>/userRole} !== 'manager' &amp;&amp; ${leave>/showMaternity} }">
                         <Title text="{leave>/balance/maternity}" level="H1" />
                         <Text text="Maternity Leave" />
                         <ObjectStatus text="of 180 days" state="None" />
                     </VBox>
 
-                    <VBox class="tsLeaveBalCard tsLeaveBalPaternity" alignItems="Center">
+                    <VBox class="tsLeaveBalCard tsLeaveBalPaternity" alignItems="Center"
+                        visible="{leave>/showPaternity}">
                         <Title text="{leave>/balance/paternity}" level="H1" />
                         <Text text="Paternity Leave" />
                         <ObjectStatus text="of 2 days" state="None" />

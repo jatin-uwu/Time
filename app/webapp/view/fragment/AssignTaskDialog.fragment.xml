@@ -1,0 +1,114 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:u="timesheet.app.util">
+
+    <!-- Reassign an existing task to a team member.
+         Uses the app-wide CustomDialog so styling matches every other dialog.
+         Model: "dlg" (JSONModel set by the controller in _openAssignDialog). -->
+    <u:CustomDialog id="assignTaskDialog"
+                    title="Assign Task"
+                    contentWidth="560px">
+        <u:content>
+            <VBox class="sapUiSmallMargin tsAssignDlgBody">
+
+                <!-- Task being reassigned -->
+                <HBox alignItems="Center" class="tsAssignDlgTaskRow">
+                    <core:Icon src="sap-icon://task" class="sapUiTinyMarginEnd" color="#2563eb" />
+                    <VBox>
+                        <Text text="{dlg>/taskName}" class="tsAssignDlgTaskName" />
+                        <Text text="{dlg>/taskId}" class="tsTaskRowId" />
+                    </VBox>
+                </HBox>
+
+                <!-- Employee picker -->
+                <Label text="Select Employee" required="true" class="sapUiSmallMarginTop tsAssignDlgLabel" />
+                <Select id="assignEmpSelect"
+                        width="100%"
+                        forceSelection="false"
+                        selectedKey="{dlg>/selectedEmp}"
+                        items="{dlg>/candidates}"
+                        change=".onAssignEmployeeChange">
+                    <core:Item key="{dlg>employeeId}" text="{dlg>label}" />
+                </Select>
+
+                <!-- Loading state -->
+                <HBox visible="{dlg>/loading}" alignItems="Center" class="sapUiMediumMarginTop" justifyContent="Center">
+                    <BusyIndicator size="1.4rem" />
+                    <Text text="Loading workload…" class="sapUiSmallMarginBegin" />
+                </HBox>
+
+                <!-- Workload summary (shown once an employee is selected) -->
+                <VBox visible="{= ${dlg>/hasSelection} &amp;&amp; !${dlg>/loading} }" class="sapUiSmallMarginTop">
+
+                    <Text text="Current workload — {dlg>/selectedEmpName}" class="tsAssignDlgSectionTitle" />
+                    <Text text="(Active tasks only: Not Started &amp; In Progress)" class="tsHintText sapUiTinyMarginBottom" />
+
+                    <!-- Priority count cards -->
+                    <HBox class="tsWlSummaryRow" wrap="Wrap">
+                        <VBox class="tsWlCard tsWlHigh" alignItems="Center">
+                            <Title text="{dlg>/high}" level="H2" class="tsWlCount" />
+                            <Text text="High Priority" class="tsWlLabel" />
+                        </VBox>
+                        <VBox class="tsWlCard tsWlMed" alignItems="Center">
+                            <Title text="{dlg>/medium}" level="H2" class="tsWlCount" />
+                            <Text text="Medium Priority" class="tsWlLabel" />
+                        </VBox>
+                        <VBox class="tsWlCard tsWlLow" alignItems="Center">
+                            <Title text="{dlg>/low}" level="H2" class="tsWlCount" />
+                            <Text text="Low Priority" class="tsWlLabel" />
+                        </VBox>
+                    </HBox>
+
+                    <!-- Empty state -->
+                    <HBox visible="{= ${dlg>/tasks}.length === 0 }" alignItems="Center" class="tsWlEmpty sapUiSmallMarginTop">
+                        <core:Icon src="sap-icon://accept" color="#16a34a" class="sapUiTinyMarginEnd" />
+                        <Text text="No active tasks — this employee is free to take this on." />
+                    </HBox>
+
+                    <!-- Active task table -->
+                    <Table items="{dlg>/tasks}"
+                           visible="{= ${dlg>/tasks}.length > 0 }"
+                           class="tsWlTable sapUiSmallMarginTop"
+                           mode="None"
+                           noDataText="No active tasks.">
+                        <columns>
+                            <Column><Text text="Task" /></Column>
+                            <Column hAlign="Center" width="6.5rem"><Text text="Priority" /></Column>
+                            <Column hAlign="Center" width="7.5rem"><Text text="Status" /></Column>
+                            <Column hAlign="End" width="9rem"><Text text="Due Date" /></Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem>
+                                <cells>
+                                    <VBox>
+                                        <Text text="{dlg>taskName}" class="tsTaskRowName" />
+                                        <Text text="{dlg>taskId}" class="tsTaskRowId" />
+                                    </VBox>
+                                    <ObjectStatus text="{dlg>priority}"
+                                                  state="{path:'dlg>priority', formatter:'.formatPriorityState'}" />
+                                    <ObjectStatus text="{dlg>status}"
+                                                  state="{path:'dlg>status', formatter:'.formatStatusState'}" />
+                                    <Text text="{dlg>dueLabel}" />
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+                </VBox>
+
+            </VBox>
+        </u:content>
+
+        <u:beginButton>
+            <Button text="Assign"
+                    type="Emphasized"
+                    icon="sap-icon://employee"
+                    enabled="{= ${dlg>/hasSelection} &amp;&amp; !${dlg>/busy} }"
+                    press=".onConfirmAssign" />
+        </u:beginButton>
+        <u:endButton>
+            <Button text="Cancel" press=".onCancelAssign" />
+        </u:endButton>
+    </u:CustomDialog>
+
+</core:FragmentDefinition>

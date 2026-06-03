@@ -202,7 +202,10 @@ sap.ui.define([
             if (oComp.getCurrentUser) {
                 oComp.getCurrentUser().then(u => {
                     if (u && u.employeeName) {
-                        this._oDashModel.setProperty("/greetingHTML", buildHTML(u.employeeName));
+                        // Greet with the first name only — split the full name on
+                        // whitespace and keep the first part ("Jatin Bajaj" → "Jatin").
+                        const firstName = u.employeeName.trim().split(/\s+/)[0];
+                        this._oDashModel.setProperty("/greetingHTML", buildHTML(firstName));
                     }
                 });
             }

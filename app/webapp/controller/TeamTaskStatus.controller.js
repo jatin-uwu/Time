@@ -35,7 +35,7 @@ sap.ui.define([
         } catch (e) { return sIso; }
     }
 
-    return Controller.extend("timesheet.app.controller.TaskStatus", {
+    return Controller.extend("timesheet.app.controller.TeamTaskStatus", {
 
         onInit() {
             this._oTsModel = new JSONModel({
@@ -55,7 +55,7 @@ sap.ui.define([
             this.getView().setModel(this._oTsModel, "tsView");
 
             this.getOwnerComponent().getRouter()
-                .getRoute("task-status")
+                .getRoute("team-task-status")
                 .attachPatternMatched(this._onRouteMatched, this);
         },
 
@@ -71,14 +71,23 @@ sap.ui.define([
         },
 
         _onRouteMatched() {
-            // Personal view for everyone (managers included): this page shows
-            // ONLY the logged-in user's own tasks. The all-employees view now
-            // lives in the manager-only "Team Task Status" screen.
-            this._oTsModel.setProperty("/isManagerView", false);
-            this._oTsModel.setProperty("/employees", []);
-            this._oTsModel.setProperty("/filterEmployee", "");
-            // Resolve the user first so the self-scope filter has the right id.
-            this.getOwnerComponent().getCurrentUser().then(() => this._loadTasks());
+            // Resolve the backend user first so the manager-only guard is based
+            // on the real role even on a fresh direct-URL load (role may not be
+            // cached in localStorage yet).
+            this.getOwnerComponent().getCurrentUser().then(() => {
+                const bManager = this._resolveRole() === "manager";
+
+                // Team Task Status is a manager-only screen. Non-managers who
+                // reach it via a direct URL/hash are sent back to the dashboard.
+                if (!bManager) {
+                    this.getOwnerComponent().getRouter().navTo("dashboard", {}, true);
+                    return;
+                }
+
+                this._oTsModel.setProperty("/isManagerView", true);
+                this._loadEmployees();
+                this._loadTasks();
+            });
         },
 
         _loadEmployees() {
@@ -103,10 +112,12 @@ sap.ui.define([
 
             const oComp     = this.getOwnerComponent();
             const oModel    = oComp.getModel();
-            const sSelfId   = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
+            const bManager  = !!this._oTsModel.getProperty("/isManagerView");
+            const sSelfId   = (!bManager && oComp.getCurrentEmployeeId)
+                ? oComp.getCurrentEmployeeId() : null;
 
             const ownOnly = (list) => {
-                if (!sSelfId) return list;
+                if (bManager || !sSelfId) return list;
                 return (list || []).filter(t => {
                     const tEmp = t.assignedTo_employeeId ||
                                  (t.assignedTo && t.assignedTo.employeeId) || t.assignedTo;
@@ -115,8 +126,8 @@ sap.ui.define([
             };
 
             const finish = (remote) => {
-                // Scope BOTH the local model and the remote result to self so the
-                // list + counters only ever show the current user's own tasks.
+                // Scope BOTH the local model and the remote result to self for
+                // non-managers so list + counters never leak others' tasks.
                 const merged = this._merge(ownOnly(local), ownOnly(remote || []));
                 this._oTsModel.setProperty("/allTasks", merged);
                 this._applyFilter();
@@ -124,7 +135,7 @@ sap.ui.define([
 
             if (!oModel) { finish([]); return; }
 
-            // Always fetch only the current user's tasks.
+            // Employees/HR: fetch only their own tasks. Managers: fetch all.
             const aFilters = sSelfId
                 ? [new Filter("assignedTo_employeeId", FilterOperator.EQ, sSelfId)]
                 : [];
@@ -244,7 +255,7 @@ sap.ui.define([
             if (!oCtx) return;
             const task = oCtx.getObject();
             if (!task || !task.taskId) return;
-            // Opening from Task Status is view-only — no "Post an update" form.
+            // Opening from Team Task Status is view-only — no "Post an update" form.
             this.getOwnerComponent()._bAllowTaskPost = false;
             this.getOwnerComponent().getRouter()
                 .navTo("task-detail", { taskId: task.taskId });

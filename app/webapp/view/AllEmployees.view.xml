@@ -113,9 +113,8 @@
                                 press=".onResetPassword" />
                     </HBox>
 
-                    <!-- Scrollable content -->
-                    <ScrollContainer height="100%" width="100%" vertical="true" class="tsEmpDrawerScroll">
-                        <VBox class="tsEmpDrawerContent">
+                    <!-- Scrollable content (CSS flex scroller — reliable in a flex column) -->
+                    <VBox class="tsEmpDrawerContent tsEmpDrawerScroll">
 
                             <Panel headerText="Contact" expandable="true" expanded="true" class="tsEmpDrawerPanel">
                                 <VBox class="tsEmpDrawerFields">
@@ -170,8 +169,7 @@
                                 </List>
                             </Panel>
 
-                        </VBox>
-                    </ScrollContainer>
+                    </VBox>
                 </VBox>
 
             </VBox>

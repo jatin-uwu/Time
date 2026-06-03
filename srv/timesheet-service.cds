@@ -279,6 +279,30 @@ service EmployeeService @(path: '/employee') {
         lowPriorityCount    : Integer;
     };
 
+    // ── Company Newsletter (read for everyone) ────────────────────────────
+    // Returns the most recently published newsletter so any authenticated
+    // user (Employee / Manager / HR) can view it. HR publishes a new one via
+    // the HR uploadEmployeeDocument action with documentType = 'Newsletter'.
+    @(requires: 'authenticated-user')
+    action getLatestNewsletter()                                           returns {
+        hasNewsletter : Boolean;
+        newsletterId  : String;
+        fileName      : String;
+        mimeType      : String;
+        dataBase64    : LargeString;
+        uploadedOn    : String;
+    };
+
+    // Lightweight metadata (no binary) — used to decide whether to show the
+    // "new newsletter" button without transferring the whole document.
+    @(requires: 'authenticated-user')
+    action getNewsletterMeta()                                             returns {
+        hasNewsletter : Boolean;
+        newsletterId  : String;
+        fileName      : String;
+        uploadedOn    : String;
+    };
+
     action markAttendance(attendanceDate: String,
                           attendanceDay: String,
                           attendanceTime: String)                          returns {

@@ -44,6 +44,10 @@ sap.ui.define([
                     maternity: 180,
                     paternity: 2
                 },
+                // Gender-based leave visibility (resolved once the employee loads).
+                // Default true so nothing flickers before the gender is known.
+                showMaternity: true,
+                showPaternity: true,
                 submitting: false
             });
             this.getView().setModel(this._oLeaveModel, "leave");
@@ -81,7 +85,38 @@ sap.ui.define([
                 });
             }
 
+            this._applyGenderFilter();
             this._loadHistory();
+        },
+
+        // ── Hide gender-specific leave types ──────────────────────────────
+        // Male employees can't take Maternity leave; female employees can't
+        // take Paternity leave. sap.ui.core.Item has no "visible" property, so
+        // we remove the irrelevant option from the Select once we know the
+        // employee's gender, and toggle the matching balance card via flags.
+        _applyGenderFilter() {
+            const oComp = this.getOwnerComponent();
+            const sEmpId = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
+            if (!sEmpId || !oComp.getEmployeeById) return;
+
+            oComp.getEmployeeById(sEmpId).then(emp => {
+                const sGender = ((emp && emp.gender) || "").toLowerCase();
+                let sRemoveKey = null;
+                if (sGender === "male")        { sRemoveKey = "Maternity"; }
+                else if (sGender === "female") { sRemoveKey = "Paternity"; }
+                if (!sRemoveKey) return;
+
+                this._oLeaveModel.setProperty("/showMaternity", sRemoveKey !== "Maternity");
+                this._oLeaveModel.setProperty("/showPaternity", sRemoveKey !== "Paternity");
+
+                const oSelect = this.byId("selLeaveType");
+                if (!oSelect) return;
+                const oItem = oSelect.getItems().find(i => i.getKey() === sRemoveKey);
+                if (oItem) {
+                    oSelect.removeItem(oItem);
+                    oItem.destroy();
+                }
+            }).catch(() => { /* leave all options on lookup failure */ });
         },
 
         // ── Load leave history + compute remaining balance ────────────────

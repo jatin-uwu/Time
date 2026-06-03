@@ -47,7 +47,7 @@
         },
         "resources": {
             "css": [
-                { "uri": "css/style.css?v=16" }
+                { "uri": "css/style.css?v=20" }
             ]
         },
         "models": {
@@ -110,6 +110,7 @@
                 { "name": "manager",       "pattern": "manager",       "target": "manager"       },
                 { "name": "task-assignment", "pattern": "task-assignment", "target": "task-assignment" },
                 { "name": "task-status",   "pattern": "task-status",   "target": "task-status"   },
+                { "name": "team-task-status", "pattern": "team-task-status", "target": "team-task-status" },
                 { "name": "notifications", "pattern": "notifications", "target": "notifications" },
                 { "name": "add-employee",  "pattern": "add-employee",  "target": "add-employee"  },
                 { "name": "all-employees", "pattern": "all-employees", "target": "all-employees" },
@@ -131,6 +132,7 @@
                 "manager":       { "viewName": "Manager"    },
                 "task-assignment": { "viewName": "TaskAssignment"},
                 "task-status":   { "viewName": "TaskStatus" },
+                "team-task-status": { "viewName": "TeamTaskStatus" },
                 "notifications": { "viewName": "Notifications"},
                 "add-employee":  { "viewName": "AddEmployee" },
                 "all-employees": { "viewName": "AllEmployees"},

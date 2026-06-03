@@ -1,11 +1,11 @@
 <mvc:View
-    controllerName="timesheet.app.controller.TaskStatus"
+    controllerName="timesheet.app.controller.TeamTaskStatus"
     xmlns:mvc="sap.ui.core.mvc"
     xmlns="sap.m"
     xmlns:core="sap.ui.core"
     displayBlock="true">
 
-    <Page id="taskStatusPage"
+    <Page id="teamTaskStatusPage"
           showHeader="false"
           class="tsDashboardPage"
           enableScrolling="true">
@@ -18,7 +18,7 @@
                 <HBox class="tsPageHeaderCard" alignItems="Center" justifyContent="SpaceBetween" wrap="Wrap">
                     <HBox alignItems="Center">
                         <core:Icon src="sap-icon://activity-items" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
-                        <Text text="My Task Status"
+                        <Text text="Team Task Status"
                               style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
                     </HBox>
                     <HBox alignItems="Center" wrap="Wrap" style="gap:8px;">
@@ -49,6 +49,14 @@
                                  liveChange=".onSearchTasks"
                                  width="280px" />
                     <ToolbarSpacer />
+                    <Select id="selFilterEmployee"
+                            selectedKey="{tsView>/filterEmployee}"
+                            change=".onFilterChange"
+                            items="{tsView>/employeeFilterList}"
+                            visible="{tsView>/isManagerView}"
+                            width="220px">
+                        <core:Item key="{tsView>employeeId}" text="{tsView>employeeName}" />
+                    </Select>
                     <SegmentedButton selectedKey="{tsView>/filterStatus}"
                                      selectionChange=".onStatusFilterChange">
                         <items>

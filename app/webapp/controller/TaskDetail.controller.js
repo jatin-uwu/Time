@@ -85,14 +85,21 @@ sap.ui.define([
         },
 
         _refreshCanPost() {
-            const oAppModel = this.getOwnerComponent().getModel("appView") ||
+            const oComp = this.getOwnerComponent();
+            const oAppModel = oComp.getModel("appView") ||
                               (this.getView() && this.getView().getModel("appView"));
             const sRole = (oAppModel && oAppModel.getProperty("/userRole")) || "employee";
-            const sCurrentEmpId = this.getOwnerComponent().getCurrentEmployeeId &&
-                                  this.getOwnerComponent().getCurrentEmployeeId();
+            const sCurrentEmpId = oComp.getCurrentEmployeeId && oComp.getCurrentEmployeeId();
             const sAssignee = this._oTdModel.getProperty("/task/assignedToEmpId");
-            const bCanPost = (sCurrentEmpId && sAssignee && sCurrentEmpId === sAssignee) || (sRole !== "manager");
-            this._oTdModel.setProperty("/canPost", !!bCanPost);
+
+            // "Post an update" is only offered when the task was opened from the
+            // Task Description page (consume the one-shot source flag). Opening
+            // from Task Status / Team Task Status is strictly view-only.
+            const bFromDescription = oComp._bAllowTaskPost === true;
+            oComp._bAllowTaskPost = false;
+
+            const bEligible = (sCurrentEmpId && sAssignee && sCurrentEmpId === sAssignee) || (sRole !== "manager");
+            this._oTdModel.setProperty("/canPost", bFromDescription && !!bEligible);
         },
 
         _loadUpdates(sTaskId) {
@@ -280,10 +287,7 @@ sap.ui.define([
         formatStatusState(sValue)   { return STATUS_STATE[sValue]   || "None"; },
 
         onNavBack() {
-            const oAppModel = this.getOwnerComponent().getModel("appView") ||
-                              (this.getView() && this.getView().getModel("appView"));
-            const sRole = (oAppModel && oAppModel.getProperty("/userRole")) || "employee";
-            this.getOwnerComponent().getRouter().navTo(sRole === "manager" ? "task-status" : "task-description");
+            this.getOwnerComponent().getRouter().navTo("task-description");
         }
     });
 });

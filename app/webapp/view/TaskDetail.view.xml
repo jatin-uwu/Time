@@ -8,15 +8,27 @@
     displayBlock="true">
 
     <Page id="taskDetailPage"
-          title="Task Detail"
-          showNavButton="true"
-          navButtonPress=".onNavBack"
+          showHeader="false"
           class="tsDashboardPage"
           enableScrolling="true">
 
         <content>
 
             <VBox class="tsTaskDetailWrap sapUiSmallMargin">
+
+                <!-- ── Page header (back + icon + title) — matches other pages, sticky ── -->
+                <HBox class="tsPageHeaderCard" alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center">
+                        <Button icon="sap-icon://nav-back"
+                                type="Transparent"
+                                press=".onNavBack"
+                                tooltip="Back"
+                                class="tsPageBackBtn" />
+                        <core:Icon src="sap-icon://task" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                        <Text text="Task Detail"
+                              style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                    </HBox>
+                </HBox>
 
                 <!-- ── Task header card ── -->
                 <Panel class="tsTaskDetailHeaderCard" expandable="false">

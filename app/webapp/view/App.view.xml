@@ -66,6 +66,24 @@
         &lt;/div&gt;" />
 
     <ToolbarSpacer />
+        <!-- Newsletter — visible to every role, but only while there's a newly
+             published newsletter the current user hasn't opened yet. -->
+        <Button id="newsletterBtn"
+            icon="sap-icon://newspaper"
+            text="Newsletter"
+            type="Transparent"
+            tooltip="View the latest company newsletter"
+            visible="{appView>/showNewsletter}"
+            press=".onOpenNewsletter"
+            class="tsNewsletterBtn" />
+        <!-- Publish newsletter — HR only -->
+        <Button id="newsletterUploadBtn"
+            icon="sap-icon://upload"
+            type="Transparent"
+            tooltip="Publish a newsletter (PDF / Word)"
+            visible="{= ${appView>/userRole} === 'hr' }"
+            press=".onUploadNewsletter"
+            class="tsNewsletterBtn" />
         <!-- Upload profile picture button -->
         <Button
             icon="sap-icon://camera"
@@ -185,6 +203,10 @@
                         <StandardListItem title="Assign Task" icon="sap-icon://create-form"
                             type="Active" press=".onNavSelect" class="tsNavItem">
                             <customData><core:CustomData key="target" value="task-assignment" /></customData>
+                        </StandardListItem>
+                        <StandardListItem title="Team Task Status" icon="sap-icon://group"
+                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            <customData><core:CustomData key="target" value="team-task-status" /></customData>
                         </StandardListItem>
                         <StandardListItem title="Approvals" icon="sap-icon://approvals"
                             type="Active" press=".onNavSelect" class="tsNavItem">

@@ -1737,6 +1737,24 @@ html, body { margin: 0; height: 100%; }
     background: #fff !important;
     border-radius: 22px !important;
 }
+/* Kill the SearchField's default bottom underline/shadow that pokes out under
+   the rounded white pill and looks like an overlapping border. */
+.tsTeamAttSearch .sapMSF {
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+    overflow: hidden;
+}
+.tsTeamAttSearch .sapMSF::before,
+.tsTeamAttSearch .sapMSF::after,
+.tsTeamAttSearch input::before,
+.tsTeamAttSearch input::after {
+    display: none !important;
+    border: none !important;
+}
+.tsTeamAttSearch input {
+    border: none !important;
+    box-shadow: none !important;
+}
 .tsTeamAttExportBtn .sapMBtnInner {
     background: rgba(255, 255, 255, 0.15) !important;
     color: #fff !important;
@@ -2523,14 +2541,24 @@ html .sapUiBlockLayer {
     -webkit-backdrop-filter: blur(3px) !important;
 }
 
-/* The dialog card */
+/* The dialog card.
+   Centered against the VISUAL VIEWPORT with position:fixed + transform rather
+   than relying on the Popup's measured top/left (which it computes once at open
+   time, before a tall form has finished laying out — that left the footer below
+   the fold). The !important wins over the Popup's non-important inline
+   position/top/left, and max-height:90vh guarantees the footer stays on screen. */
 .tsCustDialog {
-    position: relative;
+    position: fixed !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important;
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
     max-width: calc(100vw - 32px);
-    max-height: 90vh;
+    /* Cap under the viewport so the dialog never fills the screen and the footer
+       stays on-screen. Tall forms scroll via the body below, not the dialog. */
+    max-height: 85vh;
     background: #ffffff;
     border: 1px solid rgba(226, 232, 240, 0.9);
     border-radius: 16px;
@@ -2597,13 +2625,13 @@ html .sapUiBlockLayer {
 .tsCustDlgIconInfo    { background: #dbeafe; color: #2563eb; }
 
 /* Body — the reliable scroll area. The explicit max-height (viewport minus
-   header+footer+accent) guarantees the body scrolls and the footer buttons
-   stay visible even for tall forms like Edit Employee, regardless of how the
-   Popup resolves the flex container height. */
+   room for header + footer) guarantees the body itself scrolls and the pinned
+   footer buttons stay visible for tall forms like Edit Employee, independent of
+   how the flex container height resolves. */
 .tsCustDialogBody {
     flex: 1 1 auto;
     min-height: 0;
-    max-height: calc(90vh - 132px);
+    max-height: calc(85vh - 150px);
     overflow-y: auto;
     overflow-x: hidden;
     padding: 16px 22px;
@@ -2720,15 +2748,18 @@ html .sapUiBlockLayer {
 .tsEmpDrawerClose .sapMBtnInner { border-radius: 8px !important; }
 
 .tsEmpDrawerActions { padding: 12px 16px; border-bottom: 1px solid #eef2f7; flex: 0 0 auto; gap: 8px; }
-.tsEmpDrawerScroll  { flex: 1 1 auto; min-height: 0; }
-/* Scrollable drawer, but hide the scrollbar chrome (all engines) */
-.tsEmpDrawerScroll,
-.tsEmpDrawerScroll .sapMScrollContScroll {
+/* The content VBox is the scroller: flex:1 + min-height:0 + overflow makes it
+   fill the remaining drawer height and scroll, so every section (incl.
+   Documents at the bottom) is reachable. Scrollbar chrome is hidden. */
+.tsEmpDrawerScroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
     scrollbar-width: none !important;       /* Firefox */
     -ms-overflow-style: none !important;    /* legacy Edge */
 }
-.tsEmpDrawerScroll::-webkit-scrollbar,
-.tsEmpDrawerScroll .sapMScrollContScroll::-webkit-scrollbar {
+.tsEmpDrawerScroll::-webkit-scrollbar {
     width: 0 !important; height: 0 !important; display: none !important;
 }
 .tsEmpDrawerContent { padding: 8px 14px 18px; }
@@ -2754,3 +2785,89 @@ html .sapUiBlockLayer {
 @media (max-width: 700px) {
     .tsEmpDrawer { width: 100%; max-width: 100%; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ASSIGN TASK DIALOG  (TaskDescription → manager reassignment)
+   Shows the chosen employee's live workload before confirming.
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsAssignDlgTaskRow {
+    background: #f8fafc;
+    border: 1px solid #eef2f7;
+    border-radius: 10px;
+    padding: 10px 14px;
+}
+.tsAssignDlgTaskName { font-weight: 700; color: #1e293b; font-size: 0.95rem; }
+.tsAssignDlgLabel    { font-weight: 600; color: #334155; }
+.tsAssignDlgSectionTitle { font-weight: 700; color: #1e293b; font-size: 0.95rem; }
+
+/* Priority count cards */
+.tsWlSummaryRow { gap: 10px; }
+.tsWlCard {
+    flex: 1 1 0;
+    min-width: 90px;
+    border-radius: 12px;
+    padding: 12px 8px;
+    border: 1px solid #eef2f7;
+    background: #ffffff;
+}
+.tsWlCount { font-size: 1.6rem !important; font-weight: 800 !important; line-height: 1.1; }
+.tsWlLabel { font-size: 0.78rem; color: #64748b; font-weight: 600; margin-top: 2px; }
+.tsWlHigh  { background: #fef2f2; border-color: #fee2e2; }
+.tsWlHigh  .tsWlCount { color: #dc2626 !important; }
+.tsWlMed   { background: #fffbeb; border-color: #fef3c7; }
+.tsWlMed   .tsWlCount { color: #d97706 !important; }
+.tsWlLow   { background: #f0fdf4; border-color: #dcfce7; }
+.tsWlLow   .tsWlCount { color: #16a34a !important; }
+
+.tsWlEmpty {
+    background: #f0fdf4;
+    border: 1px solid #dcfce7;
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: #15803d;
+}
+.tsWlTable .sapMListTblHeaderCell { background: #f8fafc; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TEAM TASK STATUS  (manager — Management menu)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsTeamTaskFilterBar { flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
+.tsTeamUpdateCell    { max-width: 260px; }
+.tsTeamUpdateNote    { color: #334155; font-size: 0.85rem; }
+.tsTeamUpdateMeta    { color: #94a3b8; font-size: 0.74rem; margin-top: 2px; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   NEWSLETTER toolbar buttons (top header — light background)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsNewsletterBtn .sapMBtnInner {
+    background: #eff6ff !important;
+    border: 1px solid #bfdbfe !important;
+    border-radius: 8px !important;
+}
+.tsNewsletterBtn .sapMBtnInner:hover { background: #dbeafe !important; }
+.tsNewsletterBtn .sapMBtnContent,
+.tsNewsletterBtn .sapMBtnIcon { color: #1d4ed8 !important; font-weight: 600 !important; }
+
+/* Rendered newsletter document (PDF → iframe; .docx → mammoth HTML) */
+.tsNewsletterDoc {
+    max-width: 760px;
+    margin: 0 auto;
+    color: #1e293b;
+    font-size: 0.95rem;
+    line-height: 1.7;
+    font-family: "72", "72full", Arial, Helvetica, sans-serif;
+    word-wrap: break-word;
+}
+.tsNewsletterDoc h1, .tsNewsletterDoc h2, .tsNewsletterDoc h3,
+.tsNewsletterDoc h4 { color: #0f172a; font-weight: 700; margin: 1.1em 0 0.4em; line-height: 1.3; }
+.tsNewsletterDoc h1 { font-size: 1.5rem; }
+.tsNewsletterDoc h2 { font-size: 1.25rem; }
+.tsNewsletterDoc h3 { font-size: 1.1rem; }
+.tsNewsletterDoc p  { margin: 0 0 0.7em; }
+.tsNewsletterDoc a  { color: #1d4ed8; }
+.tsNewsletterDoc img { max-width: 100%; height: auto; border-radius: 6px; }
+.tsNewsletterDoc ul, .tsNewsletterDoc ol { padding-left: 1.4em; margin: 0 0 0.7em; }
+.tsNewsletterDoc table { border-collapse: collapse; width: 100%; margin: 0.6em 0; }
+.tsNewsletterDoc td, .tsNewsletterDoc th { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: left; }
+.tsNewsletterDoc th { background: #f8fafc; }
+.tsNewsletterLoading, .tsNewsletterFail { color: #64748b; text-align: center; padding: 28px 12px; }

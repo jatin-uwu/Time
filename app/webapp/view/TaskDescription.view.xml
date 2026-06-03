@@ -17,11 +17,11 @@
                 <!-- ── Page header (icon + title + count) ─────────────────── -->
                 <HBox class="tsPageHeaderCard" alignItems="Center" justifyContent="SpaceBetween">
                     <HBox alignItems="Center">
-                        <Button icon="sap-icon://nav-back"
+                        <!-- <Button icon="sap-icon://nav-back"
                                 type="Transparent"
                                 press=".onNavBack"
                                 tooltip="Back to dashboard"
-                                class="tsPageBackBtn" />
+                                class="tsPageBackBtn" /> -->
                         <core:Icon src="sap-icon://wallet" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
                         <Text text="Task Descriptions"
                               style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
@@ -41,18 +41,6 @@
                                  liveChange=".onSearch"
                                  width="260px"
                                  class="sapUiTinyMarginEnd sapUiTinyMarginBottom" />
-
-                    <!-- Manager-only: preview as employee -->
-                    <Select id="selEmployeeView"
-                            visible="{= ${appView>/userRole} === 'manager' }"
-                            selectedKey="{tdView>/viewAsEmployee}"
-                            items="{tdView>/employeeFilterList}"
-                            change=".onEmployeeFilterChange"
-                            width="220px"
-                            tooltip="Preview as employee"
-                            class="sapUiTinyMarginEnd sapUiTinyMarginBottom">
-                        <core:Item key="{tdView>employeeId}" text="{tdView>employeeName}" />
-                    </Select>
 
                     <!-- Priority filter -->
                     <HBox class="tsTaskPriorityFilter sapUiTinyMarginBottom" alignItems="Center">
@@ -236,6 +224,20 @@
                                         icon="sap-icon://alert"
                                         type="Reject"
                                         press=".onOpenIssueDialog" />
+                            </HBox>
+
+                            <!-- ══ MANAGER action row ════════════════════════════════
+                                 Managers can delegate/reassign their own tasks to a
+                                 team member. Opens the Assign Task dialog with that
+                                 employee's live workload before confirming. -->
+                            <HBox class="tsTaskActionRow"
+                                  justifyContent="End"
+                                  alignItems="Center"
+                                  visible="{= ${appView>/userRole} === 'manager' }">
+                                <Button text="Assign Task"
+                                        icon="sap-icon://employee"
+                                        type="Emphasized"
+                                        press=".onOpenAssignDialog" />
                             </HBox>
 
                         </VBox>

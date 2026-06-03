@@ -12,9 +12,24 @@ sap.ui.define([
     "sap/m/Text",
     "sap/m/Title",
     "sap/m/Avatar",
-    "sap/ui/core/Icon"
-], (Controller, JSONModel, MessageToast, MessageBox, ResponsivePopover, Bar, Button, VBox, HBox, Label, Text, Title, Avatar, Icon) => {
+    "sap/ui/core/Icon",
+    "timesheet/app/util/CustomDialog",
+    "sap/ui/unified/FileUploader",
+    "sap/ui/core/HTML"
+], (Controller, JSONModel, MessageToast, MessageBox, ResponsivePopover, Bar, Button, VBox, HBox, Label, Text, Title, Avatar, Icon, CustomDialog, FileUploader, HTML) => {
     "use strict";
+
+    // Routes under the manager "Management" menu — only a logged-in manager
+    // may open these. Non-managers (employee/HR) are bounced to the dashboard,
+    // whether they click a (hidden) link or hit the URL/hash directly.
+    const MANAGER_ROUTES = [
+        "task-assignment",
+        "team-task-status",
+        "manager",
+        "approval-history",
+        "team-attendance",
+        "performance-rating"
+    ];
 
     function buildInitials(sName) {
         if (!sName) return "JD";
@@ -90,6 +105,9 @@ sap.ui.define([
                 userName: "",
                 userInitials: "JD",
                 userProfile: null,
+                // Newsletter button visibility — true only when a newsletter the
+                // user hasn't opened yet exists (set by _refreshNewsletterBadge).
+                showNewsletter: false,
                 // data: URL bound to the toolbar Avatar.src and popover img
                 profilePhotoSrc: "",
                 profilePhotoDataUrl: ""
@@ -159,6 +177,7 @@ sap.ui.define([
                     const sRole = u && (u.role || (u.value && u.value.role));
                     applyRole(sRole);
                     markResolved();
+                    this._refreshNewsletterBadge();
                 }).catch(() => markResolved());
             } else {
                 markResolved();
@@ -207,6 +226,248 @@ sap.ui.define([
         },
 
         // ── Upload Profile Picture ────────────────────────────────────────────
+        // ════════════════════════════════════════════════════════════════════
+        //  NEWSLETTER  —  view (all roles) + publish (HR only)
+        // ════════════════════════════════════════════════════════════════════
+
+        // base64 → object URL so PDFs/images render reliably inside an <iframe>
+        // (browsers block data: URLs in frames). Caller revokes the URL on close.
+        _b64ToObjectUrl(sB64, sMime) {
+            const sBin = atob(sB64);
+            const aBytes = new Uint8Array(sBin.length);
+            for (let i = 0; i < sBin.length; i++) aBytes[i] = sBin.charCodeAt(i);
+            return URL.createObjectURL(new Blob([aBytes], { type: sMime || "application/octet-stream" }));
+        },
+
+        // localStorage key prefix for the last newsletter a user opened. Scoped
+        // per employeeId so that, when several users share one browser (e.g. mock
+        // auth in dev), one person opening it doesn't hide it for the others.
+        _NEWSLETTER_SEEN_KEY: "tsNewsletterSeen",
+
+        _newsletterSeenKey() {
+            const oComp = this.getOwnerComponent();
+            const sId = (oComp.getCurrentEmployeeId && oComp.getCurrentEmployeeId()) || "anon";
+            return this._NEWSLETTER_SEEN_KEY + ":" + sId;
+        },
+
+        // Show the Newsletter button only when a newsletter exists whose id the
+        // user hasn't opened yet. Cheap meta call (no binary transfer).
+        // Uses a plain fetch (callAction) rather than an OData $batch — a $batch
+        // auth challenge during early app load crashes CAP's basic-auth handler.
+        _refreshNewsletterBadge() {
+            callAction("getNewsletterMeta").then((r) => {
+                r = r || {};
+                let sSeen = "";
+                try { sSeen = localStorage.getItem(this._newsletterSeenKey()) || ""; } catch (e) { /**/ }
+                const bShow = !!(r.hasNewsletter && r.newsletterId && r.newsletterId !== sSeen);
+                this._oAppModel.setProperty("/showNewsletter", bShow);
+            }).catch(() => { /* leave hidden on failure */ });
+        },
+
+        // Mark the current newsletter as seen → hide the button until a new one.
+        _markNewsletterSeen(sId) {
+            if (!sId) return;
+            try { localStorage.setItem(this._newsletterSeenKey(), sId); } catch (e) { /**/ }
+            this._oAppModel.setProperty("/showNewsletter", false);
+        },
+
+        onOpenNewsletter() {
+            const oBtn = this.byId("newsletterBtn");
+            if (oBtn) oBtn.setBusy(true);
+
+            callAction("getLatestNewsletter").then((r) => {
+                if (oBtn) oBtn.setBusy(false);
+                r = r || {};
+                if (!r.hasNewsletter || !r.dataBase64) {
+                    MessageToast.show("No newsletter has been published yet.");
+                    this._oAppModel.setProperty("/showNewsletter", false);
+                    return;
+                }
+                // Opening it counts as "seen" — hide the button until the next one.
+                this._markNewsletterSeen(r.newsletterId);
+                this._showNewsletterDialog(r);
+            }).catch(() => {
+                if (oBtn) oBtn.setBusy(false);
+                MessageToast.show("Could not load the newsletter.");
+            });
+        },
+
+        _showNewsletterDialog(r) {
+            const sUrl  = this._b64ToObjectUrl(r.dataBase64, r.mimeType);
+            const sName = r.fileName || "newsletter";
+            const isPdf = /pdf/i.test(r.mimeType || "") || /\.pdf$/i.test(sName);
+            const isImg = /^image\//i.test(r.mimeType || "");
+            const isDocx = /\.docx$/i.test(sName) ||
+                           /officedocument\.wordprocessingml/i.test(r.mimeType || "");
+
+            let oContent;
+            if (isPdf) {
+                // #toolbar=0&navpanes=0 hides the browser PDF viewer's toolbar
+                // and side panes so only the document content shows.
+                oContent = new HTML({
+                    content: "<iframe src='" + sUrl + "#toolbar=0&navpanes=0&scrollbar=0' style='width:100%;height:70vh;border:none;border-radius:8px;' title='Newsletter'></iframe>"
+                });
+            } else if (isImg) {
+                oContent = new HTML({
+                    content: "<div style='text-align:center;'><img src='" + sUrl + "' style='max-width:100%;border-radius:8px;' alt='Newsletter' /></div>"
+                });
+            } else if (isDocx) {
+                // Render Word content inline (converted to HTML via mammoth.js).
+                oContent = new HTML({
+                    content: "<div class='tsNewsletterDoc'><div class='tsNewsletterLoading'>Loading newsletter…</div></div>"
+                });
+                this._renderDocxInto(oContent, r.dataBase64);
+            } else {
+                // Legacy .doc / unknown formats can't be previewed inline.
+                oContent = new VBox({
+                    alignItems: "Center",
+                    items: [
+                        new Icon({ src: "sap-icon://document", size: "2.5rem", color: "#2563eb" }).addStyleClass("sapUiSmallMarginBottom"),
+                        new Text({ text: "“" + sName + "” can’t be previewed here. Use the download icon to open it.", textAlign: "Center" })
+                    ]
+                }).addStyleClass("sapUiMediumMargin");
+            }
+
+            const triggerDownload = () => {
+                const a = document.createElement("a");
+                a.href = sUrl; a.download = sName;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            };
+
+            const oDialog = new CustomDialog({
+                title: "Newsletter" + (r.fileName ? " · " + r.fileName : ""),
+                contentWidth: (isPdf || isDocx) ? "880px" : "560px",
+                content: [oContent],
+                beginButton: new Button({ icon: "sap-icon://download", tooltip: "Download newsletter", type: "Transparent", press: triggerDownload }),
+                afterClose: () => { try { URL.revokeObjectURL(sUrl); } catch (e) { /**/ } oDialog.destroy(); }
+            });
+            this.getView().addDependent(oDialog);
+            oDialog.open();
+        },
+
+        // Convert a base64 .docx to HTML in the browser and inject it into the
+        // given HTML control. mammoth.js is loaded on demand; if it can't load
+        // (offline / CSP), we fall back to a download-only message.
+        _renderDocxInto(oHtml, sB64) {
+            const fail = (sMsg) => oHtml.setContent(
+                "<div class='tsNewsletterDoc'><div class='tsNewsletterFail'>" +
+                (sMsg || "Couldn’t render this document — please download it to view.") +
+                "</div></div>");
+
+            this._loadMammoth().then((mammoth) => {
+                if (!mammoth) { fail(); return; }
+                let buffer;
+                try {
+                    const sBin = atob(sB64);
+                    const aBytes = new Uint8Array(sBin.length);
+                    for (let i = 0; i < sBin.length; i++) aBytes[i] = sBin.charCodeAt(i);
+                    buffer = aBytes.buffer;
+                } catch (e) { fail(); return; }
+
+                mammoth.convertToHtml({ arrayBuffer: buffer })
+                    .then((result) => {
+                        const sBody = (result && result.value) || "";
+                        oHtml.setContent("<div class='tsNewsletterDoc'>" +
+                            (sBody || "<em>This newsletter appears to be empty.</em>") + "</div>");
+                    })
+                    .catch(() => fail());
+            }).catch(() => fail("Couldn’t load the document viewer — please download the file to view it."));
+        },
+
+        _loadMammoth() {
+            if (window.mammoth) return Promise.resolve(window.mammoth);
+            if (this._pMammoth) return this._pMammoth;
+            this._pMammoth = new Promise((resolve, reject) => {
+                const s = document.createElement("script");
+                s.src = "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js";
+                s.async = true;
+                s.onload = () => resolve(window.mammoth);
+                s.onerror = () => { this._pMammoth = null; reject(new Error("mammoth load failed")); };
+                document.head.appendChild(s);
+            });
+            return this._pMammoth;
+        },
+
+        onUploadNewsletter() {
+            this._oNewsletterFile = null;
+
+            const oFU = new FileUploader({
+                width: "100%",
+                placeholder: "Choose a PDF or Word document",
+                buttonText: "Browse…",
+                fileType: ["pdf", "doc", "docx"],
+                maximumFileSize: 10,
+                change: (oEv) => { this._oNewsletterFile = (oEv.getParameter("files") || [])[0] || null; },
+                typeMissmatch: () => MessageToast.show("Only PDF or Word documents are allowed."),
+                fileSizeExceed: () => MessageToast.show("File must be under 10 MB.")
+            });
+
+            const oUploadBtn = new Button({
+                text: "Upload & Publish",
+                type: "Emphasized",
+                icon: "sap-icon://upload",
+                press: () => {
+                    const oFile = this._oNewsletterFile;
+                    if (!oFile) { MessageToast.show("Please choose a file."); return; }
+                    oDialog.setBusy(true);
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                        const sB64 = String(ev.target.result).replace(/^data:[^;]+;base64,/, "");
+                        this._publishNewsletter(oFile.name, oFile.type || "application/octet-stream", sB64)
+                            .then(() => {
+                                oDialog.setBusy(false);
+                                oDialog.close();
+                                MessageToast.show("Newsletter published — everyone can now view it.");
+                                // A new newsletter exists → the button should reappear.
+                                this._refreshNewsletterBadge();
+                            })
+                            .catch((err) => {
+                                oDialog.setBusy(false);
+                                MessageBox.error("Upload failed: " + ((err && err.message) || err));
+                            });
+                    };
+                    reader.onerror = () => { oDialog.setBusy(false); MessageToast.show("Could not read the file."); };
+                    reader.readAsDataURL(oFile);
+                }
+            });
+
+            const oDialog = new CustomDialog({
+                title: "Publish Newsletter",
+                contentWidth: "460px",
+                content: [
+                    new VBox({
+                        items: [
+                            new Text({ text: "Upload a PDF or Word document. It replaces the current newsletter and becomes visible to everyone via the Newsletter button.", wrapping: true })
+                                .addStyleClass("sapUiSmallMarginBottom"),
+                            oFU
+                        ]
+                    }).addStyleClass("sapUiSmallMargin")
+                ],
+                beginButton: oUploadBtn,
+                endButton: new Button({ text: "Cancel", press: () => oDialog.close() }),
+                afterClose: () => oDialog.destroy()
+            });
+            this.getView().addDependent(oDialog);
+            oDialog.open();
+        },
+
+        _publishNewsletter(sFileName, sMime, sB64) {
+            const oComp = this.getOwnerComponent();
+            const oHr = oComp.getModel("hr");
+            if (!oHr) return Promise.reject(new Error("HR service unavailable."));
+            const sEmpId = oComp.getCurrentEmployeeId && oComp.getCurrentEmployeeId();
+            if (!sEmpId) return Promise.reject(new Error("Could not identify the HR user."));
+
+            const oCtx = oHr.bindContext("/uploadEmployeeDocument(...)");
+            oCtx.setParameter("employeeId",   sEmpId);
+            oCtx.setParameter("documentType", "Newsletter");
+            oCtx.setParameter("fileName",     sFileName);
+            oCtx.setParameter("mimeType",     sMime);
+            oCtx.setParameter("description",  "Company newsletter");
+            oCtx.setParameter("dataBase64",   sB64);
+            return oCtx.execute();
+        },
+
         onUploadProfilePicture() {
             let oInput = document.getElementById("__tsProfilePhotoInput");
             if (!oInput) {
@@ -416,6 +677,39 @@ sap.ui.define([
         // ── Route matched — highlight the active item, auto-expand its group ──
         _onRouteMatched(oEvent) {
             const sRouteName = oEvent.getParameter("name");
+
+            // Re-check for a newly published newsletter when landing on the
+            // dashboard, so the button reappears mid-session after HR publishes.
+            // Gate on getCurrentUser so it never fires before auth is ready.
+            if (sRouteName === "dashboard") {
+                const oComp = this.getOwnerComponent();
+                if (oComp.getCurrentUser) {
+                    oComp.getCurrentUser().then(() => this._refreshNewsletterBadge());
+                }
+            }
+
+            // ── Role guard: Management screens are manager-only ──────────────
+            // Redirect any non-manager who reaches a manager route to the
+            // dashboard. Uses the backend-resolved role; falls back to the
+            // app model role until getCurrentUser() resolves on a cold load.
+            if (MANAGER_ROUTES.indexOf(sRouteName) !== -1) {
+                const oComp = this.getOwnerComponent();
+                const isManager = () => {
+                    const sRole = (oComp._oCurrentUser && oComp._oCurrentUser.role)
+                        || this._oAppModel.getProperty("/userRole") || "employee";
+                    return String(sRole).toLowerCase() === "manager";
+                };
+                const bounce = () => oComp.getRouter().navTo("dashboard", {}, true);
+
+                if (oComp._oCurrentUser) {
+                    // Role already known — enforce immediately.
+                    if (!isManager()) { bounce(); return; }
+                } else if (oComp.getCurrentUser) {
+                    // Role not resolved yet — re-check once the backend answers.
+                    oComp.getCurrentUser().then(() => { if (!isManager()) bounce(); });
+                    if (!isManager()) { bounce(); return; }
+                }
+            }
 
             // Make sure the group containing the active route is expanded.
             const sGroup = this._mRouteToGroup[sRouteName];

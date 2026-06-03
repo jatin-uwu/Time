@@ -13,8 +13,11 @@ sap.ui.define([
     "sap/m/Text",
     "sap/ui/unified/FileUploader",
     "sap/ui/core/Item",
-    "sap/ui/core/Core"
-], (Controller, JSONModel, MessageToast, MessageBox, Dialog, Button, Select, Label, VBox, HBox, TextArea, Text, FileUploader, Item, Core) => {
+    "sap/ui/core/Core",
+    "sap/ui/core/Fragment",
+    "sap/ui/model/Filter",
+    "sap/ui/model/FilterOperator"
+], (Controller, JSONModel, MessageToast, MessageBox, Dialog, Button, Select, Label, VBox, HBox, TextArea, Text, FileUploader, Item, Core, Fragment, Filter, FilterOperator) => {
     "use strict";
 
     // ── Status constants ─────────────────────────────────────────────────────
@@ -218,20 +221,12 @@ sap.ui.define([
             const all      = this._oTdModel.getProperty("/allTasks") || [];
             const sQuery   = this._oTdModel.getProperty("/searchQuery") || "";
             const sPrio    = this._oTdModel.getProperty("/priorityFilter") || "";
-            const sRole    = this._currentUserRole();
             const sMe      = this._currentEmployeeId();
 
-            // Manager can preview as another employee
-            let sFilterEmpId = null;
-            if (sRole === "manager") {
-                const sViewAs = this._oTdModel.getProperty("/viewAsEmployee");
-                if (sViewAs && sViewAs !== "__me") sFilterEmpId = sViewAs;
-                // "My tasks" for manager = tasks assigned to manager themselves
-                else if (sViewAs === "__me" && sMe) sFilterEmpId = sMe;
-            } else {
-                // Regular employee: only see their own tasks (assigned OR they are reviewer)
-                sFilterEmpId = sMe;
-            }
+            // Every user — managers included — sees ONLY their own tasks here
+            // (tasks assigned to them OR where they are the reviewer). Viewing
+            // another user's tasks from this screen is no longer allowed.
+            const sFilterEmpId = sMe;
 
             const employees = this._oTdModel.getProperty("/employees") || [];
             const empMap = new Map(employees.map(e => [e.employeeId, e.employeeName]));
@@ -910,6 +905,9 @@ sap.ui.define([
             if (!oCtx) return;
             const task = oCtx.getObject();
             if (!task || !task.taskId) return;
+            // Posting a daily update is only allowed when opening a task from
+            // Task Description — flag the source for the Task Detail page.
+            this.getOwnerComponent()._bAllowTaskPost = true;
             this.getOwnerComponent().getRouter()
                 .navTo("task-detail", { taskId: task.taskId });
         },
@@ -935,6 +933,240 @@ sap.ui.define([
         formatIsAssigneeActions(sAssignedEmpId) {
             const sMe = this._currentEmployeeId();
             return sAssignedEmpId === sMe;
+        },
+
+        // ── Manager: Assign / reassign a task to a team member ────────────────
+        // The "Assign Task" button on each card (manager only) opens a dialog
+        // that previews the chosen employee's current workload before the
+        // manager confirms. On confirm the task is reassigned, leaves this
+        // manager's list, and lands in the selected employee's task list.
+
+        onOpenAssignDialog(oEvent) {
+            const oCtx = oEvent.getSource().getBindingContext("tdView");
+            if (!oCtx) return;
+            const task = oCtx.getObject();
+            if (!task || !task.taskId) return;
+            this._openAssignDialog(task);
+        },
+
+        _openAssignDialog(task) {
+            // Candidate employees = everyone active except the manager themselves.
+            const sMe = this._currentEmployeeId();
+            let employees = (this._oTdModel.getProperty("/employees") || []).slice();
+            if (!employees.length) {
+                employees = Object.values(this.getOwnerComponent()._builtinEmployees || {})
+                    .filter(e => e.isActive !== false);
+            }
+            const candidates = [{ employeeId: "", label: "— Select employee —" }].concat(
+                employees
+                    .filter(e => e.employeeId !== sMe && e.isActive !== false)
+                    .map(e => ({
+                        employeeId: e.employeeId,
+                        label: e.employeeName + (e.designation ? " (" + e.designation + ")" : "")
+                    }))
+            );
+
+            this._oAssignModel = new JSONModel({
+                taskId:          task.taskId,
+                taskName:        task.taskName || task.taskId,
+                taskDescription: task.taskDescription || "",
+                priority:        task.priority || "",
+                dueDate:         task.dueDate || "",
+                candidates:      candidates,
+                selectedEmp:     "",
+                selectedEmpName: "",
+                hasSelection:    false,
+                loading:         false,
+                busy:            false,
+                high: 0, medium: 0, low: 0,
+                tasks: []
+            });
+
+            const sViewId = this.getView().getId();
+            const open = (oDialog) => {
+                oDialog.setModel(this._oAssignModel, "dlg");
+                oDialog.open();
+            };
+
+            if (this._pAssignDialog) {
+                this._pAssignDialog.then(open);
+                return;
+            }
+            this._pAssignDialog = Fragment.load({
+                id:         sViewId,
+                name:       "timesheet.app.view.fragment.AssignTaskDialog",
+                controller: this
+            }).then(oDialog => {
+                this.getView().addDependent(oDialog);
+                return oDialog;
+            });
+            this._pAssignDialog.then(open);
+        },
+
+        onAssignEmployeeChange(oEvent) {
+            const oItem  = oEvent.getParameter("selectedItem");
+            const sEmpId = oItem ? oItem.getKey() : "";
+            const m = this._oAssignModel;
+            if (!sEmpId) {
+                m.setProperty("/hasSelection", false);
+                m.setProperty("/tasks", []);
+                m.setProperty("/high", 0);
+                m.setProperty("/medium", 0);
+                m.setProperty("/low", 0);
+                return;
+            }
+            m.setProperty("/selectedEmp", sEmpId);
+            m.setProperty("/selectedEmpName", (oItem.getText() || "").replace(/\s*\(.*\)$/, ""));
+            m.setProperty("/loading", true);
+            m.setProperty("/hasSelection", false);
+
+            this._loadEmployeeWorkload(sEmpId).then(tasks => {
+                // Normalise legacy "Open" → "Not Started"; keep only active work.
+                const norm = s => (s === "Open" ? "Not Started" : s);
+                const active = (tasks || [])
+                    .map(t => Object.assign({}, t, { status: norm(t.status) }))
+                    .filter(t => t.status === "Not Started" || t.status === "In Progress");
+
+                const countPrio = p => active.filter(t => t.priority === p).length;
+                const rows = active
+                    .sort((a, b) => (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9))
+                    .map(t => ({
+                        taskId:   t.taskId,
+                        taskName: t.taskName,
+                        priority: t.priority,
+                        status:   t.status,
+                        dueLabel: formatDueLabel(t.dueDate)
+                    }));
+
+                m.setProperty("/high",   countPrio("High"));
+                m.setProperty("/medium", countPrio("Medium"));
+                m.setProperty("/low",    countPrio("Low"));
+                m.setProperty("/tasks",  rows);
+                m.setProperty("/loading", false);
+                m.setProperty("/hasSelection", true);
+            });
+        },
+
+        // Fetch the selected employee's tasks from the Manager service and merge
+        // any locally-held tasks for that employee (offline / not-yet-synced).
+        _loadEmployeeWorkload(sEmpId) {
+            const assigneeOf = t => t.assignedTo_employeeId ||
+                                    (t.assignedTo && t.assignedTo.employeeId) || t.assignedTo;
+
+            const oTasksModel = this.getOwnerComponent().getModel("tasks");
+            const local = ((oTasksModel && oTasksModel.getProperty("/items")) || [])
+                .filter(t => assigneeOf(t) === sEmpId);
+
+            const oMgr = this.getOwnerComponent().getModel("manager");
+            const mergeWithLocal = (remote) => {
+                const map = new Map();
+                (remote || []).forEach(t => { if (t && t.taskId) map.set(t.taskId, t); });
+                // Local wins for entries the manager just changed in this session
+                local.forEach(t => { if (t && t.taskId) map.set(t.taskId, t); });
+                return Array.from(map.values());
+            };
+
+            if (!oMgr) return Promise.resolve(mergeWithLocal([]));
+
+            return oMgr.bindList("/Tasks", null, null, [
+                new Filter("assignedTo_employeeId", FilterOperator.EQ, sEmpId)
+            ]).requestContexts(0, 300)
+                .then(aCtx => mergeWithLocal(aCtx.map(c => c.getObject())))
+                .catch(() => mergeWithLocal([]));
+        },
+
+        onCancelAssign() {
+            this._pAssignDialog && this._pAssignDialog.then(d => d.close());
+        },
+
+        onConfirmAssign() {
+            const m = this._oAssignModel;
+            const sEmpId  = m.getProperty("/selectedEmp");
+            const sTaskId = m.getProperty("/taskId");
+            if (!sEmpId) { MessageToast.show("Please select an employee."); return; }
+
+            m.setProperty("/busy", true);
+            const oDlgPromise = this._pAssignDialog;
+            oDlgPromise && oDlgPromise.then(d => d.setBusy && d.setBusy(true));
+
+            this._reassignTask({
+                taskId:          sTaskId,
+                taskName:        m.getProperty("/taskName"),
+                taskDescription: m.getProperty("/taskDescription"),
+                priority:        m.getProperty("/priority"),
+                dueDate:         m.getProperty("/dueDate"),
+                status:          ""
+            }, sEmpId)
+                .then(() => {
+                    m.setProperty("/busy", false);
+                    oDlgPromise && oDlgPromise.then(d => { d.setBusy && d.setBusy(false); d.close(); });
+                    MessageToast.show("Task " + sTaskId + " assigned to " + m.getProperty("/selectedEmpName") + ".");
+                })
+                .catch(err => {
+                    m.setProperty("/busy", false);
+                    oDlgPromise && oDlgPromise.then(d => d.setBusy && d.setBusy(false));
+                    MessageBox.error("Could not assign task: " +
+                        (err && err.message ? err.message : String(err)));
+                });
+        },
+
+        // Persist the new assignee to the backend, then patch local state so the
+        // task instantly leaves this manager's list (the filter is scoped to the
+        // current user). Reuses notifyTaskAssignment so the assignee is told.
+        _reassignTask(task, sEmpId) {
+            const oMgr = this.getOwnerComponent().getModel("manager");
+
+            const patchBackend = () => {
+                if (!oMgr) return Promise.resolve();
+                return oMgr.bindList("/Tasks", null, null, [
+                    new Filter("taskId", FilterOperator.EQ, task.taskId)
+                ]).requestContexts(0, 1).then(aCtx => {
+                    if (!aCtx.length) {
+                        // Task only exists locally — nothing to PATCH on the server.
+                        return Promise.resolve();
+                    }
+                    aCtx[0].setProperty("assignedTo_employeeId", sEmpId);
+                    return oMgr.submitBatch
+                        ? oMgr.submitBatch(oMgr.getUpdateGroupId())
+                        : Promise.resolve();
+                });
+            };
+
+            return patchBackend().then(() => {
+                // Local patch → the card disappears from the manager's own list.
+                this._applyLocalStatusPatch(task.taskId, { assignedTo_employeeId: sEmpId });
+                this._notifyAssignment(task, sEmpId);
+                this._publishTaskStatusChanged(task.taskId, task.status || "");
+            });
+        },
+
+        _notifyAssignment(task, sEmpId) {
+            // Email (best-effort) — same endpoint the Assign Task module uses.
+            fetch("/manager/notifyTaskAssignment", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body:    JSON.stringify({
+                    taskId:          task.taskId,
+                    taskName:        task.taskName || "",
+                    taskDescription: task.taskDescription || "",
+                    priority:        task.priority || "",
+                    dueDate:         task.dueDate || "",
+                    assigneeId:      sEmpId
+                })
+            }).catch(() => { /* mail optional — silent */ });
+
+            // In-app notification for the new assignee.
+            fetch("/employee/createNotification", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json" },
+                body:    JSON.stringify({
+                    employeeId:  sEmpId,
+                    type:        "TASK_ASSIGNED",
+                    title:       "New Task Assigned",
+                    message:     "You have been assigned task: " + (task.taskName || task.taskId),
+                    referenceId: task.taskId
+                })
+            }).catch(() => { /* silent */ });
         },
 
         onNavBack() {
