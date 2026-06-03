@@ -108,6 +108,8 @@ sap.ui.define([
                 // Newsletter button visibility — true only when a newsletter the
                 // user hasn't opened yet exists (set by _refreshNewsletterBadge).
                 showNewsletter: false,
+                // Unread group-task notifications → badge on the Group Tasks menu.
+                groupTasksUnread: 0,
                 // data: URL bound to the toolbar Avatar.src and popover img
                 profilePhotoSrc: "",
                 profilePhotoDataUrl: ""
@@ -178,6 +180,7 @@ sap.ui.define([
                     applyRole(sRole);
                     markResolved();
                     this._refreshNewsletterBadge();
+                    this._refreshGroupTasksBadge();
                 }).catch(() => markResolved());
             } else {
                 markResolved();
@@ -188,6 +191,14 @@ sap.ui.define([
             setTimeout(markResolved, 3000);
 
             this.getOwnerComponent().getRouter().attachRouteMatched(this._onRouteMatched, this);
+
+            // Group-task screens publish "groupTasks/changed" when something
+            // happens that may alter the unread count (chat read, ended, sent),
+            // so the menu badge updates immediately — not only on navigation.
+            try {
+                sap.ui.getCore().getEventBus().subscribe("groupTasks", "changed",
+                    () => this._refreshGroupTasksBadge(), this);
+            } catch (e) { /* EventBus optional */ }
 
             // Hide the SplitApp's built-in master toggle button — the sidebar is
             // always shown on desktop and toggled via our own header button on
@@ -262,6 +273,15 @@ sap.ui.define([
                 const bShow = !!(r.hasNewsletter && r.newsletterId && r.newsletterId !== sSeen);
                 this._oAppModel.setProperty("/showNewsletter", bShow);
             }).catch(() => { /* leave hidden on failure */ });
+        },
+
+        // Refresh the unread-count badge on the Group Tasks menu item.
+        // Plain fetch (callAction) to avoid the OData $batch auth path.
+        _refreshGroupTasksBadge() {
+            callAction("getGroupTasksUnread").then((r) => {
+                const n = (r && typeof r.count === "number") ? r.count : 0;
+                this._oAppModel.setProperty("/groupTasksUnread", n);
+            }).catch(() => { /* leave as-is on failure */ });
         },
 
         // Mark the current newsletter as seen → hide the button until a new one.
@@ -655,6 +675,7 @@ sap.ui.define([
             timesheet: "timesheet", history: "timesheet",
             "apply-leave": "leave", "leave-history": "leave",
             "task-description": "task", "task-status": "task",
+            "group-tasks": "task", "group-task-detail": "task",
             "task-assignment": "manager", manager: "manager",
             "approval-history": "manager", "team-attendance": "manager",
             "performance-rating": "manager",
@@ -687,6 +708,9 @@ sap.ui.define([
                     oComp.getCurrentUser().then(() => this._refreshNewsletterBadge());
                 }
             }
+
+            // Keep the Group Tasks unread badge fresh as the user navigates.
+            this._refreshGroupTasksBadge();
 
             // ── Role guard: Management screens are manager-only ──────────────
             // Redirect any non-manager who reaches a manager route to the

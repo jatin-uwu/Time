@@ -90,6 +90,50 @@ entity TaskMaster : managed {
 
     updates            : Composition of many TaskUpdate
                          on updates.task = $self;
+
+    // ── Group-task support (additive — solo tasks are unaffected) ──────────
+    // taskType is null for every pre-existing (solo) row; all queries treat
+    // null OR 'solo' as a solo task, so existing records/flows are untouched.
+    taskType           : String(10) default 'solo';      // 'solo' | 'group'
+    completedAt        : Timestamp;                       // set when a group task fully ends
+
+    assignees          : Composition of many TaskAssignee
+                         on assignees.task = $self;
+    messages           : Composition of many TaskMessage
+                         on messages.task = $self;
+}
+
+// ── Group task: one row per assignee, each with their own status ──────────
+// Solo tasks never create rows here; they keep using TaskMaster.assignedTo.
+entity TaskAssignee : managed {
+    key rowId    : String(40);                 // "<taskId>-AS-<employeeId>"
+    task         : Association to TaskMaster;
+    assignee     : Association to EmployeeMaster;
+    status       : String(15) default 'pending';   // pending | in_progress | ended
+    endedAt      : Timestamp;
+    note         : String(500);                // optional per-assignee sub-task note
+}
+
+// ── Group task chat: one persistent thread per group task ─────────────────
+entity TaskMessage : managed {
+    key messageId : String(40);                // "<taskId>-MSG-<ts>-<rand>"
+    task          : Association to TaskMaster;
+    sender        : Association to EmployeeMaster;
+    message       : LargeString;               // nullable — attachment-only messages allowed
+    sentAt        : Timestamp;
+    attachments   : Composition of many TaskAttachment
+                    on attachments.message = $self;
+}
+
+// Chat attachment — stored inline (consistent with EmployeeDocument), served
+// as base64 via a download action. Max 10 MB enforced in the handler.
+entity TaskAttachment : managed {
+    key attachmentId : String(50);             // "<messageId>-ATT-<n>"
+    message          : Association to TaskMessage;
+    fileName         : String(255);
+    mimeType         : String(100);
+    fileSize         : Integer;                // bytes
+    content          : LargeBinary;
 }
 
 entity TaskUpdate : managed {
@@ -246,6 +290,9 @@ entity Notification : managed {
     isRead             : Boolean default false;
     referenceId        : String(30);    // timesheetId / taskId / ratingId etc.
     notifiedAt         : Timestamp;
+    // Running counter for coalesced notifications (e.g. group-chat: "N new
+    // messages"). Null for all existing/non-aggregated notifications.
+    count              : Integer;
 }
 // ── Task Review (Reviewer's decision + remarks + attachment) ─────────────
 // Created when a reviewer takes a decision on a task that is "In Review":

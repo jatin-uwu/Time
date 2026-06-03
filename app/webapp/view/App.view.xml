@@ -179,6 +179,11 @@
                             type="Active" press=".onNavSelect" class="tsNavItem">
                             <customData><core:CustomData key="target" value="task-status" /></customData>
                         </StandardListItem>
+                        <StandardListItem title="Group Tasks" icon="sap-icon://group"
+                            type="Active" press=".onNavSelect" class="tsNavItem"
+                            counter="{appView>/groupTasksUnread}">
+                            <customData><core:CustomData key="target" value="group-tasks" /></customData>
+                        </StandardListItem>
                     </List>
                 </VBox>
 

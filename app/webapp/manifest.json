@@ -47,7 +47,7 @@
         },
         "resources": {
             "css": [
-                { "uri": "css/style.css?v=20" }
+                { "uri": "css/style.css?v=25" }
             ]
         },
         "models": {
@@ -111,6 +111,8 @@
                 { "name": "task-assignment", "pattern": "task-assignment", "target": "task-assignment" },
                 { "name": "task-status",   "pattern": "task-status",   "target": "task-status"   },
                 { "name": "team-task-status", "pattern": "team-task-status", "target": "team-task-status" },
+                { "name": "group-tasks",   "pattern": "group-tasks",   "target": "group-tasks"   },
+                { "name": "group-task-detail", "pattern": "group-task-detail/{taskId}", "target": "group-task-detail" },
                 { "name": "notifications", "pattern": "notifications", "target": "notifications" },
                 { "name": "add-employee",  "pattern": "add-employee",  "target": "add-employee"  },
                 { "name": "all-employees", "pattern": "all-employees", "target": "all-employees" },
@@ -133,6 +135,8 @@
                 "task-assignment": { "viewName": "TaskAssignment"},
                 "task-status":   { "viewName": "TaskStatus" },
                 "team-task-status": { "viewName": "TeamTaskStatus" },
+                "group-tasks":   { "viewName": "GroupTasks" },
+                "group-task-detail": { "viewName": "GroupTaskDetail" },
                 "notifications": { "viewName": "Notifications"},
                 "add-employee":  { "viewName": "AddEmployee" },
                 "all-employees": { "viewName": "AllEmployees"},

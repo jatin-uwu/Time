@@ -105,7 +105,7 @@
     },
     "server": {
       "bodyParser": {
-        "limit": "10mb",
+        "limit": "50mb",
         "type": [
           "application/json",
           "text/plain",
@@ -113,7 +113,7 @@
         ]
       },
       "body-parser": {
-        "limit": "5mb"
+        "limit": "50mb"
       }
     }
   }

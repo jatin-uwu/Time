@@ -1,0 +1,115 @@
+<mvc:View
+    controllerName="timesheet.app.controller.GroupTaskDetail"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="groupTaskDetailPage"
+          showHeader="false"
+          class="tsDashboardPage"
+          enableScrolling="true">
+
+        <content>
+
+            <VBox class="tsTaskDetailWrap sapUiSmallMargin">
+
+                <!-- ── Page header (back + title), matches other pages ────── -->
+                <HBox class="tsPageHeaderCard" alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center">
+                        <Button icon="sap-icon://nav-back" type="Transparent"
+                                press=".onNavBack" tooltip="Back to Group Tasks"
+                                class="tsPageBackBtn" />
+                        <core:Icon src="sap-icon://group" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                        <Text text="Group Task" style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                    </HBox>
+                    <HBox alignItems="Center">
+                        <HBox class="tsChatBtnWrap" alignItems="Center">
+                            <Button icon="sap-icon://discussion" type="Transparent"
+                                    tooltip="Open group chat" press=".onOpenChat"
+                                    class="tsChatHeaderBtn" />
+                            <VBox class="tsChatRedDot" visible="{= ${gtdView>/detail/unreadChat} === true }" />
+                        </HBox>
+                        <ObjectStatus text="{gtdView>/detail/status}"
+                                      state="{gtdView>/detail/statusState}"
+                                      class="tsHeaderBadge sapUiSmallMarginBegin" />
+                    </HBox>
+                </HBox>
+
+                <!-- ── Task header card ───────────────────────────────────── -->
+                <Panel class="tsTaskDetailHeaderCard" expandable="false">
+                    <HBox justifyContent="SpaceBetween" alignItems="Start" wrap="Wrap">
+                        <VBox class="tsTaskDetailLeft">
+                            <HBox alignItems="Center" wrap="Wrap">
+                                <ObjectStatus text="{gtdView>/detail/priority}"
+                                              state="{gtdView>/detail/priorityState}"
+                                              icon="sap-icon://flag" />
+                                <Title text="{gtdView>/detail/taskName}" level="H3" class="sapUiSmallMarginBegin" />
+                            </HBox>
+                            <Text text="{gtdView>/detail/taskId}" class="tsTaskRowId" />
+                            <HBox class="sapUiSmallMarginTop" wrap="Wrap" alignItems="Center">
+                                <HBox alignItems="Center" class="sapUiTinyMarginEnd">
+                                    <core:Icon src="sap-icon://manager" size="0.9rem" color="#6b7280" />
+                                    <Text text="By {gtdView>/detail/createdByName}" class="sapUiTinyMarginBegin" />
+                                </HBox>
+                                <HBox alignItems="Center" class="sapUiTinyMarginEnd">
+                                    <core:Icon src="sap-icon://date-time" size="0.9rem" color="#6b7280" />
+                                    <Text text="{gtdView>/detail/dueLabel}" class="sapUiTinyMarginBegin" />
+                                </HBox>
+                            </HBox>
+                        </VBox>
+                        <VBox class="tsGroupProgress" alignItems="End">
+                            <Text text="{gtdView>/detail/progressText}" class="tsGroupProgressLabel" />
+                            <ProgressIndicator percentValue="{gtdView>/detail/progressValue}"
+                                               showValue="false"
+                                               state="{gtdView>/detail/progressState}"
+                                               class="tsGroupProgressBar" />
+                        </VBox>
+                    </HBox>
+
+                    <!-- Description -->
+                    <VBox class="tsTaskDescBlock sapUiSmallMarginTop">
+                        <Label text="Description" class="tsTaskDescLabel" />
+                        <Text text="{gtdView>/detail/taskDescription}" class="tsTaskDescText" />
+                    </VBox>
+
+                    <!-- End from my side -->
+                    <HBox class="sapUiSmallMarginTop" justifyContent="End" alignItems="Center"
+                          visible="{= ${gtdView>/detail/myStatus} !== null }">
+                        <Button text="{= ${gtdView>/detail/myStatus} === 'ended' ? 'You have ended this task' : 'End from my side' }"
+                                icon="{= ${gtdView>/detail/myStatus} === 'ended' ? 'sap-icon://accept' : 'sap-icon://complete' }"
+                                type="Emphasized"
+                                enabled="{gtdView>/detail/canEnd}"
+                                press=".onEndMySide"
+                                busy="{gtdView>/busy}" />
+                    </HBox>
+                </Panel>
+
+                <!-- ── Member status list ─────────────────────────────────── -->
+                <Panel headerText="Members" class="tsTaskUpdatesCard sapUiSmallMarginTop" expandable="false">
+                    <List items="{gtdView>/detail/assignees}" mode="None" showSeparators="Inner" class="tsGroupMemberList">
+                        <CustomListItem class="tsGroupMemberItem">
+                            <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsGroupMemberRow">
+                                <HBox alignItems="Center">
+                                    <Avatar initials="{gtdView>initials}" displaySize="XS" backgroundColor="Accent6" class="sapUiTinyMarginEnd" />
+                                    <VBox>
+                                        <Text text="{gtdView>employeeName}" class="tsGroupMemberName" />
+                                        <Text text="{gtdView>note}" class="tsGroupMemberNote" visible="{= !!${gtdView>note} }" />
+                                    </VBox>
+                                </HBox>
+                                <HBox alignItems="Center">
+                                    <Text text="{gtdView>endedLabel}" class="tsGroupMemberEnded sapUiTinyMarginEnd" visible="{= !!${gtdView>endedLabel} }" />
+                                    <ObjectStatus text="{gtdView>statusText}" state="{gtdView>statusState}" />
+                                </HBox>
+                            </HBox>
+                        </CustomListItem>
+                    </List>
+                </Panel>
+
+
+            </VBox>
+
+        </content>
+    </Page>
+
+</mvc:View>

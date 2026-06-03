@@ -10,6 +10,9 @@ const NOTIFICATION = 'ccentrik.employee.timesheet.schema.timesheet.Notification'
 const ATTENDANCE = 'ccentrik.employee.timesheet.schema.timesheet.AttendanceRecord';
 const TASK_REVIEW = 'ccentrik.employee.timesheet.schema.timesheet.TaskReview';
 const HOLIDAY = 'ccentrik.employee.timesheet.schema.timesheet.HolidayMaster';
+const TASK_ASSIGNEE = 'ccentrik.employee.timesheet.schema.timesheet.TaskAssignee';
+const TASK_MESSAGE = 'ccentrik.employee.timesheet.schema.timesheet.TaskMessage';
+const TASK_ATTACHMENT = 'ccentrik.employee.timesheet.schema.timesheet.TaskAttachment';
 
 
 const PRIORITY_PREFIX = {
@@ -55,6 +58,105 @@ async function createNotification(employeeId, type, title, message, referenceId)
     } catch (e) {
         cds.log('notif').warn('Could not create notification:', e.message || e);
     }
+}
+
+// ── Group-task shared helpers ────────────────────────────────────────────────
+
+// Resolve the caller's EmployeeMaster row (by JWT email). Returns null if none.
+async function resolveCaller(req) {
+    const user = req.user || {};
+    const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+    const uid = user.id || '';
+    let emp = null;
+    if (email) emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email').where({ email });
+    return { email, uid, emp, employeeId: emp && emp.employeeId };
+}
+
+// Load a group task plus its assignee rows and decide whether the caller is a
+// member (an assignee OR the manager who created it). Solo tasks return null.
+async function loadGroupContext(taskId, caller) {
+    const task = await SELECT.one.from(TASK).where({ taskId });
+    if (!task || task.taskType !== 'group') return { task: null };
+    const rows = await SELECT.from(TASK_ASSIGNEE).where({ task_taskId: taskId });
+    const mine = rows.find(r => r.assignee_employeeId === caller.employeeId) || null;
+    const isCreator = !!(task.createdBy && (task.createdBy === caller.email || task.createdBy === caller.uid));
+    return { task, rows, mine, isCreator, isMember: !!mine || isCreator };
+}
+
+// All recipients of a group task (every assignee + the creator), as employeeIds.
+async function groupRecipientIds(task, rows) {
+    const ids = new Set(rows.map(r => r.assignee_employeeId).filter(Boolean));
+    if (task.createdBy) {
+        const creator = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email: task.createdBy });
+        if (creator && creator.employeeId) ids.add(creator.employeeId);
+    }
+    return ids;
+}
+
+// Coalesced chat notification: one unread row per (recipient, task). While it
+// stays unread, new messages bump a counter instead of creating new rows.
+async function notifyGroupChat(taskId, taskName, senderId, recipientIds) {
+    for (const rid of recipientIds) {
+        if (!rid || rid === senderId) continue;
+        try {
+            const existing = await SELECT.one.from(NOTIFICATION).where({
+                employee_employeeId: rid, referenceId: taskId,
+                type: 'GROUP_CHAT_MESSAGE', isRead: false
+            });
+            if (existing) {
+                const c = (existing.count || 1) + 1;
+                await UPDATE(NOTIFICATION).set({
+                    count: c,
+                    message: `${c} new messages in group task chat “${taskName}”`,
+                    notifiedAt: new Date()
+                }).where({ notificationId: existing.notificationId });
+            } else {
+                await INSERT.into(NOTIFICATION).entries({
+                    notificationId: `NOTIF-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+                    employee_employeeId: rid,
+                    type: 'GROUP_CHAT_MESSAGE',
+                    title: 'New chat message',
+                    message: `1 new message in group task chat “${taskName}”`,
+                    isRead: false,
+                    referenceId: taskId,
+                    notifiedAt: new Date(),
+                    count: 1
+                });
+            }
+        } catch (e) { cds.log('notif').warn('chat notify failed:', e.message || e); }
+    }
+}
+
+// Mark the caller's coalesced chat notification for a task as read (resets it).
+async function markChatRead(taskId, employeeId) {
+    if (!employeeId) return;
+    try {
+        await UPDATE(NOTIFICATION)
+            .set({ isRead: true })
+            .where({ employee_employeeId: employeeId, referenceId: taskId, type: 'GROUP_CHAT_MESSAGE', isRead: false });
+    } catch (e) { /* best-effort */ }
+}
+
+// Read a LargeBinary column into a base64 string (handles Buffer / stream).
+async function binaryToBase64(content) {
+    if (!content) return '';
+    if (Buffer.isBuffer(content)) return content.toString('base64');
+    if (content instanceof Uint8Array) return Buffer.from(content).toString('base64');
+    if (typeof content === 'string') return content;
+    if (typeof content.pipe === 'function') {
+        const chunks = [];
+        for await (const chunk of content) chunks.push(chunk);
+        return Buffer.concat(chunks).toString('base64');
+    }
+    return Buffer.from(content).toString('base64');
+}
+
+// Next free TASKnnn id (group tasks share the TaskMaster id space with solo).
+async function nextGroupTaskId() {
+    const rows = await SELECT.from(TASK).columns('taskId');
+    let max = 0;
+    rows.forEach(r => { const m = /^TASK(\d+)$/i.exec(r.taskId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+    return 'TASK' + String(max + 1).padStart(3, '0');
 }
 
 class EmployeeService extends cds.ApplicationService {
@@ -168,6 +270,270 @@ class EmployeeService extends cds.ApplicationService {
                 fileName:      doc.fileName || 'newsletter',
                 uploadedOn:    doc.createdAt ? String(doc.createdAt) : ''
             };
+        });
+
+        // ════════════════════════════════════════════════════════════════════
+        //  GROUP TASKS  —  read + interaction (all scoped to the caller)
+        // ════════════════════════════════════════════════════════════════════
+
+        // List of group tasks visible to the caller: managers see the ones they
+        // created; employees see the ones they're assigned to.
+        this.on('getGroupTasks', async (req) => {
+            const caller = await resolveCaller(req);
+            const isManager = req.user && req.user.is && req.user.is('Manager');
+
+            const tasks = await SELECT.from(TASK).where({ taskType: 'group' });
+            if (!tasks.length) return JSON.stringify([]);
+            const taskIds = tasks.map(t => t.taskId);
+            const assignees = await SELECT.from(TASK_ASSIGNEE).where({ task_taskId: { in: taskIds } });
+
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName');
+            const nameMap = {}; emps.forEach(e => nameMap[e.employeeId] = e.employeeName);
+
+            const visible = tasks.filter(t => {
+                const isCreator = t.createdBy && (t.createdBy === caller.email || t.createdBy === caller.uid);
+                if (isManager && isCreator) return true;
+                return assignees.some(a => a.task_taskId === t.taskId && a.assignee_employeeId === caller.employeeId);
+            });
+
+            const out = visible.map(t => {
+                const rows = assignees.filter(a => a.task_taskId === t.taskId);
+                const ended = rows.filter(a => a.status === 'ended').length;
+                return {
+                    taskId: t.taskId, taskName: t.taskName, taskDescription: t.taskDescription,
+                    priority: t.priority, status: t.status, dueDate: t.dueDate, completedAt: t.completedAt,
+                    total: rows.length, ended,
+                    assignees: rows.map(a => ({
+                        employeeId: a.assignee_employeeId,
+                        employeeName: nameMap[a.assignee_employeeId] || a.assignee_employeeId,
+                        status: a.status, endedAt: a.endedAt
+                    }))
+                };
+            });
+            // Per-task unread chat flag (drives the red dot on the chat icon).
+            try {
+                const unread = await SELECT.from(NOTIFICATION).columns('referenceId').where({
+                    employee_employeeId: caller.employeeId, type: 'GROUP_CHAT_MESSAGE', isRead: false
+                });
+                const unreadSet = new Set(unread.map(u => u.referenceId));
+                out.forEach(t => { t.unreadChat = unreadSet.has(t.taskId); });
+            } catch (e) { out.forEach(t => { t.unreadChat = false; }); }
+
+            // Newest first by creation
+            out.sort((a, b) => (b.taskId || '').localeCompare(a.taskId || ''));
+            return JSON.stringify(out);
+        });
+
+        // Full detail for one group task + the caller's own membership flags.
+        this.on('getGroupTaskDetail', async (req) => {
+            const { taskId } = req.data;
+            const caller = await resolveCaller(req);
+            const ctx = await loadGroupContext(taskId, caller);
+            if (!ctx.task) return req.error(404, 'Group task not found.');
+            if (!ctx.isMember) return req.error(403, 'You do not have access to this task.');
+
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email');
+            const nameById = {}; const nameByEmail = {};
+            emps.forEach(e => { nameById[e.employeeId] = e.employeeName; if (e.email) nameByEmail[e.email] = e.employeeName; });
+
+            const rows = ctx.rows;
+            const ended = rows.filter(a => a.status === 'ended').length;
+            let unreadChat = false;
+            try {
+                const u = await SELECT.one.from(NOTIFICATION).columns('notificationId').where({
+                    employee_employeeId: caller.employeeId, type: 'GROUP_CHAT_MESSAGE', isRead: false, referenceId: ctx.task.taskId
+                });
+                unreadChat = !!u;
+            } catch (e) { /* default false */ }
+            const detail = {
+                taskId: ctx.task.taskId, taskName: ctx.task.taskName, taskDescription: ctx.task.taskDescription,
+                priority: ctx.task.priority, status: ctx.task.status, dueDate: ctx.task.dueDate,
+                completedAt: ctx.task.completedAt,
+                createdByName: nameByEmail[ctx.task.createdBy] || 'Manager',
+                total: rows.length, ended, unreadChat,
+                isCreator: ctx.isCreator,
+                myStatus: ctx.mine ? ctx.mine.status : null,
+                canEnd: !!ctx.mine && ctx.mine.status !== 'ended' && ctx.task.status !== 'completed',
+                assignees: rows.map(a => ({
+                    employeeId: a.assignee_employeeId,
+                    employeeName: nameById[a.assignee_employeeId] || a.assignee_employeeId,
+                    status: a.status, endedAt: a.endedAt, note: a.note
+                }))
+            };
+            return JSON.stringify(detail);
+        });
+
+        // Employee ends their own part. When everyone has ended, the parent
+        // task auto-completes. Lives here (server-side), never in the frontend.
+        this.on('endMyTaskSide', async (req) => {
+            const { taskId } = req.data;
+            const caller = await resolveCaller(req);
+            const ctx = await loadGroupContext(taskId, caller);
+            if (!ctx.task) return req.error(404, 'Group task not found.');
+            if (!ctx.mine) return req.error(403, 'You are not assigned to this task.');
+
+            if (ctx.mine.status !== 'ended') {
+                await UPDATE(TASK_ASSIGNEE).set({ status: 'ended', endedAt: new Date() }).where({ rowId: ctx.mine.rowId });
+            }
+
+            const rows = await SELECT.from(TASK_ASSIGNEE).where({ task_taskId: taskId });
+            const allEnded = rows.length > 0 && rows.every(r => r.status === 'ended');
+            let completed = false;
+            if (allEnded && ctx.task.status !== 'completed') {
+                await UPDATE(TASK).set({ status: 'completed', completedAt: new Date() }).where({ taskId });
+                completed = true;
+            }
+
+            // Notifications
+            try {
+                const myName = caller.emp && caller.emp.employeeName || caller.employeeId;
+                const recipients = await groupRecipientIds(ctx.task, rows);
+                const creator = ctx.task.createdBy
+                    ? await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email: ctx.task.createdBy }) : null;
+                if (creator && creator.employeeId && creator.employeeId !== caller.employeeId) {
+                    await createNotification(creator.employeeId, 'GROUP_TASK_UPDATE', 'Group task update',
+                        `${myName} ended their part of “${ctx.task.taskName}”.`, taskId);
+                }
+                if (completed) {
+                    for (const rid of recipients) {
+                        await createNotification(rid, 'GROUP_TASK_COMPLETED', 'Group task completed',
+                            `All members have ended “${ctx.task.taskName}”. The task is complete.`, taskId);
+                    }
+                }
+            } catch (e) { cds.log('group').warn('end notify failed:', e.message || e); }
+
+            return { taskId, myStatus: 'ended', completed };
+        });
+
+        // Paginated chat history (newest page first; load older on scroll up).
+        this.on('getGroupTaskMessages', async (req) => {
+            const { taskId } = req.data;
+            const page = Math.max(1, parseInt(req.data.page, 10) || 1);
+            const pageSize = Math.min(100, Math.max(1, parseInt(req.data.pageSize, 10) || 50));
+            const caller = await resolveCaller(req);
+            const ctx = await loadGroupContext(taskId, caller);
+            if (!ctx.task) return req.error(404, 'Group task not found.');
+            if (!ctx.isMember) return req.error(403, 'You do not have access to this chat.');
+
+            const all = await SELECT.from(TASK_MESSAGE).where({ task_taskId: taskId }).orderBy('sentAt desc', 'messageId desc');
+            const total = all.length;
+            const start = (page - 1) * pageSize;
+            const slice = all.slice(start, start + pageSize);
+
+            const msgIds = slice.map(m => m.messageId);
+            let atts = [];
+            if (msgIds.length) {
+                atts = await SELECT.from(TASK_ATTACHMENT)
+                    .columns('attachmentId', 'message_messageId', 'fileName', 'mimeType', 'fileSize')
+                    .where({ message_messageId: { in: msgIds } });
+            }
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName');
+            const nameMap = {}; emps.forEach(e => nameMap[e.employeeId] = e.employeeName);
+
+            const messages = slice.slice().reverse().map(m => ({   // oldest-first within page
+                messageId: m.messageId,
+                senderId: m.sender_employeeId,
+                senderName: nameMap[m.sender_employeeId] || m.sender_employeeId,
+                message: m.message || '',
+                sentAt: m.sentAt,
+                attachments: atts.filter(a => a.message_messageId === m.messageId).map(a => ({
+                    attachmentId: a.attachmentId, fileName: a.fileName, mimeType: a.mimeType, fileSize: a.fileSize
+                }))
+            }));
+
+            // Opening the chat clears the caller's coalesced "new messages" badge.
+            await markChatRead(taskId, caller.employeeId);
+
+            return JSON.stringify({ messages, hasMore: total > start + pageSize, total, page, pageSize });
+        });
+
+        // Post a chat message (text and/or attachments, ≤10 MB each).
+        this.on('sendTaskMessage', async (req) => {
+            const { taskId } = req.data;
+            const sMsg = (req.data.message || '').trim();
+            const atts = req.data.attachments || [];
+            const caller = await resolveCaller(req);
+            const ctx = await loadGroupContext(taskId, caller);
+            if (!ctx.task) return req.error(404, 'Group task not found.');
+            if (!ctx.isMember) return req.error(403, 'You cannot post to this chat.');
+            if (!sMsg && !atts.length) return req.error(400, 'A message or an attachment is required.');
+
+            const messageId = `${taskId}-MSG-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+            await INSERT.into(TASK_MESSAGE).entries({
+                messageId, task_taskId: taskId, sender_employeeId: caller.employeeId,
+                message: sMsg || null, sentAt: new Date()
+            });
+
+            let n = 0;
+            for (const a of atts) {
+                if (!a || !a.dataBase64) continue;
+                let buf;
+                try { buf = Buffer.from(String(a.dataBase64).replace(/^data:[^;]+;base64,/, ''), 'base64'); }
+                catch (e) { continue; }
+                if (buf.length > 10 * 1024 * 1024) return req.error(400, `Attachment “${a.fileName || 'file'}” exceeds the 10 MB limit.`);
+                n++;
+                await INSERT.into(TASK_ATTACHMENT).entries({
+                    attachmentId: `${messageId}-ATT-${n}`,
+                    message_messageId: messageId,
+                    fileName: a.fileName || 'file',
+                    mimeType: a.mimeType || 'application/octet-stream',
+                    fileSize: buf.length,
+                    content: buf
+                });
+            }
+
+            // A member who's actively chatting is "in progress" (not pending).
+            if (ctx.mine && ctx.mine.status === 'pending') {
+                await UPDATE(TASK_ASSIGNEE).set({ status: 'in_progress' })
+                    .where({ rowId: ctx.mine.rowId, status: 'pending' });
+            }
+
+            // Coalesced chat notifications to everyone else.
+            try {
+                const recipients = await groupRecipientIds(ctx.task, ctx.rows);
+                await notifyGroupChat(taskId, ctx.task.taskName, caller.employeeId, recipients);
+            } catch (e) { cds.log('group').warn('chat notify failed:', e.message || e); }
+
+            return { messageId };
+        });
+
+        // Download a chat attachment (membership-checked) as base64.
+        this.on('getTaskAttachment', async (req) => {
+            const { attachmentId } = req.data;
+            if (!attachmentId) return req.error(400, 'attachmentId is required.');
+            const att = await SELECT.one.from(TASK_ATTACHMENT).where({ attachmentId });
+            if (!att) return req.error(404, 'Attachment not found.');
+            const msg = await SELECT.one.from(TASK_MESSAGE).columns('task_taskId').where({ messageId: att.message_messageId });
+            const caller = await resolveCaller(req);
+            const ctx = msg ? await loadGroupContext(msg.task_taskId, caller) : { isMember: false };
+            if (!ctx.isMember) return req.error(403, 'You do not have access to this attachment.');
+
+            const dataBase64 = await binaryToBase64(att.content);
+            if (!dataBase64) return req.error(404, 'Attachment has no content.');
+            return { fileName: att.fileName, mimeType: att.mimeType || 'application/octet-stream', dataBase64 };
+        });
+
+        // Explicitly clear the caller's "new messages" badge for a task.
+        this.on('markGroupChatRead', async (req) => {
+            const caller = await resolveCaller(req);
+            await markChatRead(req.data.taskId, caller.employeeId);
+            return { ok: true };
+        });
+
+        // Unread group-task notifications for the caller → "Group Tasks" badge.
+        this.on('getGroupTasksUnread', async (req) => {
+            const caller = await resolveCaller(req);
+            if (!caller.employeeId) return { count: 0 };
+            try {
+                const rows = await SELECT.from(NOTIFICATION).columns('notificationId').where({
+                    employee_employeeId: caller.employeeId,
+                    isRead: false,
+                    type: { in: ['GROUP_CHAT_MESSAGE', 'GROUP_TASK_ASSIGNED', 'GROUP_TASK_UPDATE', 'GROUP_TASK_COMPLETED'] }
+                });
+                return { count: rows.length };
+            } catch (e) {
+                return { count: 0 };
+            }
         });
 
         // ── Upload Profile Photo ──────────────────────────────────────────────
@@ -1030,6 +1396,48 @@ class ManagerService extends cds.ApplicationService {
             await UPDATE(TASK).set({ attachment: buf, attachmentName: fileName, attachmentMimeType: mimeType || 'application/octet-stream' }).where({ taskId });
             cds.log('attach').info(`Attachment '${fileName}' (${buf.length} bytes) stored for task ${taskId}`);
             return `Attachment uploaded for task '${taskId}'.`;
+        });
+
+        // ── Create a group task + seed its assignees (manager only) ────────────
+        this.on('createGroupTask', async (req) => {
+            const d = req.data || {};
+            const assignees = (d.assignees || []).filter(a => a && a.employeeId);
+            if (!d.taskName || !d.taskName.trim()) return req.error(400, 'Task name is required.');
+            // De-duplicate employee ids defensively.
+            const seen = new Set();
+            const uniq = assignees.filter(a => (seen.has(a.employeeId) ? false : (seen.add(a.employeeId), true)));
+            if (uniq.length < 2) return req.error(400, 'Select at least 2 employees for a group task.');
+
+            const taskId = await nextGroupTaskId();
+            await INSERT.into(TASK).entries({
+                taskId,
+                taskName: d.taskName.trim(),
+                taskDescription: (d.taskDescription || '').trim(),
+                priority: d.priority || 'Medium',
+                status: 'In Progress',
+                taskType: 'group',
+                startDate: d.startDate || null,
+                dueDate: d.dueDate || null
+            });
+
+            for (const a of uniq) {
+                await INSERT.into(TASK_ASSIGNEE).entries({
+                    rowId: `${taskId}-AS-${a.employeeId}`,
+                    task_taskId: taskId,
+                    assignee_employeeId: a.employeeId,
+                    status: 'pending',
+                    note: a.note || null
+                });
+            }
+
+            // Notify each assignee they were added to a group task.
+            for (const a of uniq) {
+                await createNotification(a.employeeId, 'GROUP_TASK_ASSIGNED', 'New group task',
+                    `You've been added to the group task “${d.taskName.trim()}”.`, taskId);
+            }
+
+            cds.log('group').info(`Group task ${taskId} created with ${uniq.length} assignees`);
+            return { taskId };
         });
 
         this.on('approveLeave', async (req) => {

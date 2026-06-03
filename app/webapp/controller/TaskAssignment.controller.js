@@ -20,7 +20,10 @@ sap.ui.define([
             dueDate:            "",
             attachmentName:     "",
             attachmentMime:     "",
-            attachmentDataUrl:  ""
+            attachmentDataUrl:  "",
+            // ── Group-task additions (solo flow ignores these) ──
+            taskType:           "solo",     // 'solo' | 'group'
+            groupAssignees:     []          // employeeIds for group mode
         };
     }
 
@@ -37,7 +40,8 @@ sap.ui.define([
                 assignedCount:       0,
                 filterEmployee:      "",
                 filterPriority:      "",
-                searchQuery:         ""
+                searchQuery:         "",
+                busy:                false
             });
             this.getView().setModel(this._oTaModel, "taView");
 
@@ -106,9 +110,12 @@ sap.ui.define([
             const employees = this._oTaModel.getProperty("/employees") || [];
             const empMap = new Map(employees.map(e => [e.employeeId, e.employeeName]));
 
-            const tasks = (arr || []).map(t => Object.assign({}, t, {
-                assigneeName: empMap.get(getAssigneeId(t)) || "—"
-            }));
+            const tasks = (arr || [])
+                // Solo views never include group tasks.
+                .filter(t => t.taskType !== 'group')
+                .map(t => Object.assign({}, t, {
+                    assigneeName: empMap.get(getAssigneeId(t)) || "—"
+                }));
 
             this._oTaModel.setProperty("/tasks", tasks);
             this._oTaModel.setProperty("/assignedCount", tasks.length);
@@ -218,6 +225,55 @@ sap.ui.define([
             this._loadTasks();
             this.onResetForm();
             MessageToast.show(`Task ${newTask.taskId} assigned to ${this._employeeName(form.assignedTo)}.`);
+        },
+
+        // ── Group task creation (manager) — separate from the solo flow ───────
+        onAssignGroupTask() {
+            const form = this._oTaModel.getProperty("/form");
+
+            if (!form.taskName || !form.taskName.trim()) {
+                MessageToast.show("Please enter a task name."); return;
+            }
+            if (!form.taskDescription || !form.taskDescription.trim()) {
+                MessageToast.show("Please enter a task description."); return;
+            }
+            const ids = (form.groupAssignees || []).filter(Boolean);
+            if (ids.length < 2) {
+                MessageToast.show("Select at least 2 employees for a group task."); return;
+            }
+            if (!form.dueDate) {
+                const oDpDue = this.byId("dpDue");
+                if (oDpDue) { oDpDue.setValueState("Error"); oDpDue.setValueStateText("Due date is required"); }
+                MessageToast.show("Please select a due date.");
+                return;
+            }
+            const oDpDue = this.byId("dpDue");
+            if (oDpDue) oDpDue.setValueState("None");
+
+            const oMgr = this.getOwnerComponent().getModel("manager");
+            if (!oMgr) { MessageBox.error("Manager service not available."); return; }
+
+            this._oTaModel.setProperty("/busy", true);
+            const oCtx = oMgr.bindContext("/createGroupTask(...)");
+            oCtx.setParameter("taskName",        form.taskName.trim());
+            oCtx.setParameter("taskDescription", form.taskDescription.trim());
+            oCtx.setParameter("priority",        form.priority || "Medium");
+            oCtx.setParameter("startDate",       form.startDate || null);
+            oCtx.setParameter("dueDate",         form.dueDate || null);
+            oCtx.setParameter("assignees",       ids.map(id => ({ employeeId: id, note: "" })));
+
+            oCtx.execute()
+                .then(() => {
+                    this._oTaModel.setProperty("/busy", false);
+                    const r = (oCtx.getBoundContext() && oCtx.getBoundContext().getObject()) || {};
+                    this.onResetForm();
+                    this._loadTasks();
+                    MessageToast.show(`Group task ${r.taskId || ""} created for ${ids.length} members.`);
+                })
+                .catch((err) => {
+                    this._oTaModel.setProperty("/busy", false);
+                    MessageBox.error((err && err.message) || "Could not create group task.");
+                });
         },
 
         _stripBinary(task) {

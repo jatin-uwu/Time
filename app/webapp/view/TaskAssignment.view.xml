@@ -35,6 +35,17 @@
                 <!-- ── Task creation form ── -->
                 <Panel headerText="Task Details" class="tsTaskFormPanel" expandable="false">
 
+                    <!-- Task type: Solo (default — unchanged flow) vs Group -->
+                    <VBox class="sapUiSmallMarginBegin sapUiSmallMarginTop">
+                        <Label text="Task Type" />
+                        <SegmentedButton selectedKey="{taView>/form/taskType}" width="280px">
+                            <items>
+                                <SegmentedButtonItem key="solo"  text="Solo"  icon="sap-icon://person-placeholder" />
+                                <SegmentedButtonItem key="group" text="Group" icon="sap-icon://group" />
+                            </items>
+                        </SegmentedButton>
+                    </VBox>
+
                     <l:Grid defaultSpan="L6 M6 S12" hSpacing="2" vSpacing="1" class="sapUiSmallMargin">
 
                         <VBox>
@@ -45,14 +56,25 @@
                         </VBox>
 
                         <VBox>
-                            <Label text="Assign To" required="true" />
+                            <Label text="{= ${taView>/form/taskType} === 'group' ? 'Assign To (select 2 or more)' : 'Assign To' }" required="true" />
+                            <!-- Solo: single-employee picker (unchanged) -->
                             <Select id="selAssignee"
+                                    visible="{= ${taView>/form/taskType} !== 'group' }"
                                     selectedKey="{taView>/form/assignedTo}"
                                     items="{taView>/employees}"
                                     forceSelection="false"
                                     width="100%">
                                 <core:Item key="{taView>employeeId}" text="{taView>employeeName} ({taView>designation})" />
                             </Select>
+                            <!-- Group: multi-employee picker -->
+                            <MultiComboBox id="mcbAssignees"
+                                    visible="{= ${taView>/form/taskType} === 'group' }"
+                                    selectedKeys="{taView>/form/groupAssignees}"
+                                    items="{taView>/employees}"
+                                    placeholder="Select 2 or more employees"
+                                    width="100%">
+                                <core:Item key="{taView>employeeId}" text="{taView>employeeName} ({taView>designation})" />
+                            </MultiComboBox>
                         </VBox>
 
                         <VBox>
@@ -120,10 +142,21 @@
 
                     <HBox justifyContent="End" class="sapUiSmallMargin">
                         <Button text="Reset" type="Transparent" press=".onResetForm" />
+                        <!-- Solo assign (unchanged) -->
                         <Button text="Assign"
                                 type="Emphasized"
                                 icon="sap-icon://accept"
+                                visible="{= ${taView>/form/taskType} !== 'group' }"
                                 press=".onAssignTask"
+                                busy="{taView>/busy}"
+                                class="sapUiSmallMarginBegin" />
+                        <!-- Group create — enabled only with 2+ assignees -->
+                        <Button text="Create Group Task"
+                                type="Emphasized"
+                                icon="sap-icon://group"
+                                visible="{= ${taView>/form/taskType} === 'group' }"
+                                enabled="{= ${taView>/form/groupAssignees}.length &gt;= 2 }"
+                                press=".onAssignGroupTask"
                                 busy="{taView>/busy}"
                                 class="sapUiSmallMarginBegin" />
                     </HBox>

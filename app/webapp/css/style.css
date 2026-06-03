@@ -2837,6 +2837,101 @@ html .sapUiBlockLayer {
 .tsTeamUpdateMeta    { color: #94a3b8; font-size: 0.74rem; margin-top: 2px; }
 
 /* ══════════════════════════════════════════════════════════════════════════
+   GROUP TASKS — list cards
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsGroupAvatars { flex: 0 0 auto; }
+.tsGroupProgress { min-width: 160px; flex: 0 0 auto; }
+.tsGroupProgressLabel { font-size: 0.78rem; color: #64748b; font-weight: 600; margin-bottom: 3px; }
+.tsGroupProgressBar { width: 160px; }
+
+/* Group task detail — member list */
+.tsGroupMemberItem { padding: 4px 0; }
+.tsGroupMemberRow  { padding: 8px 4px; }
+.tsGroupMemberName { font-weight: 600; color: #1e293b; font-size: 0.9rem; }
+.tsGroupMemberNote { color: #64748b; font-size: 0.8rem; }
+.tsGroupMemberEnded { color: #94a3b8; font-size: 0.78rem; }
+
+/* ── Group chat ──────────────────────────────────────────────────────────── */
+.tsChatWrap { width: 100%; }
+.tsChatScroll { max-height: 46vh; overflow-y: auto; overflow-x: hidden; padding: 4px 6px; }
+.tsChatLoadMore { width: 100%; }
+.tsChatList .sapMListUl { background: transparent; }
+.tsChatItem { border: none !important; }
+.tsChatRow { max-width: 80%; margin: 8px 0; }
+.tsChatRowMine { margin-left: auto; align-items: flex-end; }
+.tsChatMeta { margin-bottom: 2px; }
+.tsChatSender { font-weight: 700; font-size: 0.8rem; color: #1e293b; }
+.tsChatTime { font-size: 0.72rem; color: #94a3b8; }
+.tsChatBubble {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 8px 12px;
+}
+.tsChatRowMine .tsChatBubble {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    border-color: transparent;
+}
+.tsChatText { color: #1e293b; font-size: 0.9rem; white-space: pre-wrap; }
+.tsChatRowMine .tsChatText { color: #ffffff; }
+.tsChatAtts { margin-top: 6px; gap: 6px; }
+.tsChatAtt { margin-top: 4px; }
+.tsChatThumb { max-width: 220px; max-height: 180px; border-radius: 8px; cursor: pointer; }
+.tsChatAttChip {
+    background: rgba(255, 255, 255, 0.85);
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 4px 8px;
+}
+.tsChatRowMine .tsChatAttChip { background: rgba(255, 255, 255, 0.18); border-color: rgba(255,255,255,0.35); }
+.tsChatRowMine .tsChatAttChip .sapMLnk,
+.tsChatRowMine .tsChatAttChip .sapUiIcon { color: #ffffff !important; }
+
+.tsChatPending { gap: 6px; padding: 6px 6px 0; }
+.tsChatPendingChip {
+    background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;
+    padding: 4px 6px 4px 10px; display: inline-flex;
+}
+.tsChatPendingName { font-size: 0.82rem; color: #1e293b; }
+
+.tsChatInputBar {
+    border-top: 1px solid #eef2f7;
+    padding-top: 10px; margin-top: 8px; gap: 8px;
+}
+.tsChatInput { flex: 1 1 auto; }
+.tsChatSendBtn, .tsChatAttachBtn { flex: 0 0 auto; }
+
+/* ── Teams-style docked chat pane (right side, full height) ──────────────── */
+.tsCustDialog.tsChatDialog {
+    position: fixed !important;
+    top: 0 !important; right: 0 !important; left: auto !important; bottom: 0 !important;
+    transform: none !important;
+    width: 460px !important; max-width: 94vw !important;
+    height: 100vh !important; max-height: 100vh !important;
+    border-radius: 0 !important;
+    box-shadow: -12px 0 40px rgba(15, 23, 42, 0.25) !important;
+}
+.tsChatDialog .tsCustDialogBody {
+    display: flex; flex-direction: column;
+    overflow: hidden !important;   /* the message area scrolls, not the body */
+}
+.tsChatDialog .tsChatWrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.tsChatScrollDialog { flex: 1 1 auto; min-height: 0; max-height: none; }
+
+/* Chat header icon + unread red dot */
+.tsChatBtnWrap { position: relative; }
+.tsChatHeaderBtn .sapMBtnIcon { color: #ffffff !important; }
+.tsChatRedDot {
+    position: absolute;
+    top: 6px; right: 6px;
+    width: 9px; height: 9px;
+    background: #ef4444;
+    border: 1.5px solid #ffffff;
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    NEWSLETTER toolbar buttons (top header — light background)
    ══════════════════════════════════════════════════════════════════════════ */
 .tsNewsletterBtn .sapMBtnInner {

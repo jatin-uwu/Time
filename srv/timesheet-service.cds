@@ -303,6 +303,58 @@ service EmployeeService @(path: '/employee') {
         uploadedOn    : String;
     };
 
+    // ── Group Tasks (read + interaction; results scoped to the caller) ────────
+    // Reads return JSON (LargeString) to avoid a deep CDS type forest — same
+    // pattern as getTeamAttendance. Membership (assignee OR the manager who
+    // created the task) is enforced inside every handler, so an employee can
+    // only ever see/act on group tasks they belong to.
+    @(requires: ['Employee', 'Manager'])
+    action getGroupTasks()                                                 returns LargeString;
+
+    @(requires: ['Employee', 'Manager'])
+    action getGroupTaskDetail(taskId: String(10))                          returns LargeString;
+
+    @(requires: ['Employee', 'Manager'])
+    action endMyTaskSide(taskId: String(10))                               returns {
+        taskId    : String;
+        myStatus  : String;
+        completed : Boolean;
+    };
+
+    @(requires: ['Employee', 'Manager'])
+    action getGroupTaskMessages(taskId: String(10),
+                                page: Integer,
+                                pageSize: Integer)                         returns LargeString;
+
+    @(requires: ['Employee', 'Manager'])
+    action sendTaskMessage(taskId: String(10),
+                           message: LargeString,
+                           attachments: many {
+                               fileName   : String(255);
+                               mimeType   : String(100);
+                               dataBase64 : LargeString;
+                           })                                              returns {
+        messageId : String;
+    };
+
+    @(requires: ['Employee', 'Manager'])
+    action getTaskAttachment(attachmentId: String(50))                     returns {
+        fileName   : String;
+        mimeType   : String;
+        dataBase64 : LargeString;
+    };
+
+    @(requires: ['Employee', 'Manager'])
+    action markGroupChatRead(taskId: String(10))                           returns {
+        ok : Boolean;
+    };
+
+    // Unread group-task notification count — drives the "Group Tasks" menu badge.
+    @(requires: ['Employee', 'Manager'])
+    action getGroupTasksUnread()                                           returns {
+        count : Integer;
+    };
+
     action markAttendance(attendanceDate: String,
                           attendanceDay: String,
                           attendanceTime: String)                          returns {
@@ -449,6 +501,20 @@ service ManagerService @(path: '/manager')@(requires: 'Manager') {
                                 fileName: String(255),
                                 mimeType: String(100),
                                 dataBase64: LargeString)                   returns String;
+
+    // ── Create a group task and seed its assignees (manager only) ──────────
+    // Leaves the existing solo task-create flow completely untouched.
+    action createGroupTask(taskName: String(100),
+                           taskDescription: String(255),
+                           priority: String(20),
+                           startDate: Date,
+                           dueDate: Date,
+                           assignees: many {
+                               employeeId : String(10);
+                               note       : String(500);
+                           })                                              returns {
+        taskId : String;
+    };
 
 
     action submitPerformanceRating(employeeId: String,

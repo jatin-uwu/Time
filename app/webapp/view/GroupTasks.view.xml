@@ -1,0 +1,130 @@
+<mvc:View
+    controllerName="timesheet.app.controller.GroupTasks"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:f="sap.f"
+    xmlns:core="sap.ui.core"
+    displayBlock="true">
+
+    <Page id="groupTasksPage"
+          showHeader="false"
+          class="tsDashboardPage"
+          enableScrolling="true">
+
+        <content>
+
+            <VBox class="tsTaskDescWrap sapUiSmallMargin">
+
+                <!-- ── Page header (matches other pages) ──────────────────── -->
+                <HBox class="tsPageHeaderCard" alignItems="Center" justifyContent="SpaceBetween">
+                    <HBox alignItems="Center">
+                        <core:Icon src="sap-icon://group" class="tsPageHeaderIcon sapUiTinyMarginEnd" style="color:#ffffff;font-size:1.25rem;" />
+                        <Text text="Group Tasks"
+                              style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                    </HBox>
+                    <ObjectStatus text="{groupView>/totalLabel}"
+                                  state="None"
+                                  icon="sap-icon://task"
+                                  style="color:#ffffff;"
+                                  class="tsHeaderBadge" />
+                </HBox>
+
+                <!-- ── Filters / sort ─────────────────────────────────────── -->
+                <HBox alignItems="Center" class="tsTaskFilterBar" wrap="Wrap" justifyContent="SpaceBetween">
+                    <SegmentedButton selectedKey="{groupView>/filterStatus}"
+                                     selectionChange=".onStatusFilter"
+                                     class="sapUiTinyMarginBottom">
+                        <items>
+                            <SegmentedButtonItem key=""            text="All" />
+                            <SegmentedButtonItem key="In Progress" text="In Progress" />
+                            <SegmentedButtonItem key="Completed"   text="Completed" />
+                        </items>
+                    </SegmentedButton>
+                    <Select selectedKey="{groupView>/sortBy}" change=".onSortChange"
+                            width="190px" class="sapUiTinyMarginBottom" tooltip="Sort">
+                        <core:Item key="due-asc"  text="Due date — soonest" />
+                        <core:Item key="due-desc" text="Due date — latest" />
+                    </Select>
+                </HBox>
+
+                <!-- ── Empty state ────────────────────────────────────────── -->
+                <VBox visible="{= ${groupView>/tasks}.length === 0 }"
+                      class="tsTaskEmpty sapUiMediumMarginTop" alignItems="Center">
+                    <core:Icon src="sap-icon://group" size="3rem" color="#9ca3af" />
+                    <Text text="No group tasks yet." class="sapUiSmallMarginTop" textAlign="Center" />
+                    <Text text="Group tasks you're part of will appear here." class="sapUiTinyMarginTop" textAlign="Center" />
+                </VBox>
+
+                <!-- ── Cards ──────────────────────────────────────────────── -->
+                <List items="{groupView>/tasks}" mode="None" showSeparators="None"
+                      class="tsTaskCardList" visible="{= ${groupView>/tasks}.length > 0 }">
+                    <CustomListItem class="tsTaskCardItem">
+                        <VBox class="tsTaskCard tsGroupCard">
+
+                            <!-- Header: priority + name + status + actions -->
+                            <HBox justifyContent="SpaceBetween" alignItems="Center" class="tsTaskCardHeader">
+                                <VBox>
+                                    <HBox alignItems="Center" wrap="Wrap">
+                                        <ObjectStatus text="{groupView>priority}"
+                                                      state="{groupView>priorityState}"
+                                                      icon="sap-icon://flag" />
+                                        <Title text="{groupView>taskName}" level="H5" class="sapUiSmallMarginBegin" />
+                                    </HBox>
+                                    <Text text="{groupView>taskId}" class="tsTaskRowId" />
+                                </VBox>
+                                <HBox alignItems="Center">
+                                    <ObjectStatus text="{groupView>status}" state="{groupView>statusState}" />
+                                    <HBox class="tsChatBtnWrap" alignItems="Center">
+                                        <Button icon="sap-icon://discussion"
+                                                type="Transparent"
+                                                tooltip="Open group chat"
+                                                press=".onOpenGroupChat"
+                                                class="sapUiTinyMarginBegin tsTaskOpenBtn" />
+                                        <VBox class="tsChatRedDot" visible="{= ${groupView>unreadChat} === true }" />
+                                    </HBox>
+                                    <Button icon="sap-icon://slim-arrow-right"
+                                            type="Transparent"
+                                            tooltip="Open task details"
+                                            press=".onOpenGroupTask"
+                                            class="sapUiTinyMarginBegin tsTaskOpenBtn" />
+                                </HBox>
+                            </HBox>
+
+                            <!-- Description -->
+                            <VBox class="tsTaskDescBlock">
+                                <Text text="{groupView>taskDescription}" class="tsTaskDescText" />
+                            </VBox>
+
+                            <!-- Footer: due date + avatars + progress -->
+                            <HBox class="tsTaskCardFooter" justifyContent="SpaceBetween" alignItems="Center" wrap="Wrap">
+                                <HBox alignItems="Center" class="sapUiTinyMarginEnd">
+                                    <core:Icon src="sap-icon://date-time" size="1rem" color="#6b7280" />
+                                    <Text text="{groupView>dueLabel}" class="sapUiTinyMarginBegin" />
+                                </HBox>
+
+                                <f:AvatarGroup avatarDisplaySize="XS" groupType="Group"
+                                               items="{groupView>assignees}" class="tsGroupAvatars">
+                                    <f:items>
+                                        <f:AvatarGroupItem initials="{groupView>initials}" />
+                                    </f:items>
+                                </f:AvatarGroup>
+
+                                <VBox class="tsGroupProgress">
+                                    <Text text="{groupView>progressText}" class="tsGroupProgressLabel" />
+                                    <ProgressIndicator percentValue="{groupView>progressValue}"
+                                                       showValue="false"
+                                                       state="{groupView>progressState}"
+                                                       class="tsGroupProgressBar" />
+                                </VBox>
+                            </HBox>
+
+                        </VBox>
+                    </CustomListItem>
+                </List>
+
+            </VBox>
+
+        </content>
+    </Page>
+
+</mvc:View>

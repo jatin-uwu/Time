@@ -179,7 +179,10 @@ sap.ui.define([
             const employees = this._oTsModel.getProperty("/employees") || [];
             const empMap = new Map(employees.map(e => [e.employeeId, e.employeeName]));
 
-            const enriched = tasks.map(t => {
+            const enriched = tasks
+                // Group tasks have their own dedicated view — never list them here.
+                .filter(t => t.taskType !== 'group')
+                .map(t => {
                 const empId = t.assignedTo_employeeId ||
                               (t.assignedTo && t.assignedTo.employeeId) ||
                               t.assignedTo;
