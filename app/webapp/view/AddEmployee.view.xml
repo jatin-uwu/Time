@@ -42,7 +42,7 @@
                                 <f:fields><Input id="inpMobile" value="{form>/mobileNumber}" type="Tel" required="true" maxLength="15" placeholder="9876543210" /></f:fields>
                             </f:FormElement>
                             <f:FormElement label="Date of Birth *">
-                                <f:fields><DatePicker id="inpDOB" value="{form>/dateOfBirth}" valueFormat="yyyy-MM-dd" displayFormat="long" /></f:fields>
+                                <f:fields><DatePicker id="inpDOB" value="{form>/dateOfBirth}" valueFormat="yyyy-MM-dd" displayFormat="MMM d, yyyy" width="100%" showWeekNumbers="false" /></f:fields>
                             </f:FormElement>
                             <f:FormElement label="Gender *">
                                 <f:fields>
@@ -99,7 +99,7 @@
                                 <f:fields><Input id="inpPartnerName" value="{form>/partnerName}" maxLength="100" placeholder="Spouse full name" /></f:fields>
                             </f:FormElement>
                             <f:FormElement label="Marriage Date *" visible="{= ${form>/maritalStatus} === 'Married' }">
-                                <f:fields><DatePicker id="inpMarriageDate" value="{form>/marriageDate}" valueFormat="yyyy-MM-dd" displayFormat="long" /></f:fields>
+                                <f:fields><DatePicker id="inpMarriageDate" value="{form>/marriageDate}" valueFormat="yyyy-MM-dd" displayFormat="MMM d, yyyy" width="100%" showWeekNumbers="false" /></f:fields>
                             </f:FormElement>
                             <f:FormElement label="Children *" visible="{= ${form>/maritalStatus} === 'Married' }">
                                 <f:fields>
@@ -138,7 +138,7 @@
                                 </f:fields>
                             </f:FormElement>
                             <f:FormElement label="Joining Date *">
-                                <f:fields><DatePicker id="inpJoining" value="{form>/joiningDate}" valueFormat="yyyy-MM-dd" displayFormat="long" /></f:fields>
+                                <f:fields><DatePicker id="inpJoining" value="{form>/joiningDate}" valueFormat="yyyy-MM-dd" displayFormat="MMM d, yyyy" width="100%" showWeekNumbers="false" /></f:fields>
                             </f:FormElement>
                             <f:FormElement label="Employment Type *">
                                 <f:fields>

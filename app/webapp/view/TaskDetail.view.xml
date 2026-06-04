@@ -89,7 +89,9 @@
                             <Label text="Update Date" required="true" />
                             <DatePicker value="{tdView>/form/updateDate}"
                                         valueFormat="yyyy-MM-dd"
-                                        displayFormat="dd MMM yyyy" />
+                                        displayFormat="MMM d, yyyy"
+                                        width="100%"
+                                        showWeekNumbers="false" />
                         </VBox>
                         <VBox>
                             <Label text="Attachment (image, doc, etc.)" />

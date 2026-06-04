@@ -50,6 +50,7 @@
                         class="tsHistWelcomeHint sapUiSmallMarginBottom" />
                     <unified:Calendar
                         id="histCenterCalendar"
+                        showWeekNumbers="false"
                         select=".onCalendarSelect" />
                 </VBox>
             </VBox>

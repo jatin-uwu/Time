@@ -92,14 +92,16 @@
                                 visible="{= ${approvalHistView>/activeTab} !== 'timesheets' }"
                                 class="sapUiTinyMarginEnd sapUiTinyMarginBottom"
                                 valueFormat="yyyy-MM-dd"
-                                displayFormat="dd MMM yyyy" />
+                                displayFormat="MMM d, yyyy"
+                                showWeekNumbers="false" />
                     <DatePicker id="dateToPicker"
                                 placeholder="To date"
                                 change=".onDateToChange"
                                 visible="{= ${approvalHistView>/activeTab} !== 'timesheets' }"
                                 class="sapUiTinyMarginEnd sapUiTinyMarginBottom"
                                 valueFormat="yyyy-MM-dd"
-                                displayFormat="dd MMM yyyy" />
+                                displayFormat="MMM d, yyyy"
+                                showWeekNumbers="false" />
 
                     <!-- Reset -->
                     <Button text="Reset Filters"

@@ -93,7 +93,9 @@
                             <DatePicker id="dpStart"
                                         value="{taView>/form/startDate}"
                                         valueFormat="yyyy-MM-dd"
-                                        displayFormat="dd MMM yyyy" />
+                                        displayFormat="MMM d, yyyy"
+                                        width="100%"
+                                        showWeekNumbers="false" />
                         </VBox>
 
                         <!-- Due Date is now mandatory -->
@@ -102,7 +104,9 @@
                             <DatePicker id="dpDue"
                                         value="{taView>/form/dueDate}"
                                         valueFormat="yyyy-MM-dd"
-                                        displayFormat="dd MMM yyyy" />
+                                        displayFormat="MMM d, yyyy"
+                                        width="100%"
+                                        showWeekNumbers="false" />
                         </VBox>
 
                     </l:Grid>
