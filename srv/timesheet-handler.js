@@ -240,6 +240,14 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
         for (const e of entries) {
             if (!e.taskId || !e.workDate || e.hoursWorked == null) continue;
 
+            // Guard against impossible daily hours (a single day cannot exceed 24,
+            // and negative hours are nonsensical). The grid only ever sends sane
+            // values, so this only blocks forged / corrupted payloads.
+            const h = Number(e.hoursWorked);
+            if (Number.isNaN(h) || h < 0 || h > 24) {
+                return req.error(400, `Hours for ${e.workDate} must be between 0 and 24.`);
+            }
+
             const entryId  = `${hdr.timesheetId}-${e.taskId}-${e.workDate}`;
             const existing = await SELECT.one.from(ENTRY).where({ entryId });
 

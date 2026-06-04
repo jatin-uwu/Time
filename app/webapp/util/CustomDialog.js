@@ -50,6 +50,9 @@ sap.ui.define([
                 rm.openStart("div", ctrl);
                 rm.class("tsCustDialog");
                 if (ctrl.getState()) rm.class("tsCustDialogStated");
+                // Emit custom style classes added via class="…" / addStyleClass
+                // (e.g. tsChatDialog) so callers can theme individual dialogs.
+                (ctrl.aCustomStyleClasses || []).forEach(function (c) { rm.class(c); });
                 rm.style("width", ctrl.getContentWidth());
                 rm.openEnd();
 

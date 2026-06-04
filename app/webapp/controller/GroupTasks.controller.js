@@ -115,8 +115,10 @@ sap.ui.define([
             const oCtx = oEvent.getSource().getBindingContext("groupView");
             const task = oCtx && oCtx.getObject();
             if (!task || !task.taskId) return;
+            // Opening reads the chat → clear this card's dot immediately.
+            this._oModel.setProperty(oCtx.getPath() + "/unreadChat", false);
             this._chat = this._chat || new GroupChat(this.getView(), this.getOwnerComponent());
-            // Reload the list on close so the red dot clears after reading.
+            // Reload the list on close so the dot reflects any newer messages.
             this._chat.open(task.taskId, task.taskName, () => this._loadGroupTasks());
         },
 

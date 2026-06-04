@@ -12,12 +12,27 @@ sap.ui.define([
     "sap/ui/core/Fragment",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
-    "timesheet/app/util/MessageBox"
-], function (Fragment, JSONModel, MessageToast, MessageBox) {
+    "timesheet/app/util/MessageBox",
+    "sap/ui/core/Popup",
+    "sap/m/ResponsivePopover",
+    "sap/m/ScrollContainer",
+    "sap/m/HBox",
+    "sap/m/Button"
+], function (Fragment, JSONModel, MessageToast, MessageBox, Popup, ResponsivePopover, ScrollContainer, HBox, Button) {
     "use strict";
 
     const PAGE_SIZE = 50;
     const POLL_MS = 10000;
+
+    // Curated emoji set (rendered as plain text — sent/received as normal text).
+    const EMOJIS = (
+        "😀 😁 😂 🤣 😊 😇 🙂 🙃 😉 😍 🥰 😘 😋 😜 🤪 😎 🤩 🥳 😏 😒 " +
+        "😞 😔 😟 😕 🙁 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 " +
+        "😱 😨 😰 😥 😓 🤗 🤔 🤭 🤫 😶 😐 😬 🙄 😴 🤤 😪 😷 🤒 🤕 🤧 " +
+        "👍 👎 👌 🤌 ✌️ 🤞 🤟 🤘 👏 🙌 👐 🤝 🙏 💪 👀 🫶 ✋ 👋 🤙 ☝️ " +
+        "❤️ 🧡 💛 💚 💙 💜 🖤 🤍 💔 ❣️ 💯 🔥 ✨ ⭐ 🎉 🎊 ✅ ❌ ⚠️ ❗ " +
+        "📌 📎 📁 📅 📝 ✏️ 💡 🚀 ⏰ ☕ 🍕 🎯 🏆 👏 🤝 📞 📧 💬 👇 👉"
+    ).split(/\s+/).filter(Boolean);
 
     function fmtDateTime(sIso) {
         if (!sIso) return "";
@@ -66,49 +81,72 @@ sap.ui.define([
         this._comp = oComponent;
         this._attCache = {};
         this._fragId = oView.getId() + "--gchat";
+        this._all = [];
         this._model = new JSONModel({
             taskId: "", taskName: "",
             messages: [], draft: "", pendingFiles: [],
-            page: 1, hasMore: false, sending: false
+            page: 1, hasMore: false, sending: false, search: ""
         });
     };
 
     GroupChat.prototype.open = function (sTaskId, sTaskName, fnOnClose) {
         this._myId = this._comp.getCurrentEmployeeId && this._comp.getCurrentEmployeeId();
         this._onClose = fnOnClose || null;
+        this._all = [];
         this._model.setData({
             taskId: sTaskId, taskName: sTaskName || "Group Task",
             messages: [], draft: "", pendingFiles: [],
-            page: 1, hasMore: false, sending: false
+            page: 1, hasMore: false, sending: false, search: ""
         });
 
-        const openIt = (oDialog) => {
-            oDialog.setModel(this._model, "chat");
-            oDialog.open();
+        const showIt = (oPanel) => {
+            oPanel.setModel(this._model, "chat");
+            if (!this._popup) {
+                this._popup = new Popup(oPanel, /*modal*/ true, /*shadow*/ true, /*autoclose*/ false);
+                this._popup.attachClosed(() => {
+                    this._open = false;
+                    this._stopPolling();
+                    this._detachEsc();
+                    if (this._onClose) { try { this._onClose(); } catch (e) { /* */ } }
+                });
+            }
+            this._popup.setModal(true, "tsCustDialogBLY");
+            if (!this._popup.isOpen()) {
+                // CSS docks the panel to the right edge; these dock args are nominal.
+                this._popup.open(160, Popup.Dock.EndTop, Popup.Dock.EndTop, window, "0 0", "none");
+            }
             this._open = true;
             this._loadChat(true);
             this._startPolling();
             this._bindEnterKey();
+            this._attachEsc();
         };
 
-        if (this._pDialog) { this._pDialog.then(openIt); return; }
-        this._pDialog = Fragment.load({
+        if (this._pPanel) { this._pPanel.then(showIt); return; }
+        this._pPanel = Fragment.load({
             id: this._fragId,
             name: "timesheet.app.view.fragment.GroupChatDialog",
             controller: this
-        }).then((oDialog) => {
-            this._view.addDependent(oDialog);
-            this._dialog = oDialog;
-            return oDialog;
+        }).then((oPanel) => {
+            this._view.addDependent(oPanel);
+            this._panel = oPanel;
+            return oPanel;
         });
-        this._pDialog.then(openIt);
+        this._pPanel.then(showIt);
     };
 
-    GroupChat.prototype.onCloseChat = function () {
-        this._open = false;
-        this._stopPolling();
-        if (this._dialog) this._dialog.close();
-        if (this._onClose) { try { this._onClose(); } catch (e) { /* */ } }
+    // Close button (✕) or Esc → close the popup; cleanup runs in attachClosed.
+    GroupChat.prototype.onChatClosed = function () {
+        if (this._popup && this._popup.isOpen()) this._popup.close(120);
+    };
+
+    GroupChat.prototype._attachEsc = function () {
+        if (this._escHandler) return;
+        this._escHandler = (e) => { if (e.key === "Escape" || e.keyCode === 27) this.onChatClosed(); };
+        document.addEventListener("keydown", this._escHandler);
+    };
+    GroupChat.prototype._detachEsc = function () {
+        if (this._escHandler) { document.removeEventListener("keydown", this._escHandler); this._escHandler = null; }
     };
 
     GroupChat.prototype._bindEnterKey = function () {
@@ -149,11 +187,29 @@ sap.ui.define([
         };
     };
 
+    // Stores the full message list and renders the search-filtered subset.
+    GroupChat.prototype._setMessages = function (arr) {
+        this._all = arr || [];
+        this._applySearch();
+    };
+    GroupChat.prototype._applySearch = function () {
+        const q = (this._model.getProperty("/search") || "").toLowerCase();
+        const all = this._all || [];
+        const list = q
+            ? all.filter((m) => ((m.message || "") + " " + (m.senderName || "")).toLowerCase().indexOf(q) !== -1)
+            : all;
+        this._model.setProperty("/messages", list);
+    };
+    GroupChat.prototype.onSearchMessages = function (oEvent) {
+        this._model.setProperty("/search", oEvent.getParameter("newValue") || "");
+        this._applySearch();
+    };
+
     GroupChat.prototype._loadChat = function (reset) {
         this._model.setProperty("/page", 1);
         this._fetch(1).then((res) => {
             const messages = (res.messages || []).map((m) => this._build(m));
-            this._model.setProperty("/messages", messages);
+            this._setMessages(messages);
             this._model.setProperty("/hasMore", !!res.hasMore);
             this._loadThumbs(messages);
             if (reset) { this._scrollToBottom(); this._notifyBadge(); }
@@ -164,9 +220,9 @@ sap.ui.define([
         const next = (this._model.getProperty("/page") || 1) + 1;
         this._fetch(next).then((res) => {
             const older = (res.messages || []).map((m) => this._build(m));
-            const cur = this._model.getProperty("/messages") || [];
+            const cur = this._all || [];
             const ids = new Set(cur.map((m) => m.messageId));
-            this._model.setProperty("/messages", older.filter((m) => !ids.has(m.messageId)).concat(cur));
+            this._setMessages(older.filter((m) => !ids.has(m.messageId)).concat(cur));
             this._model.setProperty("/page", next);
             this._model.setProperty("/hasMore", !!res.hasMore);
             this._loadThumbs(older);
@@ -184,11 +240,11 @@ sap.ui.define([
 
     GroupChat.prototype._poll = function () {
         this._fetch(1).then((res) => {
-            const cur = this._model.getProperty("/messages") || [];
+            const cur = this._all || [];
             const ids = new Set(cur.map((m) => m.messageId));
             const fresh = (res.messages || []).filter((m) => !ids.has(m.messageId)).map((m) => this._build(m));
             if (!fresh.length) return;
-            this._model.setProperty("/messages", cur.concat(fresh));
+            this._setMessages(cur.concat(fresh));
             this._loadThumbs(fresh);
             this._scrollToBottom();
             this._notifyBadge();
@@ -207,11 +263,11 @@ sap.ui.define([
         }));
     };
     GroupChat.prototype._applyThumbs = function () {
-        const messages = this._model.getProperty("/messages") || [];
+        const messages = this._all || [];
         messages.forEach((m) => (m.attachments || []).forEach((a) => {
             if (a.isImage && !a.thumbUrl && this._attCache[a.attachmentId]) a.thumbUrl = this._attCache[a.attachmentId];
         }));
-        this._model.setProperty("/messages", messages.slice());
+        this._setMessages(messages.slice());
     };
 
     GroupChat.prototype._scrollToBottom = function () {
@@ -258,6 +314,44 @@ sap.ui.define([
         if (idx >= 0) { pending.splice(idx, 1); this._model.setProperty("/pendingFiles", pending); }
     };
 
+    // ── Emoji picker ──────────────────────────────────────────────────────
+    GroupChat.prototype.onToggleEmoji = function (oEvent) {
+        const oOpener = oEvent.getSource();
+        if (this._emojiPopover && this._emojiPopover.isOpen()) { this._emojiPopover.close(); return; }
+        if (!this._emojiPopover) {
+            const oGrid = new HBox({ wrap: "Wrap", width: "100%" }).addStyleClass("tsEmojiGrid");
+            EMOJIS.forEach((e) => {
+                oGrid.addItem(new Button({
+                    text: e, type: "Transparent",
+                    press: () => this._insertEmoji(e)
+                }).addStyleClass("tsEmojiBtn"));
+            });
+            this._emojiPopover = new ResponsivePopover({
+                showHeader: false, placement: "Top", contentWidth: "320px",
+                content: [new ScrollContainer({ vertical: true, horizontal: false, height: "240px", width: "100%", content: [oGrid] })]
+            }).addStyleClass("tsEmojiPopover");
+            this._view.addDependent(this._emojiPopover);
+        }
+        this._emojiPopover.openBy(oOpener);
+    };
+
+    GroupChat.prototype._insertEmoji = function (sEmoji) {
+        const oInput = Fragment.byId(this._fragId, "gchatInput");
+        const ta = oInput && oInput.getFocusDomRef();
+        const cur = this._model.getProperty("/draft") || "";
+        let start = cur.length, end = cur.length;
+        if (ta && typeof ta.selectionStart === "number") { start = ta.selectionStart; end = ta.selectionEnd; }
+        const next = cur.slice(0, start) + sEmoji + cur.slice(end);
+        this._model.setProperty("/draft", next);
+        // Keep focus and place the cursor right after the inserted emoji.
+        setTimeout(() => {
+            if (!ta) return;
+            ta.focus();
+            const pos = start + sEmoji.length;
+            try { ta.setSelectionRange(pos, pos); } catch (e) { /* */ }
+        }, 0);
+    };
+
     // ── Send ──────────────────────────────────────────────────────────────
     GroupChat.prototype.onSendMessage = function () {
         const draft = (this._model.getProperty("/draft") || "").trim();
@@ -302,7 +396,10 @@ sap.ui.define([
 
     GroupChat.prototype.destroy = function () {
         this._stopPolling();
-        if (this._dialog) { this._dialog.destroy(); this._dialog = null; this._pDialog = null; }
+        this._detachEsc();
+        if (this._emojiPopover) { this._emojiPopover.destroy(); this._emojiPopover = null; }
+        if (this._popup) { this._popup.destroy(); this._popup = null; }
+        if (this._panel) { this._panel.destroy(); this._panel = null; this._pPanel = null; }
     };
 
     return GroupChat;

@@ -1,85 +1,98 @@
 <core:FragmentDefinition
     xmlns="sap.m"
-    xmlns:core="sap.ui.core"
-    xmlns:u="timesheet.app.util">
+    xmlns:core="sap.ui.core">
 
-    <u:CustomDialog id="gchatDialog"
-                    title="Group Chat · {chat>/taskName}"
-                    contentWidth="440px"
-                    class="tsChatDialog">
-        <u:content>
-            <VBox class="tsChatWrap tsChatDialogBody">
+    <!-- Right-docked, full-height chat panel. Root is a plain flex column we
+         style directly (.tsChatPanel) — shown via sap.ui.core.Popup, so the
+         composer is reliably pinned to the bottom. -->
+    <VBox id="gchatPanel" class="tsChatPanel">
 
-                <!-- Scrollable message history -->
-                <VBox id="gchatScroll" class="tsChatScroll tsChatScrollDialog">
-                    <Button text="Load earlier messages" type="Transparent"
-                            icon="sap-icon://slim-arrow-up"
-                            visible="{chat>/hasMore}"
-                            press=".onLoadEarlier"
-                            class="tsChatLoadMore" />
+        <!-- Header (fixed) -->
+        <HBox class="tsChatPanelHeader" alignItems="Center" justifyContent="SpaceBetween">
+            <HBox alignItems="Center">
+                <core:Icon src="sap-icon://group" class="tsChatPanelIcon" />
+                <Text text="Group Chat · {chat>/taskName}" class="tsChatPanelTitle" />
+            </HBox>
+            <Button icon="sap-icon://decline" type="Transparent" tooltip="Close"
+                    press=".onChatClosed" class="tsChatPanelClose" />
+        </HBox>
 
-                    <List items="{chat>/messages}" mode="None" showSeparators="None"
-                          class="tsChatList" noDataText="No messages yet — start the conversation.">
-                        <CustomListItem class="tsChatItem">
-                            <VBox class="{= ${chat>isMine} ? 'tsChatRow tsChatRowMine' : 'tsChatRow' }">
-                                <HBox class="tsChatMeta" alignItems="Center">
-                                    <Avatar initials="{chat>initials}" displaySize="XS"
-                                            backgroundColor="Accent6" class="sapUiTinyMarginEnd" />
-                                    <Text text="{chat>senderName}" class="tsChatSender sapUiTinyMarginEnd" />
-                                    <Text text="{chat>timeLabel}" class="tsChatTime" />
-                                </HBox>
-                                <VBox class="tsChatBubble">
-                                    <Text text="{chat>message}" class="tsChatText" visible="{= !!${chat>message} }" />
-                                    <VBox items="{chat>attachments}" class="tsChatAtts"
-                                          visible="{= ${chat>attachments}.length > 0 }">
-                                        <VBox class="tsChatAtt">
-                                            <Image src="{chat>thumbUrl}"
-                                                   visible="{= ${chat>isImage} &amp;&amp; !!${chat>thumbUrl} }"
-                                                   press=".onDownloadAttachment" class="tsChatThumb" />
-                                            <HBox class="tsChatAttChip" alignItems="Center"
-                                                  visible="{= !(${chat>isImage} &amp;&amp; !!${chat>thumbUrl}) }">
-                                                <core:Icon src="sap-icon://attachment" size="0.9rem" color="#3b82f6" class="sapUiTinyMarginEnd" />
-                                                <Link text="{chat>fileName} ({chat>sizeLabel})" press=".onDownloadAttachment" />
-                                            </HBox>
-                                        </VBox>
+        <!-- Search (fixed). No magnifier button — filtering is live on type. -->
+        <SearchField placeholder="Search messages" liveChange=".onSearchMessages"
+                     showSearchButton="false" width="100%" class="tsChatSearch" />
+
+        <!-- Messages (fills remaining space, scrolls) -->
+        <VBox id="gchatScroll" class="tsChatScroll">
+            <Button text="Load earlier messages" type="Transparent"
+                    icon="sap-icon://slim-arrow-up"
+                    visible="{chat>/hasMore}" press=".onLoadEarlier" class="tsChatLoadMore" />
+
+            <List items="{chat>/messages}" mode="None" showSeparators="None"
+                  class="tsChatList" noDataText="No messages yet — start the conversation.">
+                <CustomListItem class="tsChatItem">
+                    <HBox justifyContent="{= ${chat>isMine} ? 'End' : 'Start' }" class="tsChatLine">
+                        <VBox class="{= ${chat>isMine} ? 'tsChatRow tsChatRowMine' : 'tsChatRow' }">
+                            <HBox class="tsChatMeta" alignItems="Center">
+                                <Avatar initials="{chat>initials}" displaySize="XS"
+                                        backgroundColor="Accent6" class="sapUiTinyMarginEnd"
+                                        visible="{= !${chat>isMine} }" />
+                                <Text text="{chat>senderName}" class="tsChatSender sapUiTinyMarginEnd"
+                                      visible="{= !${chat>isMine} }" />
+                                <Text text="{chat>timeLabel}" class="tsChatTime" />
+                            </HBox>
+                            <VBox class="tsChatBubble">
+                                <Text text="{chat>message}" class="tsChatText" visible="{= !!${chat>message} }" />
+                                <VBox items="{chat>attachments}" class="tsChatAtts"
+                                      visible="{= ${chat>attachments}.length > 0 }">
+                                    <VBox class="tsChatAtt">
+                                        <Image src="{chat>thumbUrl}"
+                                               visible="{= ${chat>isImage} &amp;&amp; !!${chat>thumbUrl} }"
+                                               press=".onDownloadAttachment" class="tsChatThumb" />
+                                        <HBox class="tsChatAttChip" alignItems="Center"
+                                              visible="{= !(${chat>isImage} &amp;&amp; !!${chat>thumbUrl}) }">
+                                            <core:Icon src="sap-icon://attachment" size="0.9rem" color="#3b82f6" class="sapUiTinyMarginEnd" />
+                                            <Link text="{chat>fileName} ({chat>sizeLabel})" press=".onDownloadAttachment" />
+                                        </HBox>
                                     </VBox>
                                 </VBox>
                             </VBox>
-                        </CustomListItem>
-                    </List>
-                </VBox>
-
-                <!-- Pending attachment previews -->
-                <VBox items="{chat>/pendingFiles}" class="tsChatPending"
-                      visible="{= ${chat>/pendingFiles}.length > 0 }">
-                    <HBox class="tsChatPendingChip" alignItems="Center">
-                        <core:Icon src="sap-icon://document" size="0.9rem" color="#3b82f6" class="sapUiTinyMarginEnd" />
-                        <Text text="{chat>fileName} ({chat>sizeLabel})" class="tsChatPendingName" />
-                        <Button icon="sap-icon://decline" type="Transparent" tooltip="Remove"
-                                press=".onRemovePending" class="sapUiTinyMarginBegin" />
+                        </VBox>
                     </HBox>
-                </VBox>
+                </CustomListItem>
+            </List>
+        </VBox>
 
-                <!-- Input bar -->
-                <HBox class="tsChatInputBar" alignItems="End">
-                    <Button icon="sap-icon://attachment" type="Transparent"
-                            tooltip="Attach files (max 10 MB each)"
-                            press=".onPickAttachment" class="tsChatAttachBtn" />
-                    <TextArea id="gchatInput" value="{chat>/draft}"
-                              rows="1" growing="true" growingMaxLines="5" width="100%"
-                              placeholder="Type a message…  (Enter to send, Shift+Enter for a new line)"
-                              class="tsChatInput" />
-                    <Button icon="sap-icon://paper-plane" type="Emphasized" tooltip="Send"
-                            enabled="{= ${chat>/draft}.length > 0 || ${chat>/pendingFiles}.length > 0 }"
-                            busy="{chat>/sending}"
-                            press=".onSendMessage" class="tsChatSendBtn" />
-                </HBox>
+        <!-- Pending attachment previews (fixed) -->
+        <VBox items="{chat>/pendingFiles}" class="tsChatPending"
+              visible="{= ${chat>/pendingFiles}.length > 0 }">
+            <HBox class="tsChatPendingChip" alignItems="Center">
+                <core:Icon src="sap-icon://document" size="0.9rem" color="#3b82f6" class="sapUiTinyMarginEnd" />
+                <Text text="{chat>fileName} ({chat>sizeLabel})" class="tsChatPendingName" />
+                <Button icon="sap-icon://decline" type="Transparent" tooltip="Remove"
+                        press=".onRemovePending" class="sapUiTinyMarginBegin" />
+            </HBox>
+        </VBox>
 
-            </VBox>
-        </u:content>
-        <u:endButton>
-            <Button text="Close" press=".onCloseChat" />
-        </u:endButton>
-    </u:CustomDialog>
+        <!-- Composer (fixed at bottom). The TextArea uses FlexItemData growFactor
+             so it (its flex wrapper) fills the row and the icons stay pinned right. -->
+        <HBox class="tsChatComposer" alignItems="End">
+            <TextArea id="gchatInput" value="{chat>/draft}"
+                      rows="1" growing="true" growingMaxLines="6" width="100%"
+                      placeholder="Type a message" class="tsChatInput">
+                <layoutData>
+                    <FlexItemData growFactor="1" baseSize="70%" minWidth="0" />
+                </layoutData>
+            </TextArea>
+            <Button id="gchatEmojiBtn" text="🙂" type="Transparent"
+                    tooltip="Emoji" press=".onToggleEmoji" class="tsChatIconBtn tsChatEmojiBtn" />
+            <Button icon="sap-icon://attachment" type="Transparent"
+                    tooltip="Attach files (max 10 MB each)"
+                    press=".onPickAttachment" class="tsChatIconBtn" />
+            <Button icon="sap-icon://paper-plane" type="Transparent" tooltip="Send"
+                    enabled="{= ${chat>/draft}.length > 0 || ${chat>/pendingFiles}.length > 0 }"
+                    busy="{chat>/sending}" press=".onSendMessage" class="tsChatSendIcon" />
+        </HBox>
+
+    </VBox>
 
 </core:FragmentDefinition>

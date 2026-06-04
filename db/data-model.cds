@@ -137,9 +137,13 @@ entity TaskAttachment : managed {
 }
 
 entity TaskUpdate : managed {
-    key updateId       : String(20);
+    // Widened from 20 → 40: group-task updates generate longer ids
+    // ("<taskId>-UPD-<ts>-<rand>") that overflowed 20 on HANA. Solo updates
+    // (~19 chars) still fit, so this is purely additive/non-breaking.
+    key updateId       : String(40);
     task               : Association to TaskMaster;
     updateDate         : Date;
+    title              : String(200);          // optional update title
     notes              : String(2000);
     attachmentName     : String(255);
     attachmentMimeType : String(100);

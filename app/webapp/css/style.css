@@ -1183,6 +1183,7 @@ html, body { margin: 0; height: 100%; }
 }
 
 .tsUpdateBy   { font-weight: 600; color: #111827; font-size: 0.9rem; }
+.tsUpdateTitle { font-weight: 600; color: #2563eb; font-size: 0.82rem; }
 .tsUpdateDate { font-size: 0.8rem; color: #6b7280; }
 .tsUpdateNotes {
     color: #1f2937;
@@ -2913,10 +2914,176 @@ html .sapUiBlockLayer {
 }
 .tsChatDialog .tsCustDialogBody {
     display: flex; flex-direction: column;
+    flex: 1 1 auto !important;
+    /* Override the default dialog body cap so it fills the full-height pane —
+       otherwise the body stops ~150px short and the composer floats mid-panel. */
+    max-height: none !important;
+    height: auto !important;
+    min-height: 0 !important;
     overflow: hidden !important;   /* the message area scrolls, not the body */
 }
 .tsChatDialog .tsChatWrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .tsChatScrollDialog { flex: 1 1 auto; min-height: 0; max-height: none; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   GROUP CHAT — right-docked, full-height panel (own Popup, not a dialog)
+   Parent = flex column: header / search fixed, messages flex:1 scroll,
+   composer fixed at the bottom.
+   ══════════════════════════════════════════════════════════════════════════ */
+.tsChatPanel {
+    position: fixed !important;
+    top: 0 !important; right: 0 !important; left: auto !important; bottom: 0 !important;
+    width: 460px !important; max-width: 96vw !important;
+    height: 100vh !important;
+    background: #ffffff !important;
+    box-shadow: -12px 0 40px rgba(15, 23, 42, 0.28) !important;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+.tsChatPanel.sapMFlexBox { display: flex !important; flex-direction: column !important; }
+
+.tsChatPanelHeader {
+    flex: 0 0 auto;
+    padding: 14px 10px 12px 18px;
+    background: linear-gradient(135deg, #1d4ed8 0%, #2476d8 100%);
+}
+.tsChatPanelIcon { color: #ffffff !important; font-size: 1.2rem; }
+.tsChatPanelTitle { color: #ffffff; font-weight: 700; font-size: 1.02rem; margin-left: 8px; }
+.tsChatPanelClose .sapMBtnInner { background: transparent !important; border: none !important; }
+.tsChatPanelClose .sapMBtnIcon { color: #ffffff !important; }
+
+
+.tsChatPanel .tsChatSearch { flex: 0 0 auto; margin: 12px 14px 6px !important; }
+.tsChatPanel .tsChatScroll {
+    flex: 1 1 auto; min-height: 0; max-height: none;
+    overflow-y: auto; overflow-x: hidden; padding: 8px 14px;
+}
+.tsChatPanel .tsChatPending { flex: 0 0 auto; padding: 0 14px; }
+.tsChatPanel .tsChatComposer { flex: 0 0 auto; margin: 8px 14px 14px; }
+
+/* (1) No focus/selection box when a chat message is clicked */
+.tsChatList .sapMLIB,
+.tsChatItem { background: transparent !important; border: none !important; }
+.tsChatList .sapMLIB:focus,
+.tsChatList .sapMLIB.sapMLIBFocusable:focus,
+.tsChatItem:focus { outline: none !important; box-shadow: none !important; }
+.tsChatList .sapMLIB:focus::after,
+.tsChatList .sapMLIBFocusable:focus::after,
+.tsChatItem:focus::after,
+.tsChatItem:focus::before { content: none !important; display: none !important; border: none !important; outline: none !important; box-shadow: none !important; }
+.tsChatList .sapMLIBActive,
+.tsChatList .sapMLIBSelected { background: transparent !important; }
+
+/* (3) Search field — match the "Type a message" composer pill.
+   The visible box is the INPUT (.sapMSFI); the .sapMSF wrapper is neutralised. */
+/* Reset EVERY part of the SearchField, then put the pill on the WRAPPER
+   (outermost element — its bottom border can't be clipped) and keep the
+   input fully transparent/borderless inside it. */
+.tsChatSearch,
+.tsChatSearch *,
+.tsChatSearch *::before,
+.tsChatSearch *::after {
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+}
+.tsChatSearch .sapMSFS,            /* magnifier/search button */
+.tsChatSearch .sapMSFR { display: none !important; }   /* reset (clear) button */
+
+.tsChatSearch.sapMSF {
+    border: 1px solid #e8eaf0 !important;
+    border-radius: 22px !important;
+    background-color: #ffffff !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>") !important;
+    background-repeat: no-repeat !important;
+    background-position: 14px center !important;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
+    height: 42px !important;
+    overflow: visible !important;
+    box-sizing: border-box !important;
+}
+.tsChatSearch.sapMSF:focus-within { border-color: #cbd5e1 !important; }
+
+.tsChatSearch .sapMSFI {
+    background: transparent !important;
+    border: none !important;
+    height: 40px !important;
+    line-height: 40px !important;
+    padding: 0 16px 0 42px !important;   /* clears the left magnifier */
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+/* Message row alignment (left for others, right for me) */
+.tsChatLine { width: 100%; }
+.tsChatRowMine { align-items: flex-end; }
+
+/* Search within the chat */
+.tsChatSearch { margin-bottom: 8px; flex: 0 0 auto; }
+
+/* ── Teams-style composer: one rounded container, seamless borderless input,
+   fixed right-side icons that never move as the textarea grows. ─────────── */
+.tsChatComposer {
+    flex: 0 0 auto;
+    margin-top: 8px;
+    padding: 3px 6px 3px 16px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 22px;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+    gap: 2px;
+}
+.tsChatComposer:focus-within { border-color: #cbd5e1; }   /* subtle, on the container only */
+
+/* The TextArea's flex wrapper grows via FlexItemData; the control just fills it.
+   Icons keep their natural width and stay pinned to the right. */
+.tsChatComposer .tsChatInput { width: 100% !important; min-width: 0 !important; }
+.tsChatInput .sapMInputBaseContentWrapper { width: 100% !important; }
+.tsChatInput textarea.sapMTextAreaInner { width: 100% !important; }
+
+/* Strip ALL of UI5 TextArea's chrome so it blends into the container —
+   no inner border, no focus ring, no box-shadow, transparent background. */
+.tsChatInput.sapMTextArea,
+.tsChatInput .sapMInputBaseContentWrapper,
+.tsChatInput .sapMInputBaseContentWrapper.sapMInputBaseContentWrapperState,
+.tsChatInput.sapMTextArea.sapMFocus .sapMInputBaseContentWrapper {
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+}
+.tsChatInput .sapMInputBaseContentWrapper::before,
+.tsChatInput .sapMInputBaseContentWrapper::after { content: none !important; display: none !important; border: none !important; }
+.tsChatInput.sapMTextArea:focus-within,
+.tsChatInput.sapMFocus { outline: none !important; box-shadow: none !important; }
+.tsChatInput textarea.sapMTextAreaInner {
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    padding: 6px 2px !important;
+    min-height: 26px !important;
+    line-height: 1.4;
+}
+
+/* Right-side icons — fixed, bottom-aligned, never shift */
+.tsChatIconBtn, .tsChatSendIcon { flex: 0 0 auto; }
+.tsChatIconBtn .sapMBtnInner, .tsChatSendIcon .sapMBtnInner {
+    background: transparent !important; border: none !important; box-shadow: none !important; min-width: 2rem !important;
+}
+.tsChatIconBtn .sapMBtnIcon { color: #64748b !important; }
+.tsChatEmojiBtn .sapMBtnInner { font-size: 1.15rem !important; }
+.tsChatSendIcon .sapMBtnIcon { color: #2563eb !important; font-size: 1.2rem !important; }
+.tsChatSendIcon.sapMBtnDisabled .sapMBtnIcon { color: #cbd5e1 !important; }
+
+/* ── Emoji picker ────────────────────────────────────────────────────────── */
+.tsEmojiGrid { padding: 6px; }
+.tsEmojiBtn .sapMBtnInner {
+    background: transparent !important; border: none !important; box-shadow: none !important;
+    min-width: 2.2rem !important; width: 2.2rem; height: 2.2rem;
+}
+.tsEmojiBtn .sapMBtnContent { font-size: 1.25rem !important; }
+.tsEmojiBtn .sapMBtnInner:hover { background: #f1f5f9 !important; border-radius: 8px !important; }
 
 /* Chat header icon + unread red dot */
 .tsChatBtnWrap { position: relative; }

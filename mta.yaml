@@ -17,6 +17,11 @@ modules:
     parameters:
       instances: 1
       buildpack: nodejs_buildpack
+    properties:
+      # Cloud Foundry runs in UTC by default; the timesheet fill-window / Friday
+      # submit-gate / reminder logic all assume the business day in IST. Pin the
+      # process timezone so server-side date checks match the users' calendar day.
+      TZ: Asia/Kolkata
     build-parameters:
       builder: npm-ci
     provides:

@@ -13,6 +13,7 @@ const HOLIDAY = 'ccentrik.employee.timesheet.schema.timesheet.HolidayMaster';
 const TASK_ASSIGNEE = 'ccentrik.employee.timesheet.schema.timesheet.TaskAssignee';
 const TASK_MESSAGE = 'ccentrik.employee.timesheet.schema.timesheet.TaskMessage';
 const TASK_ATTACHMENT = 'ccentrik.employee.timesheet.schema.timesheet.TaskAttachment';
+const TASK_UPDATE = 'ccentrik.employee.timesheet.schema.timesheet.TaskUpdate';
 
 
 const PRIORITY_PREFIX = {
@@ -157,6 +158,22 @@ async function nextGroupTaskId() {
     let max = 0;
     rows.forEach(r => { const m = /^TASK(\d+)$/i.exec(r.taskId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
     return 'TASK' + String(max + 1).padStart(3, '0');
+}
+
+// An employee's group tasks, each surfaced with THAT employee's own progress as
+// the status (pending→Not Started, in_progress→In Progress, ended→Completed) so
+// dashboard counters (My Tasks / Task Summary) reflect their personal view.
+async function myGroupTasks(employeeId) {
+    if (!employeeId) return [];
+    const rows = await SELECT.from(TASK_ASSIGNEE).where({ assignee_employeeId: employeeId });
+    if (!rows.length) return [];
+    const byTask = {}; rows.forEach(r => { byTask[r.task_taskId] = r; });
+    const ids = Object.keys(byTask);
+    const tasks = await SELECT.from(TASK).where({ taskId: { in: ids }, taskType: 'group' });
+    const map = { pending: 'Not Started', in_progress: 'In Progress', ended: 'Completed' };
+    return (tasks || []).map(t => Object.assign({}, t, {
+        status: map[(byTask[t.taskId] || {}).status] || 'Not Started'
+    }));
 }
 
 class EmployeeService extends cds.ApplicationService {
@@ -353,6 +370,11 @@ class EmployeeService extends cds.ApplicationService {
                 total: rows.length, ended, unreadChat,
                 isCreator: ctx.isCreator,
                 myStatus: ctx.mine ? ctx.mine.status : null,
+                // Only an assignee who has NOT yet ended their part may post
+                // updates. The manager/creator who isn't a member, and any member
+                // who already ended from their side, cannot post (enforced again
+                // server-side in postGroupTaskUpdate — UI flag is convenience only).
+                canPostUpdate: !!ctx.mine && ctx.mine.status !== 'ended',
                 canEnd: !!ctx.mine && ctx.mine.status !== 'ended' && ctx.task.status !== 'completed',
                 assignees: rows.map(a => ({
                     employeeId: a.assignee_employeeId,
@@ -518,6 +540,125 @@ class EmployeeService extends cds.ApplicationService {
             const caller = await resolveCaller(req);
             await markChatRead(req.data.taskId, caller.employeeId);
             return { ok: true };
+        });
+
+        // ── Group Task Updates ────────────────────────────────────────────────
+        // List a group task's updates (newest first). Any member (assignee OR
+        // the creator/manager) may VIEW. Each update carries the poster's name,
+        // an optional profile photo (base64), timestamp and attachment metadata.
+        this.on('getGroupTaskUpdates', async (req) => {
+            const { taskId } = req.data;
+            const caller = await resolveCaller(req);
+            const ctx = await loadGroupContext(taskId, caller);
+            if (!ctx.task) return req.error(404, 'Group task not found.');
+            if (!ctx.isMember) return req.error(403, 'You do not have access to this task.');
+
+            const rows = await SELECT.from(TASK_UPDATE)
+                .where({ task_taskId: taskId })
+                .orderBy('createdAt desc', 'updateId desc');
+
+            // Resolve poster names + profile photos (deduped by employeeId).
+            const ids = Array.from(new Set(rows.map(r => r.updatedBy_employeeId).filter(Boolean)));
+            const nameById = {}; const photoById = {};
+            if (ids.length) {
+                const emps = await SELECT.from(EMPLOYEE)
+                    .columns('employeeId', 'employeeName', 'profilePhoto', 'profilePhotoMimeType')
+                    .where({ employeeId: { in: ids } });
+                for (const e of emps) {
+                    nameById[e.employeeId] = e.employeeName;
+                    if (e.profilePhoto) {
+                        const b64 = await binaryToBase64(e.profilePhoto);
+                        if (b64) photoById[e.employeeId] = 'data:' + (e.profilePhotoMimeType || 'image/png') + ';base64,' + b64;
+                    }
+                }
+            }
+
+            const updates = rows.map(r => ({
+                updateId: r.updateId,
+                title: r.title || '',
+                notes: r.notes || '',
+                updatedAt: r.createdAt || r.updateDate,
+                updatedById: r.updatedBy_employeeId,
+                updatedByName: nameById[r.updatedBy_employeeId] || r.updatedBy_employeeId || 'Member',
+                photoUrl: photoById[r.updatedBy_employeeId] || '',
+                attachmentName: r.attachmentName || '',
+                attachmentMimeType: r.attachmentMimeType || '',
+                hasAttachment: !!r.attachmentName
+            }));
+            return JSON.stringify({ updates });
+        });
+
+        // Post a progress update on a group task. ONLY an assignee of the task
+        // may post (creator/manager who isn't a member is rejected server-side).
+        this.on('postGroupTaskUpdate', async (req) => {
+            const { taskId } = req.data;
+            const sNotes = (req.data.notes || '').trim();
+            const sTitle = (req.data.title || '').trim();
+            const caller = await resolveCaller(req);
+            const ctx = await loadGroupContext(taskId, caller);
+            if (!ctx.task) return req.error(404, 'Group task not found.');
+            if (!ctx.mine) return req.error(403, 'Only members assigned to this task can post updates.');
+            if (ctx.mine.status === 'ended') return req.error(403, 'You have ended this task from your side and can no longer post updates.');
+            if (!sNotes) return req.error(400, 'An update message is required.');
+
+            let buf = null;
+            if (req.data.dataBase64) {
+                try { buf = Buffer.from(String(req.data.dataBase64).replace(/^data:[^;]+;base64,/, ''), 'base64'); }
+                catch (e) { buf = null; }
+                if (buf && buf.length > 10 * 1024 * 1024) {
+                    return req.error(400, 'Attachment exceeds the 10 MB limit.');
+                }
+            }
+
+            const updateId = `${taskId}-UPD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+            await INSERT.into(TASK_UPDATE).entries({
+                updateId,
+                task_taskId: taskId,
+                updateDate: new Date().toISOString().slice(0, 10),
+                title: sTitle || null,
+                notes: sNotes,
+                attachmentName: buf ? (req.data.fileName || 'attachment') : null,
+                attachmentMimeType: buf ? (req.data.mimeType || 'application/octet-stream') : null,
+                attachment: buf || null,
+                updatedBy_employeeId: caller.employeeId
+            });
+
+            // Posting an update means the member is actively working → in_progress.
+            if (ctx.mine.status === 'pending') {
+                await UPDATE(TASK_ASSIGNEE).set({ status: 'in_progress' })
+                    .where({ rowId: ctx.mine.rowId, status: 'pending' });
+            }
+
+            // Notify the other members + creator that a new update was posted.
+            try {
+                const myName = (caller.emp && caller.emp.employeeName) || caller.employeeId;
+                const recipients = await groupRecipientIds(ctx.task, ctx.rows);
+                for (const rid of recipients) {
+                    if (!rid || rid === caller.employeeId) continue;
+                    await createNotification(rid, 'GROUP_TASK_UPDATE', 'New task update',
+                        `${myName} posted an update on “${ctx.task.taskName}”.`, taskId);
+                }
+            } catch (e) { cds.log('group').warn('update notify failed:', e.message || e); }
+
+            return { updateId };
+        });
+
+        // Download a group-task update attachment (membership-checked) as base64.
+        this.on('getTaskUpdateAttachment', async (req) => {
+            const { updateId } = req.data;
+            if (!updateId) return req.error(400, 'updateId is required.');
+            const upd = await SELECT.one.from(TASK_UPDATE).where({ updateId });
+            if (!upd) return req.error(404, 'Update not found.');
+            const caller = await resolveCaller(req);
+            const ctx = await loadGroupContext(upd.task_taskId, caller);
+            if (!ctx.isMember) return req.error(403, 'You do not have access to this attachment.');
+            const dataBase64 = await binaryToBase64(upd.attachment);
+            if (!dataBase64) return req.error(404, 'Attachment has no content.');
+            return {
+                fileName: upd.attachmentName || 'attachment',
+                mimeType: upd.attachmentMimeType || 'application/octet-stream',
+                dataBase64
+            };
         });
 
         // Unread group-task notifications for the caller → "Group Tasks" badge.
@@ -712,9 +853,34 @@ class EmployeeService extends cds.ApplicationService {
             if (!toDate) return req.error(400, 'toDate is required.');
             if (!days) return req.error(400, 'days is required.');
             if (!reason) return req.error(400, 'reason is required.');
+            // Range sanity: end can't precede start, and day count must be positive.
+            // (`!days` above already rejects 0/empty; this also catches negatives,
+            // which are truthy.) We do NOT recompute `days` — the client computes
+            // working-days (weekends/holidays excluded) and that value is kept.
+            if (new Date(toDate) < new Date(fromDate)) {
+                return req.error(400, 'The "to" date cannot be earlier than the "from" date.');
+            }
+            if (!(Number(days) > 0)) {
+                return req.error(400, 'Number of leave days must be greater than zero.');
+            }
 
             const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId });
             if (!emp) return req.error(404, `Employee '${employeeId}' not found.`);
+            // Security: a leave can only be filed for oneself. The UI always sends
+            // the caller's own id, so this guard is invisible to normal use — it
+            // only blocks a forged request that names another employee. (If the
+            // caller's email can't be resolved to a record we leave behaviour as
+            // before, so no existing flow is broken.)
+            {
+                const user = req.user || {};
+                const callerEmail = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+                const caller = callerEmail
+                    ? await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email: callerEmail })
+                    : null;
+                if (caller && caller.employeeId !== employeeId) {
+                    return req.error(403, 'You can only apply for leave for yourself.');
+                }
+            }
             if (emp.designation && emp.designation.toLowerCase() === 'founder') {
                 return req.error(403, 'Founders are not eligible to apply for leave.');
             }
@@ -942,12 +1108,13 @@ class EmployeeService extends cds.ApplicationService {
 
             // Include tasks assigned to the employee AND tasks where they are the
             // reviewer (matches the Task Description table, which shows both).
-            const [assignedTasks, reviewTasks] = await Promise.all([
+            const [assignedTasks, reviewTasks, groupTasks] = await Promise.all([
                 SELECT.from(TASK).where({ assignedTo_employeeId: emp.employeeId }),
-                SELECT.from(TASK).where({ reviewer_employeeId: emp.employeeId })
+                SELECT.from(TASK).where({ reviewer_employeeId: emp.employeeId }),
+                myGroupTasks(emp.employeeId)
             ]);
             const taskMap = new Map();
-            [...(assignedTasks || []), ...(reviewTasks || [])].forEach(t => {
+            [...(assignedTasks || []), ...(reviewTasks || []), ...(groupTasks || [])].forEach(t => {
                 if (t && t.taskId) taskMap.set(t.taskId, t);
             });
             const tasks = Array.from(taskMap.values());
@@ -990,12 +1157,13 @@ class EmployeeService extends cds.ApplicationService {
 
             // Include tasks assigned to the employee AND tasks where they are the
             // reviewer (matches the Task Description table, which shows both).
-            const [assignedTasks, reviewTasks] = await Promise.all([
+            const [assignedTasks, reviewTasks, groupTasks] = await Promise.all([
                 SELECT.from(TASK).where({ assignedTo_employeeId: emp.employeeId }),
-                SELECT.from(TASK).where({ reviewer_employeeId: emp.employeeId })
+                SELECT.from(TASK).where({ reviewer_employeeId: emp.employeeId }),
+                myGroupTasks(emp.employeeId)
             ]);
             const taskMap = new Map();
-            [...(assignedTasks || []), ...(reviewTasks || [])].forEach(t => {
+            [...(assignedTasks || []), ...(reviewTasks || []), ...(groupTasks || [])].forEach(t => {
                 if (t && t.taskId) taskMap.set(t.taskId, t);
             });
             const tasks = Array.from(taskMap.values());
@@ -1845,4 +2013,4 @@ class HRService extends cds.ApplicationService {
 }
 
 module.exports = { EmployeeService, ManagerService, HRService };
-cds.on('served', () => startReminderCron(getMailer));
+cds.on('served', () => startReminderCron(getMailer, createNotification));

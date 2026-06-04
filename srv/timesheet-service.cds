@@ -349,6 +349,29 @@ service EmployeeService @(path: '/employee') {
         ok : Boolean;
     };
 
+    // ── Group Task Updates (progress posts on a group task) ───────────────────
+    // Read returns JSON (LargeString) — same pattern as getGroupTaskDetail.
+    // Membership (assignee OR creator) may VIEW; only an assignee may POST.
+    @(requires: ['Employee', 'Manager'])
+    action getGroupTaskUpdates(taskId: String(10))                         returns LargeString;
+
+    @(requires: ['Employee', 'Manager'])
+    action postGroupTaskUpdate(taskId: String(10),
+                               title: String(200),
+                               notes: String(2000),
+                               fileName: String(255),
+                               mimeType: String(100),
+                               dataBase64: LargeString)                    returns {
+        updateId : String;
+    };
+
+    @(requires: ['Employee', 'Manager'])
+    action getTaskUpdateAttachment(updateId: String(40))                   returns {
+        fileName   : String;
+        mimeType   : String;
+        dataBase64 : LargeString;
+    };
+
     // Unread group-task notification count — drives the "Group Tasks" menu badge.
     @(requires: ['Employee', 'Manager'])
     action getGroupTasksUnread()                                           returns {

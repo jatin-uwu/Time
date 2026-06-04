@@ -24,6 +24,12 @@
                         <Text text="Group Task" style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
                     </HBox>
                     <HBox alignItems="Center">
+                        <Button icon="sap-icon://post"
+                                type="Transparent"
+                                tooltip="Post a progress update"
+                                press=".onPostUpdate"
+                                visible="{= ${gtdView>/detail/canPostUpdate} === true }"
+                                class="tsChatHeaderBtn sapUiTinyMarginEnd" />
                         <HBox class="tsChatBtnWrap" alignItems="Center">
                             <Button icon="sap-icon://discussion" type="Transparent"
                                     tooltip="Open group chat" press=".onOpenChat"
@@ -31,7 +37,9 @@
                             <VBox class="tsChatRedDot" visible="{= ${gtdView>/detail/unreadChat} === true }" />
                         </HBox>
                         <ObjectStatus text="{gtdView>/detail/status}"
-                                      state="{gtdView>/detail/statusState}"
+                                      state="None"
+                                      icon="sap-icon://activity-items"
+                                      style="color:#ffffff;"
                                       class="tsHeaderBadge sapUiSmallMarginBegin" />
                     </HBox>
                 </HBox>
@@ -83,6 +91,46 @@
                                 press=".onEndMySide"
                                 busy="{gtdView>/busy}" />
                     </HBox>
+                </Panel>
+
+                <!-- ── Task Updates (newest first) ────────────────────────── -->
+                <Panel headerText="Task Updates" class="tsTaskUpdatesCard sapUiSmallMarginTop" expandable="false">
+
+                    <VBox visible="{= ${gtdView>/updates}.length === 0 }"
+                          class="tsTaskEmpty" alignItems="Center">
+                        <core:Icon src="sap-icon://notes" size="2.5rem" color="#9ca3af" />
+                        <Text text="No updates posted yet." class="sapUiSmallMarginTop" textAlign="Center" />
+                    </VBox>
+
+                    <List items="{gtdView>/updates}" mode="None" showSeparators="None"
+                          class="tsUpdateList" visible="{= ${gtdView>/updates}.length > 0 }">
+                        <CustomListItem class="tsUpdateItem">
+                            <VBox class="tsUpdateCard">
+                                <HBox justifyContent="SpaceBetween" alignItems="Center">
+                                    <HBox alignItems="Center">
+                                        <Avatar src="{gtdView>photoUrl}"
+                                                initials="{gtdView>initials}"
+                                                displaySize="XS"
+                                                backgroundColor="Accent6"
+                                                class="sapUiTinyMarginEnd" />
+                                        <VBox>
+                                            <Text text="{gtdView>updatedByName}" class="tsUpdateBy" />
+                                            <Text text="{gtdView>title}" class="tsUpdateTitle"
+                                                  visible="{= !!${gtdView>title} }" />
+                                        </VBox>
+                                    </HBox>
+                                    <Text text="{gtdView>dateLabel}" class="tsUpdateDate" />
+                                </HBox>
+                                <Text text="{gtdView>notes}" class="tsUpdateNotes sapUiSmallMarginTop" />
+                                <HBox class="sapUiSmallMarginTop" alignItems="Center"
+                                      visible="{= ${gtdView>hasAttachment} === true }">
+                                    <core:Icon src="sap-icon://attachment" size="0.9rem" color="#3b82f6" />
+                                    <Link text="{gtdView>attachmentName}" press=".onDownloadUpdateAttachment"
+                                          class="sapUiTinyMarginBegin" />
+                                </HBox>
+                            </VBox>
+                        </CustomListItem>
+                    </List>
                 </Panel>
 
                 <!-- ── Member status list ─────────────────────────────────── -->
