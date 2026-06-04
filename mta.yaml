@@ -80,7 +80,13 @@ resources:
             - "binding-secret"
             - "x509"
           redirect-uris:
-            - https://*~{app-api/app-uri}/**
+            # ${default-uri} resolves to the FULL app host (no scheme), so the
+            # exact-host form below matches the approuter callback
+            # (https://<host>/login/callback). The previous "https://*~{...}"
+            # put a stray '*' before the host, which can't match an empty
+            # segment → "redirect_uri does not match" at login.
+            - https://~{app-api/app-uri}/**
+            - https://*.~{app-api/app-uri}/**
         role-collections:
           - name: 'Employee (Timesheet ${org}-${space})'
             description: 'generated'
@@ -97,6 +103,3 @@ resources:
     requires:
       - name: app-api
 
-properties:
-  GOOGLE_SERVICE_ACCOUNT_EMAIL: ~{google-sa-email}
-  GOOGLE_PRIVATE_KEY: ~{google-private-key}
