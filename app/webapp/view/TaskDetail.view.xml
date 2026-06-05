@@ -65,17 +65,19 @@
                         <Text text="{tdView>/task/taskDescription}" class="tsTaskDescText" />
                     </VBox>
 
-                    <!-- Manager attachment (if any) -->
-                    <HBox class="tsTaskAttachmentRow sapUiSmallMarginTop"
-                          alignItems="Center"
-                          visible="{= !!${tdView>/task/attachmentName} }">
-                        <core:Icon src="sap-icon://attachment" size="0.95rem" color="#3b82f6" />
-                        <Text text="Reference document:"
-                              class="tsTaskAttachmentLabel sapUiTinyMarginBegin" />
-                        <Link text="{tdView>/task/attachmentName}"
-                              press=".onDownloadTaskAttachment"
-                              class="sapUiTinyMarginBegin" />
-                    </HBox>
+                    <!-- Manager-attached reference documents (multiple) -->
+                    <VBox class="tsTaskAttachmentRow sapUiSmallMarginTop"
+                          visible="{= ${tdView>/documents}.length > 0 }">
+                        <Text text="Reference documents:" class="tsTaskAttachmentLabel" />
+                        <VBox items="{tdView>/documents}">
+                            <HBox alignItems="Center" class="sapUiTinyMarginTop">
+                                <core:Icon src="sap-icon://attachment" size="0.95rem" color="#3b82f6" />
+                                <Link text="{tdView>fileName}"
+                                      press=".onDownloadDocument"
+                                      class="sapUiTinyMarginBegin" />
+                            </HBox>
+                        </VBox>
+                    </VBox>
                 </Panel>
 
                 <!-- ── New update form (employee only) ── -->

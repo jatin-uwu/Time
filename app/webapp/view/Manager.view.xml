@@ -45,9 +45,9 @@
                                        icon="sap-icon://approvals"
                                        count="{mgrView>/pendingCount}" />
                         <IconTabFilter key="prevweek"
-                                       text="Prev-Week Requests"
+                                       text="Timesheet Fill Requests"
                                        icon="sap-icon://calendar"
-                                       count="{mgrView>/prevWeekPendingCount}" />
+                                       count="{= ${mgrView>/prevWeekPendingCount} + ${mgrView>/dayUnlockPendingCount} }" />
                         <IconTabFilter key="leaves"
                                        text="Leave Approvals"
                                        icon="sap-icon://away"
@@ -123,31 +123,33 @@
                     <HBox class="tsMgrListToolbar" alignItems="Center" justifyContent="SpaceBetween">
                         <HBox alignItems="Center">
                             <core:Icon src="sap-icon://calendar" class="tsMgrToolbarIcon" />
-                            <Title text="Prev-Week Fill Requests" level="H4" class="sapUiSmallMarginBegin" />
+                            <Title text="Timesheet Fill Requests" level="H4" class="sapUiSmallMarginBegin" />
                         </HBox>
                         <ObjectStatus
-                            visible="{= ${mgrView>/prevWeekPendingCount} > 0 }"
-                            text="{mgrView>/prevWeekPendingCount} pending"
+                            visible="{= ${mgrView>/fillPendingCount} > 0 }"
+                            text="{mgrView>/fillPendingCount} pending"
                             state="Warning"
                             icon="sap-icon://alert" />
                     </HBox>
 
                     <!-- Empty state -->
-                    <VBox visible="{= ${mgrView>/prevWeekRequests}.length === 0 }"
+                    <VBox visible="{= ${mgrView>/fillRequests}.length === 0 }"
                           class="tsMgrEmptyState" alignItems="Center">
                         <core:Icon src="sap-icon://calendar" size="2.5rem" color="#9ca3af" />
-                        <Text text="No pending prev-week requests." textAlign="Center"
+                        <Text text="No pending timesheet fill requests." textAlign="Center"
                               class="tsMgrEmptyText sapUiSmallMarginTop" />
                     </VBox>
 
-                    <!-- Table — only when there are items -->
-                    <Table id="prevWeekTable"
-                           visible="{= ${mgrView>/prevWeekRequests}.length > 0 }"
-                           items="{mgrView>/prevWeekRequests}"
+                    <!-- Merged table: previous-week fill requests (all employees)
+                         AND missed-day requests routed from HR employees. -->
+                    <Table id="fillRequestsTable"
+                           visible="{= ${mgrView>/fillRequests}.length > 0 }"
+                           items="{mgrView>/fillRequests}"
                            class="sapUiSmallMarginTop">
                         <columns>
                             <Column><Text text="Employee"        /></Column>
-                            <Column><Text text="Week"            /></Column>
+                            <Column><Text text="Type"            /></Column>
+                            <Column><Text text="Week / Date"     /></Column>
                             <Column><Text text="Requested On"    /></Column>
                             <Column><Text text="Employee Remarks"/></Column>
                             <Column><Text text="Status"          /></Column>
@@ -157,7 +159,8 @@
                             <ColumnListItem>
                                 <cells>
                                     <Text text="{mgrView>employeeName}"     />
-                                    <Text text="{mgrView>weekRange}"        />
+                                    <Text text="{mgrView>kindLabel}"        />
+                                    <Text text="{mgrView>periodLabel}"      />
                                     <Text text="{mgrView>requestedOn}"      />
                                     <Text text="{mgrView>employeeRemarks}"  wrapping="false" maxLines="2" />
                                     <ObjectStatus
@@ -168,13 +171,13 @@
                                                 type="Accept"
                                                 icon="sap-icon://accept"
                                                 visible="{= ${mgrView>status} === 'Pending' }"
-                                                press=".onApprovePrevWeek"
+                                                press=".onApproveFillRequest"
                                                 class="sapUiTinyMarginEnd" />
                                         <Button text="Reject"
                                                 type="Reject"
                                                 icon="sap-icon://decline"
                                                 visible="{= ${mgrView>status} === 'Pending' }"
-                                                press=".onRejectPrevWeek" />
+                                                press=".onRejectFillRequest" />
                                     </HBox>
                                 </cells>
                             </ColumnListItem>

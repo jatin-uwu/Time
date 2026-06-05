@@ -71,7 +71,7 @@ sap.ui.define([
         onInit() {
             this._oModel = new JSONModel({
                 taskId: "", detail: { myStatus: null, assignees: [] },
-                updates: [], postForm: emptyPostForm(), busy: false
+                updates: [], documents: [], postForm: emptyPostForm(), busy: false
             });
             this.getView().setModel(this._oModel, "gtdView");
             this.getOwnerComponent().getRouter()
@@ -90,8 +90,32 @@ sap.ui.define([
             this.getOwnerComponent().getCurrentUser().then(() => {
                 this._loadDetail(sTaskId);
                 this._loadUpdates(sTaskId);
+                this._loadTaskDocuments(sTaskId);
                 this._startPoll();   // keep status + unread-chat dot live
             });
+        },
+
+        // Manager-attached reference documents for this group task.
+        _loadTaskDocuments(sTaskId) {
+            callEmp("getTaskDocuments", { taskId: sTaskId }).then((raw) => {
+                let list = [];
+                try { list = JSON.parse(raw || "[]"); } catch (e) { list = []; }
+                this._oModel.setProperty("/documents", Array.isArray(list) ? list : []);
+            }).catch(() => this._oModel.setProperty("/documents", []));
+        },
+
+        onDownloadDocument(oEvent) {
+            const oCtx = oEvent.getSource().getBindingContext("gtdView");
+            if (!oCtx) return;
+            const doc = oCtx.getObject();
+            if (!doc || !doc.documentId) return;
+            callEmp("getTaskDocument", { documentId: doc.documentId }).then((v) => {
+                if (!v || !v.dataBase64) { MessageToast.show("Document is not available."); return; }
+                const a = document.createElement("a");
+                a.href = "data:" + (v.mimeType || "application/octet-stream") + ";base64," + v.dataBase64;
+                a.download = v.fileName || doc.fileName || "document";
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            }).catch(() => MessageToast.show("Could not download the document."));
         },
 
         // Light refresh so member statuses and the chat red-dot update live.

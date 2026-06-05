@@ -51,8 +51,9 @@
                 <!-- Rating cards -->
                 <List items="{rhView>/ratings}"
                       showSeparators="None"
+                      mode="None"
                       visible="{= !${rhView>/loading} &amp;&amp; ${rhView>/hasRatings} }">
-                    <CustomListItem class="tsRhCardItem">
+                    <CustomListItem type="Inactive" class="tsRhCardItem">
                         <HBox class="tsRhCard" justifyContent="SpaceBetween" alignItems="Center">
                             <VBox class="tsRhCardLeft">
                                 <Text text="{rhView>period}" class="tsRhCardPeriod" />

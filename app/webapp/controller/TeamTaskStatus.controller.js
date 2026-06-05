@@ -260,6 +260,7 @@ sap.ui.define([
             if (!task || !task.taskId) return;
             // Opening from Team Task Status is view-only — no "Post an update" form.
             this.getOwnerComponent()._bAllowTaskPost = false;
+            this.getOwnerComponent()._taskDetailSource = "team-task-status";
             this.getOwnerComponent().getRouter()
                 .navTo("task-detail", { taskId: task.taskId });
         },

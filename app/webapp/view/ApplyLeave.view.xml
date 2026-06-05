@@ -182,69 +182,7 @@
 
                 </VBox>
 
-                <!-- ══════════════════════════════════════════
-                     LEAVE HISTORY
-                ══════════════════════════════════════════ -->
-                <VBox class="tsLeaveHistCard">
-
-                    <!-- Section header -->
-                    <HBox alignItems="Center" class="tsLeaveHistHead">
-                        <core:Icon src="sap-icon://history" />
-                        <Title text="My Leave History" level="H4" />
-                    </HBox>
-
-                    <Table id="leaveHistoryTable"
-                        items="{leave>/history}"
-                        noDataText="No leave requests found."
-                        alternateRowColors="true">
-                        <columns>
-                            <Column>
-                                <Text text="Type" />
-                            </Column>
-                            <Column>
-                                <Text text="From" />
-                            </Column>
-                            <Column>
-                                <Text text="To" />
-                            </Column>
-                            <Column width="5rem">
-                                <Text text="Days" />
-                            </Column>
-                            <Column>
-                                <Text text="Status" />
-                            </Column>
-                            <Column>
-                                <Text text="Unpaid" />
-                            </Column>
-                            <Column>
-                                <Text text="Reason" />
-                            </Column>
-                            <Column>
-                                <Text text="Applied On" />
-                            </Column>
-                        </columns>
-                        <items>
-                            <ColumnListItem>
-                                <cells>
-                                    <Text text="{leave>leaveType}" />
-                                    <Text text="{leave>fromDate}" />
-                                    <Text text="{leave>toDate}" />
-                                    <Text text="{leave>days}" />
-                                    <ObjectStatus
-                                        text="{leave>status}"
-                                        state="{= ${leave>status} === 'Approved' ? 'Success' :
-                                                   ${leave>status} === 'Rejected' ? 'Error' : 'Warning' }" />
-                                    <ObjectStatus
-                                        text="{= ${leave>isUnpaid} ? 'Yes' : 'No' }"
-                                        state="{= ${leave>isUnpaid} ? 'Error' : 'None' }" />
-                                    <Text text="{leave>reason}" wrapping="false" maxLines="1" />
-                                    <Text text="{leave>createdAt}" />
-                                </cells>
-                            </ColumnListItem>
-                        </items>
-                    </Table>
-
-                </VBox>
+                <!-- Leave History section removed — see the dedicated Leave History page. -->
 
             </VBox>
 

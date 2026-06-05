@@ -372,10 +372,48 @@ service EmployeeService @(path: '/employee') {
         dataBase64 : LargeString;
     };
 
+    // ── Multi-document task attachments (assignment files) ────────────────────
+    // List metadata for every document attached to a task (no binary). Any
+    // assignee, the reviewer, or a manager may list. Returns a JSON array.
+    @(requires: ['Employee', 'Manager'])
+    action getTaskDocuments(taskId: String(20))                            returns LargeString;
+
+    // Non-destructive download of one task document as base64.
+    @(requires: ['Employee', 'Manager'])
+    action getTaskDocument(documentId: String(60))                         returns {
+        fileName   : String;
+        mimeType   : String;
+        dataBase64 : LargeString;
+    };
+
+    // Post a progress update on a SOLO task, persisting an optional attachment
+    // binary so it is downloadable later (the old OData create never stored it).
+    @(requires: ['Employee', 'Manager'])
+    action postTaskUpdate(taskId: String(20),
+                          updateDate: Date,
+                          notes: String(2000),
+                          fileName: String(255),
+                          mimeType: String(100),
+                          dataBase64: LargeString)                         returns {
+        updateId : String;
+    };
+
     // Unread group-task notification count — drives the "Group Tasks" menu badge.
     @(requires: ['Employee', 'Manager'])
     action getGroupTasksUnread()                                           returns {
         count : Integer;
+    };
+
+    // Unread-notification counts grouped by the sidebar menu route they relate
+    // to (e.g. { "task-description": 2, "manager": 1 }). Drives the menu badges.
+    @(requires: 'authenticated-user')
+    action getSidebarBadges()                                              returns LargeString;
+
+    // Mark every unread notification that belongs to a menu route as read —
+    // called when the user opens that page, so its badge clears.
+    @(requires: 'authenticated-user')
+    action markRouteNotificationsRead(route: String)                       returns {
+        updated : Integer;
     };
 
     action markAttendance(attendanceDate: String,
@@ -525,6 +563,15 @@ service ManagerService @(path: '/manager')@(requires: 'Manager') {
                                 mimeType: String(100),
                                 dataBase64: LargeString)                   returns String;
 
+    // Attach one document to a task (called once per file → supports multiple
+    // documents per task). Returns the new documentId.
+    action uploadTaskDocument(taskId: String(20),
+                              fileName: String(255),
+                              mimeType: String(100),
+                              dataBase64: LargeString)                     returns {
+        documentId : String;
+    };
+
     // ── Create a group task and seed its assignees (manager only) ──────────
     // Leaves the existing solo task-create flow completely untouched.
     action createGroupTask(taskName: String(100),
@@ -558,6 +605,18 @@ service ManagerService @(path: '/manager')@(requires: 'Manager') {
         requestId   : String;
         status      : String;
         timesheetId : String;
+    };
+
+    // Missed-day (day-unlock) requests routed to a manager — used when the
+    // requester is an HR employee, whose requests go to their reporting
+    // manager instead of HR. Surfaced in the "Timesheet Fill Requests" tab.
+    entity DayUnlockRequests as projection on db.timesheet.TimesheetDayUnlockRequest;
+
+    action approveDayUnlock(requestId: String,
+                            approved: Boolean,
+                            hrRemarks: String)                             returns {
+        requestId : String;
+        status    : String;
     };
 
     // ── Team Attendance ───────────────────────────────────────────────────

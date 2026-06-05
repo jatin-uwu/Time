@@ -233,6 +233,10 @@ sap.ui.define([
 
             const filtered = all
                 .filter(t => {
+                    // Completed tasks are no longer part of the active work list —
+                    // they remain accessible only via the Task Status view/filter.
+                    if (t.status === "Completed") return false;
+
                     const tAssignee = t.assignedTo_employeeId ||
                                      (t.assignedTo && t.assignedTo.employeeId) ||
                                      t.assignedTo;
@@ -908,6 +912,7 @@ sap.ui.define([
             // Posting a daily update is only allowed when opening a task from
             // Task Description — flag the source for the Task Detail page.
             this.getOwnerComponent()._bAllowTaskPost = true;
+            this.getOwnerComponent()._taskDetailSource = "task-description";
             this.getOwnerComponent().getRouter()
                 .navTo("task-detail", { taskId: task.taskId });
         },

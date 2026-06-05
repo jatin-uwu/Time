@@ -19,6 +19,10 @@ sap.ui.define([
         PREVWEEK_REJECTED:          { color: "#dc2626", bg: "#fef2f2", label: "Prev Week Rejected",  icon: "M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z", group: "PREVWEEK" },
         DAY_UNLOCK_APPROVED:        { color: "#3b82f6", bg: "#eff6ff", label: "Day Unlocked",        icon: "M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z", group: "DAY_UNLOCK" },
         DAY_UNLOCK_REJECTED:        { color: "#dc2626", bg: "#fef2f2", label: "Unlock Rejected",     icon: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zM10 9a2 2 0 114 0v1", group: "DAY_UNLOCK" },
+        TIMESHEET_SUBMITTED:        { color: "#2563eb", bg: "#eff6ff", label: "Approval Needed",     icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2", group: "TIMESHEET" },
+        PREVWEEK_REQUEST:           { color: "#2563eb", bg: "#eff6ff", label: "Fill Request",        icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2", group: "PREVWEEK" },
+        DAY_UNLOCK_REQUEST:         { color: "#2563eb", bg: "#eff6ff", label: "Missed Day Request",  icon: "M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z", group: "DAY_UNLOCK" },
+        LEAVE_REQUEST:              { color: "#2563eb", bg: "#eff6ff", label: "Leave Request",       icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z", group: "LEAVE" },
         TASK_ASSIGNED:              { color: "#f59e0b", bg: "#fffbeb", label: "Task Assigned",       icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4", group: "TASK" },
         PERFORMANCE_RATED:          { color: "#8b5cf6", bg: "#f5f3ff", label: "Performance Rated",  icon: "M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z", group: "PERFORMANCE" },
         LEAVE_APPROVED:             { color: "#10b981", bg: "#ecfdf5", label: "Leave Approved",     icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z", group: "LEAVE" },
@@ -31,6 +35,40 @@ sap.ui.define([
 
     function getTypeConfig(type) {
         return TYPE_CONFIG[type] || TYPE_CONFIG.DEFAULT;
+    }
+
+    // ── Deep-link: which page each notification type opens ─────────────────────
+    // Approver-side request notifications go to the relevant approval page; the
+    // employee-side outcome notifications go to the related history/timesheet page.
+    const NAV_BY_TYPE = {
+        // Approval requests (recipient = approver)
+        TIMESHEET_SUBMITTED: "manager",          // Manager → timesheet approvals
+        PREVWEEK_REQUEST:    "manager",          // Manager → timesheet fill approvals
+        LEAVE_REQUEST:       "leave-approvals",  // Manager → leave approvals
+        // DAY_UNLOCK_REQUEST is handled in getNavRoute() — it is role-dependent.
+        // Outcomes (recipient = employee)
+        TIMESHEET_APPROVED:  "history",
+        TIMESHEET_REJECTED:  "timesheet",
+        PREVWEEK_APPROVED:   "timesheet",
+        PREVWEEK_REJECTED:   "timesheet",
+        DAY_UNLOCK_APPROVED: "timesheet",
+        DAY_UNLOCK_REJECTED: "timesheet",
+        LEAVE_APPROVED:      "leave-history",
+        LEAVE_REJECTED:      "leave-history",
+        TASK_ASSIGNED:       "task-description",
+        PERFORMANCE_RATED:   "rating-history"
+    };
+
+    function getNavRoute(type, role) {
+        // A missed-day (day-unlock) request can reach two different approvers:
+        // a normal employee's request goes to HR → the HR Approvals page; an HR
+        // employee's request is routed to their reporting manager → the Manager
+        // Approvals page (Timesheet Fill Requests tab). So the destination depends
+        // on the RECIPIENT's role, not the notification type alone.
+        if (type === "DAY_UNLOCK_REQUEST") {
+            return String(role || "").toLowerCase() === "hr" ? "hr-approvals" : "manager";
+        }
+        return NAV_BY_TYPE[type] || null;
     }
 
     function timeAgo(isoStr) {
@@ -261,31 +299,49 @@ sap.ui.define([
         // MARK READ — individual
         // ═══════════════════════════════════════════════════════════════════════
 
+        // Current user's role (backend-resolved, with a localStorage fallback) —
+        // drives role-dependent deep-links such as missed-day requests.
+        _currentRole: function () {
+            var oComp = this.getOwnerComponent();
+            var sRole = (oComp && oComp._oCurrentUser && oComp._oCurrentUser.role) || "";
+            if (!sRole) { try { sRole = localStorage.getItem("tsRole") || ""; } catch (e) { /**/ } }
+            return String(sRole).toLowerCase();
+        },
+
         onNotifClick: function (sNotificationId) {
             if (!sNotificationId) return;
 
             var items  = this._oNotifViewModel.getProperty("/notifications") || [];
             var target = items.find(function (n) { return n.notificationId === sNotificationId; });
-            if (!target || target.isRead) return;
+            if (!target) return;
 
-            // Optimistic update
-            target.isRead = true;
-            var unread = items.filter(function (n) { return !n.isRead; }).length;
-            this._oNotifViewModel.setProperty("/notifications", items);
-            this._oNotifViewModel.setProperty("/unreadCount",   unread);
-            this._applyFiltersAndRender();
+            // Mark as read (only if currently unread) — optimistic + backend persist
+            if (!target.isRead) {
+                target.isRead = true;
+                var unread = items.filter(function (n) { return !n.isRead; }).length;
+                this._oNotifViewModel.setProperty("/notifications", items);
+                this._oNotifViewModel.setProperty("/unreadCount",   unread);
+                this._applyFiltersAndRender();
 
-            // Backend persist
-            this._callAction("markNotificationRead", { notificationId: sNotificationId })
-                .catch(function () {
-                    // Roll back
-                    target.isRead = false;
-                    var unreadRb = items.filter(function (n) { return !n.isRead; }).length;
-                    this._oNotifViewModel.setProperty("/notifications", items);
-                    this._oNotifViewModel.setProperty("/unreadCount",   unreadRb);
-                    this._applyFiltersAndRender();
-                    MessageToast.show("Could not mark notification as read.");
-                }.bind(this));
+                this._callAction("markNotificationRead", { notificationId: sNotificationId })
+                    .catch(function () {
+                        target.isRead = false;
+                        var unreadRb = items.filter(function (n) { return !n.isRead; }).length;
+                        this._oNotifViewModel.setProperty("/notifications", items);
+                        this._oNotifViewModel.setProperty("/unreadCount",   unreadRb);
+                        this._applyFiltersAndRender();
+                    }.bind(this));
+            }
+
+            // Deep-link: navigate to the page this notification relates to.
+            var sRoute = getNavRoute(target.type, this._currentRole());
+            if (sRoute) {
+                try {
+                    this.getOwnerComponent().getRouter().navTo(sRoute);
+                } catch (e) {
+                    MessageToast.show("Could not open the related page.");
+                }
+            }
         },
 
         // ═══════════════════════════════════════════════════════════════════════
@@ -394,6 +450,7 @@ sap.ui.define([
         _buildNotifListHTML: function (notifications) {
             if (!notifications || notifications.length === 0) return "";
 
+            var sRole = this._currentRole();
             var groups     = {};
             var groupOrder = [];
             notifications.forEach(function (n) {
@@ -423,7 +480,10 @@ sap.ui.define([
                     var ago       = timeAgo(n.notifiedAt);
                     var hasId     = !!n.notificationId;
 
-                    var clickable   = !n.isRead && hasId && n._source !== "local";
+                    // Clickable when it can navigate somewhere OR is unread (to mark
+                    // read). Read notifications with a deep-link target stay clickable.
+                    var hasNav      = !!getNavRoute(n.type, sRole);
+                    var clickable   = hasId && n._source !== "local" && (hasNav || !n.isRead);
                     var cursorCss   = clickable ? "cursor:pointer;" : "";
                     var onclickMark = clickable
                         ? ' onclick="window._notifController&&window._notifController.onNotifClick(\'' + n.notificationId + '\')"'

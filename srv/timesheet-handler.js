@@ -396,24 +396,52 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
                 'Use "Request Previous Week Approval" for older dates.'
             );
 
-        const dup = await SELECT.one.from(DAY_UNLOCK).where({
-            employee_employeeId: emp.employeeId,
-            targetDate,
-            status: 'Pending'
-        });
-        if (dup) return req.error(409, `A pending unlock request already exists for ${targetDate}.`);
-
+        // The requestId is deterministic per (employee, targetDate), so a prior
+        // request (e.g. one HR rejected) still occupies that primary key. Re-using
+        // it instead of inserting a duplicate is what makes "Re-request" work —
+        // a fresh INSERT here previously failed with a primary-key violation.
         const requestId = `${emp.employeeId}-${targetDate}-HR`;
+        const existing = await SELECT.one.from(DAY_UNLOCK).where({ requestId });
 
-        await INSERT.into(DAY_UNLOCK).entries({
-            requestId,
-            employee_employeeId:  emp.employeeId,
-            targetDate,
-            hrApprover_employeeId: hrApproverId,
-            status:               'Pending',
-            employeeRemarks:      employeeRemarks || '',
-            requestedOn:          new Date()
-        });
+        if (existing && existing.status === 'Pending') {
+            return req.error(409, `A pending unlock request already exists for ${targetDate}.`);
+        }
+
+        if (existing) {
+            // Re-request: reset the existing (Rejected/Approved) row back to Pending.
+            await UPDATE(DAY_UNLOCK).set({
+                hrApprover_employeeId: hrApproverId,
+                status:                'Pending',
+                employeeRemarks:       employeeRemarks || '',
+                hrRemarks:             null,
+                resolvedOn:            null,
+                requestedOn:           new Date()
+            }).where({ requestId });
+        } else {
+            await INSERT.into(DAY_UNLOCK).entries({
+                requestId,
+                employee_employeeId:   emp.employeeId,
+                targetDate,
+                hrApprover_employeeId: hrApproverId,
+                status:                'Pending',
+                employeeRemarks:       employeeRemarks || '',
+                requestedOn:           new Date()
+            });
+        }
+
+        // In-app notification to the approver (HR or, for HR users, their manager)
+        // so it shows in the bell / approvals page even without SMTP. This was
+        // missing — only the email was sent, so approvers never saw a request.
+        if (createNotification) {
+            await createNotification(
+                hrApproverId,
+                'DAY_UNLOCK_REQUEST',
+                'Missed Day Approval Request',
+                `${emp.employeeName} (${emp.employeeId}) requested approval to fill their missed timesheet for ${targetDate}.` +
+                    (employeeRemarks ? ` Reason: ${employeeRemarks}` : ''),
+                requestId
+            );
+        }
 
         const hr = await SELECT.one.from(EMPLOYEE).where({ employeeId: hrApproverId });
         if (hr && hr.email) {
@@ -471,6 +499,20 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
             employeeRemarks:     employeeRemarks || '',
             requestedOn:         new Date()
         });
+
+        // In-app notification to the manager so the request shows in the bell /
+        // approvals page even without SMTP. This was missing — only the email was
+        // sent, so managers never saw the request.
+        if (createNotification) {
+            await createNotification(
+                emp.manager_employeeId,
+                'PREVWEEK_REQUEST',
+                'Timesheet Fill Request',
+                `${emp.employeeName} (${emp.employeeId}) requested approval to fill their timesheet for ${weekStartDate} to ${weekEndDate}.` +
+                    (employeeRemarks ? ` Reason: ${employeeRemarks}` : ''),
+                requestId
+            );
+        }
 
         const manager = await SELECT.one.from(EMPLOYEE).where({ employeeId: emp.manager_employeeId });
         if (manager && manager.email) {
@@ -569,69 +611,95 @@ async function registerManagerTimesheetHandlers(svc, getMailer, createNotificati
         cds.log('timesheet').info(`Prev-week request ${requestId} ${newStatus} by manager`);
         return { requestId, status: newStatus, timesheetId: tsId || '' };
     });
+
+    // HR employees' missed-day requests are routed here (to their manager) and
+    // approved on the manager's "Timesheet Fill Requests" tab.
+    svc.on('approveDayUnlock', (req) =>
+        approveDayUnlockImpl(req, getMailer, createNotification, 'manager'));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// HR SERVICE handlers  (unchanged)
+// DAY-UNLOCK APPROVAL  (shared by HR and Manager services)
+// Normal employees route missed-day requests to HR; HR employees route theirs
+// to their reporting manager. Both approve through this same logic, which
+// unlocks the day so the employee can fill it and notifies them of the outcome.
+// ═════════════════════════════════════════════════════════════════════════════
+async function approveDayUnlockImpl(req, getMailer, createNotification, approverRole) {
+    const { requestId, approved, hrRemarks } = req.data;
+    if (!requestId) return req.error(400, 'requestId is required.');
+
+    const request = await SELECT.one.from(DAY_UNLOCK).where({ requestId });
+    if (!request) return req.error(404, `Request '${requestId}' not found.`);
+    if (request.status !== 'Pending')
+        return req.error(400, `Request is already '${request.status}'.`);
+
+    // A manager may only act on requests actually routed to them.
+    if (approverRole === 'manager') {
+        const u = req.user || {};
+        const callerEmail = (((u.attr && (u.attr.email || u.attr.mail)) || u.id || '') + '').trim().toLowerCase();
+        const me = callerEmail
+            ? await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', callerEmail)
+            : null;
+        if (!me || request.hrApprover_employeeId !== me.employeeId)
+            return req.error(403, 'You are not the assigned approver for this request.');
+    }
+
+    const newStatus = approved ? 'Approved' : 'Rejected';
+    const byLabel   = approverRole === 'manager' ? 'Your manager' : 'HR';
+
+    await UPDATE(DAY_UNLOCK)
+        .set({ status: newStatus, hrRemarks: hrRemarks || '', resolvedOn: new Date() })
+        .where({ requestId });
+
+    if (approved) {
+        const mon       = getMondayOfWeek(new Date());
+        const weekStart = toISODate(mon);
+        const tsId      = `${request.employee_employeeId}-${weekStart}`;
+        await UPDATE(ENTRY)
+            .set({ isLocked: false, entryStatus: 'Open' })
+            .where({ timesheet_timesheetId: tsId, workDate: request.targetDate });
+        cds.log('timesheet').info(`Day ${request.targetDate} unlocked for ${request.employee_employeeId} by ${approverRole}`);
+    }
+
+    const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId: request.employee_employeeId });
+    if (emp && emp.email) {
+        const mailer  = getMailer();
+        const subject = approved ? `Day Unlock Approved — ${request.targetDate}` : `Day Unlock Request Rejected — ${request.targetDate}`;
+        const body    =
+            `Hi ${emp.employeeName || ''},\n\n` +
+            (approved
+                ? `Your request to fill your timesheet for ${request.targetDate} has been APPROVED by ${byLabel.toLowerCase()}.\n`
+                : `Your request to unlock ${request.targetDate} was REJECTED by ${byLabel.toLowerCase()}.\n`) +
+            (hrRemarks ? `\nRemarks: ${hrRemarks}\n` : '') +
+            `\n— Timesheet System`;
+        if (mailer) {
+            try { await mailer.sendMail({ from: process.env.SMTP_FROM || 'no-reply@timesheet.local', to: emp.email, subject, text: body }); }
+            catch (e) { cds.log('mail').warn('Day-unlock approval email failed:', e.message); }
+        }
+    }
+
+    if (createNotification && emp) {
+        await createNotification(
+            emp.employeeId,
+            approved ? 'DAY_UNLOCK_APPROVED' : 'DAY_UNLOCK_REJECTED',
+            approved ? `Day ${request.targetDate} Unlocked ✓` : `Day ${request.targetDate} Unlock Rejected ✗`,
+            approved
+                ? `${byLabel} approved your request to fill ${request.targetDate}.`
+                : `${byLabel} rejected your unlock request for ${request.targetDate}.${hrRemarks ? ' Reason: ' + hrRemarks : ''}`,
+            requestId
+        );
+    }
+
+    return { requestId, status: newStatus };
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// HR SERVICE handlers
 // ═════════════════════════════════════════════════════════════════════════════
 async function registerHRTimesheetHandlers(svc, getMailer, createNotification) {
 
-    svc.on('approveDayUnlock', async (req) => {
-        const { requestId, approved, hrRemarks } = req.data;
-        if (!requestId) return req.error(400, 'requestId is required.');
-
-        const request = await SELECT.one.from(DAY_UNLOCK).where({ requestId });
-        if (!request) return req.error(404, `Request '${requestId}' not found.`);
-        if (request.status !== 'Pending')
-            return req.error(400, `Request is already '${request.status}'.`);
-
-        const newStatus = approved ? 'Approved' : 'Rejected';
-
-        await UPDATE(DAY_UNLOCK)
-            .set({ status: newStatus, hrRemarks: hrRemarks || '', resolvedOn: new Date() })
-            .where({ requestId });
-
-        if (approved) {
-            const mon       = getMondayOfWeek(new Date());
-            const weekStart = toISODate(mon);
-            const tsId      = `${request.employee_employeeId}-${weekStart}`;
-            await UPDATE(ENTRY)
-                .set({ isLocked: false, entryStatus: 'Open' })
-                .where({ timesheet_timesheetId: tsId, workDate: request.targetDate });
-            cds.log('timesheet').info(`Day ${request.targetDate} unlocked for ${request.employee_employeeId} by HR`);
-        }
-
-        const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId: request.employee_employeeId });
-        if (emp && emp.email) {
-            const mailer  = getMailer();
-            const subject = approved ? `Day Unlock Approved — ${request.targetDate}` : `Day Unlock Request Rejected — ${request.targetDate}`;
-            const body    =
-                `Hi ${emp.employeeName || ''},\n\n` +
-                (approved
-                    ? `Your request to fill your timesheet for ${request.targetDate} has been APPROVED by HR.\n`
-                    : `Your request to unlock ${request.targetDate} was REJECTED by HR.\n`) +
-                (hrRemarks ? `\nHR Remarks: ${hrRemarks}\n` : '') +
-                `\n— Timesheet System`;
-            if (mailer) {
-                try { await mailer.sendMail({ from: process.env.SMTP_FROM || 'no-reply@timesheet.local', to: emp.email, subject, text: body }); }
-                catch (e) { cds.log('mail').warn('Day-unlock approval email failed:', e.message); }
-            }
-        }
-
-        if (createNotification && emp) {
-            await createNotification(
-                emp.employeeId,
-                approved ? 'DAY_UNLOCK_APPROVED' : 'DAY_UNLOCK_REJECTED',
-                approved ? `Day ${request.targetDate} Unlocked ✓` : `Day ${request.targetDate} Unlock Rejected ✗`,
-                approved
-                    ? `HR approved your request to fill ${request.targetDate}.`
-                    : `HR rejected your unlock request for ${request.targetDate}.${hrRemarks ? ' Reason: ' + hrRemarks : ''}`,
-                requestId
-            );
-        }
-
-        return { requestId, status: newStatus };
-    });
+    svc.on('approveDayUnlock', (req) =>
+        approveDayUnlockImpl(req, getMailer, createNotification, 'HR'));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

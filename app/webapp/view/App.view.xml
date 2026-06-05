@@ -134,11 +134,13 @@
                 <VBox id="navTimesheetBody" class="tsNavGroupBody">
                     <List id="navTimesheetList" mode="None" backgroundDesign="Transparent" class="tsNavList">
                         <StandardListItem title="Fill Timesheet" icon="sap-icon://add-activity"
-                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            type="Active" press=".onNavSelect" class="tsNavItem"
+                            counter="{appView>/sidebarBadges/timesheet}">
                             <customData><core:CustomData key="target" value="timesheet" /></customData>
                         </StandardListItem>
                         <StandardListItem title="Timesheet History" icon="sap-icon://history"
-                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            type="Active" press=".onNavSelect" class="tsNavItem"
+                            counter="{appView>/sidebarBadges/history}">
                             <customData><core:CustomData key="target" value="history" /></customData>
                         </StandardListItem>
                     </List>
@@ -157,7 +159,8 @@
                             <customData><core:CustomData key="target" value="apply-leave" /></customData>
                         </StandardListItem>
                         <StandardListItem title="Leave History" icon="sap-icon://appointment-2"
-                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            type="Active" press=".onNavSelect" class="tsNavItem"
+                            counter="{appView>/sidebarBadges/leave-history}">
                             <customData><core:CustomData key="target" value="leave-history" /></customData>
                         </StandardListItem>
                     </List>
@@ -172,7 +175,8 @@
                 <VBox id="navTaskBody" class="tsNavGroupBody">
                     <List id="navTaskList" mode="None" backgroundDesign="Transparent" class="tsNavList">
                         <StandardListItem title="Task Description" icon="sap-icon://notes"
-                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            type="Active" press=".onNavSelect" class="tsNavItem"
+                            counter="{appView>/sidebarBadges/task-description}">
                             <customData><core:CustomData key="target" value="task-description" /></customData>
                         </StandardListItem>
                         <StandardListItem title="Task Status" icon="sap-icon://activity-items"
@@ -181,7 +185,7 @@
                         </StandardListItem>
                         <StandardListItem title="Group Tasks" icon="sap-icon://group"
                             type="Active" press=".onNavSelect" class="tsNavItem"
-                            counter="{appView>/groupTasksUnread}">
+                            counter="{appView>/sidebarBadges/group-tasks}">
                             <customData><core:CustomData key="target" value="group-tasks" /></customData>
                         </StandardListItem>
                     </List>
@@ -190,7 +194,8 @@
                 <!-- ── Rating History (standalone, outside Task group) ────── -->
                 <List id="navRatingList" mode="None" backgroundDesign="Transparent" class="tsNavList">
                     <StandardListItem title="Rating History" icon="sap-icon://survey"
-                        type="Active" press=".onNavSelect" class="tsNavItem">
+                        type="Active" press=".onNavSelect" class="tsNavItem"
+                        counter="{appView>/sidebarBadges/rating-history}">
                         <customData><core:CustomData key="target" value="rating-history" /></customData>
                     </StandardListItem>
                 </List>
@@ -214,7 +219,8 @@
                             <customData><core:CustomData key="target" value="team-task-status" /></customData>
                         </StandardListItem>
                         <StandardListItem title="Approvals" icon="sap-icon://approvals"
-                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            type="Active" press=".onNavSelect" class="tsNavItem"
+                            counter="{appView>/sidebarBadges/manager}">
                             <customData><core:CustomData key="target" value="manager" /></customData>
                         </StandardListItem>
                         <StandardListItem title="Approval History" icon="sap-icon://history"
@@ -251,7 +257,8 @@
                             <customData><core:CustomData key="target" value="all-employees" /></customData>
                         </StandardListItem>
                         <StandardListItem title="HR Approvals" icon="sap-icon://approvals"
-                            type="Active" press=".onNavSelect" class="tsNavItem">
+                            type="Active" press=".onNavSelect" class="tsNavItem"
+                            counter="{appView>/sidebarBadges/hr-approvals}">
                             <customData><core:CustomData key="target" value="hr-approvals" /></customData>
                         </StandardListItem>
                     </List>

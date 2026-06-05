@@ -8,6 +8,35 @@ sap.ui.define([
 ], (Controller, JSONModel, Filter, FilterOperator, MessageToast, MessageBox) => {
     "use strict";
 
+    // Plain fetch caller for /hr actions (CSRF + JSON, NO $batch). Large base64
+    // document uploads fail inside an OData $batch ("batch failed"), which is why
+    // uploading more than one document broke — this bypasses $batch entirely.
+    async function callHr(action, params) {
+        let token = null;
+        try {
+            const h = await fetch("/hr/", { headers: { "X-CSRF-Token": "Fetch" }, credentials: "include" });
+            token = h.headers.get("x-csrf-token");
+        } catch (e) { /* ignore */ }
+        const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+        if (token) headers["X-CSRF-Token"] = token;
+        const resp = await fetch("/hr/" + action, {
+            method: "POST", headers, body: JSON.stringify(params || {}), credentials: "include"
+        });
+        if (!resp.ok) {
+            let detail = resp.statusText;
+            try { const j = await resp.json(); detail = (j.error && j.error.message) || detail; }
+            catch (e) { try { detail = await resp.text(); } catch (e2) { /* */ } }
+            throw new Error(detail);
+        }
+        const j = await resp.json().catch(() => ({}));
+        return (j && j.value !== undefined) ? j.value : j;
+    }
+
+    // Combined cap across all queued documents (each file is also capped at 5 MB
+    // individually). Keeps one Add-Employee submission from piling on too much.
+    const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
+    const MAX_TOTAL_LABEL = "25 MB";
+
     const EMPTY_FORM = () => ({
         employeeName:      "",
         designation:       "",
@@ -134,11 +163,20 @@ sap.ui.define([
                 !f.mobileNumber || !/^\d{10,15}$/.test(f.mobileNumber.replace(/\D/g, "")),
                 "Required · must be 10–15 digits");
 
-            check("dateOfBirth", "Date of Birth", (() => {
-                if (!f.dateOfBirth) return true;
-                const age = (new Date() - new Date(f.dateOfBirth)) / (1000 * 60 * 60 * 24 * 365.25);
-                return age < 18 || age > 70;
-            })(), !f.dateOfBirth ? "Required" : "Age must be between 18 and 70");
+            // Precise calendar age (avoids the 365.25 float drift around birthdays).
+            const dobAge = (() => {
+                if (!f.dateOfBirth) return null;
+                const dob = new Date(f.dateOfBirth), now = new Date();
+                let a = now.getFullYear() - dob.getFullYear();
+                const mDiff = now.getMonth() - dob.getMonth();
+                if (mDiff < 0 || (mDiff === 0 && now.getDate() < dob.getDate())) a--;
+                return a;
+            })();
+            check("dateOfBirth", "Date of Birth",
+                dobAge === null || dobAge < 18 || dobAge > 70,
+                dobAge === null ? "Required"
+                    : dobAge < 18 ? "Employee must be at least 18 years old"
+                        : "Age cannot exceed 70");
 
             check("gender",       "Gender",       !f.gender,       "Required · please select a gender");
             check("bloodGroup",   "Blood Group",  !f.bloodGroup,   "Required · please select blood group");
@@ -352,19 +390,18 @@ sap.ui.define([
         },
 
         _uploadPendingDocs(employeeId) {
-            const docs   = this._oFormModel.getProperty("/pendingDocs") || [];
+            const docs = this._oFormModel.getProperty("/pendingDocs") || [];
             if (!docs.length) return Promise.resolve();
-            const oModel = this.getOwnerComponent().getModel("hr");
-            return docs.reduce((p, d) => p.then(() => {
-                const ctx = oModel.bindContext("/uploadEmployeeDocument(...)");
-                ctx.setParameter("employeeId",   employeeId);
-                ctx.setParameter("documentType", d.documentType || "Other");
-                ctx.setParameter("fileName",     d.fileName);
-                ctx.setParameter("mimeType",     d.mimeType);
-                ctx.setParameter("description",  "");
-                ctx.setParameter("dataBase64",   d.dataBase64);
-                return ctx.execute();
-            }), Promise.resolve());
+            // Upload sequentially via plain fetch (not $batch) so multiple large
+            // documents all persist. A failed doc rejects so the user is told.
+            return docs.reduce((p, d) => p.then(() => callHr("uploadEmployeeDocument", {
+                employeeId:   employeeId,
+                documentType: d.documentType || "Other",
+                fileName:     d.fileName,
+                mimeType:     d.mimeType,
+                description:  "",
+                dataBase64:   d.dataBase64
+            })), Promise.resolve());
         },
 
         onDocsSelected(oEvent) {
@@ -393,6 +430,15 @@ sap.ui.define([
                 // Size check
                 if (file.size > 5 * 1024 * 1024) {
                     MessageToast.show(`${file.name} exceeds 5MB — skipped.`);
+                    skipped++;
+                    processNext(index + 1);
+                    return;
+                }
+
+                // Combined-size check across everything already queued.
+                const queuedBytes = pending.reduce((s, p) => s + (p.size || 0), 0);
+                if (queuedBytes + file.size > MAX_TOTAL_BYTES) {
+                    MessageToast.show(`${file.name} skipped — total documents would exceed ${MAX_TOTAL_LABEL}.`);
                     skipped++;
                     processNext(index + 1);
                     return;

@@ -2509,7 +2509,25 @@ html .sapUiBlockLayer {
 .tsRhStatNumSm.sapMText{ font-size: 1.0rem !important; }
 .tsRhStatLabel.sapMText{ font-size: 0.76rem !important; color: #64748b !important; font-weight: 600 !important; }
 
-.tsRhCardItem { border: none !important; background: transparent !important; }
+.tsRhCardItem.sapMLIB:focus,
+.tsRhCardItem.sapMLIBFocusable:focus {
+    outline: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+}
+ 
+.tsRhCardItem.sapMLIB:focus::after,
+.tsRhCardItem.sapMLIBFocusable:focus::after {
+    content: none !important;
+    display: none !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+ 
+.tsRhCardItem.sapMLIBActive,
+.tsRhCardItem.sapMLIBSelected {
+    background: transparent !important;
+}
 .tsRhCard {
     background: #ffffff;
     border: 1px solid #e2e8f0;

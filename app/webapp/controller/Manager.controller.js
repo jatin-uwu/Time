@@ -40,6 +40,10 @@ sap.ui.define([
                 prevWeekRequests:      [],
                 allPrevWeekRequests:   [],
                 prevWeekPendingCount:  0,
+                dayUnlockRequests:     [],
+                dayUnlockPendingCount: 0,
+                fillRequests:          [],   // merged: prev-week + missed-day
+                fillPendingCount:      0,
                 leaveRequests:         [],
                 allLeaveRequests:      [],
                 leavePendingCount:     0,
@@ -70,6 +74,7 @@ sap.ui.define([
             this._selectedSub = null;
             this._loadSubmissions();
             this._loadPrevWeekRequests();
+            this._loadDayUnlockRequests();
             this._loadLeaveRequests();
         },
 
@@ -509,7 +514,7 @@ sap.ui.define([
                     });
 
                     Promise.all(empPromises).then(enriched => {
-                        // Build human-readable week range
+                        // Build human-readable week range + tag for the combined list.
                         enriched.forEach(r => {
                             if (r.weekStartDate && r.weekEndDate) {
                                 const ws = new Date(r.weekStartDate + "T00:00:00");
@@ -520,15 +525,147 @@ sap.ui.define([
                             }
                             r.requestedOn = r.requestedOn
                                 ? new Date(r.requestedOn).toLocaleString() : "";
+                            r._kind       = "prevweek";
+                            r.kindLabel   = "Previous Week";
+                            r.periodLabel = r.weekRange;
                         });
 
                         const pending = enriched.filter(r => r.status === "Pending").length;
                         this._oMgrModel.setProperty("/allPrevWeekRequests",  enriched);
                         this._oMgrModel.setProperty("/prevWeekPendingCount", pending);
                         this._oMgrModel.setProperty("/prevWeekRequests",     enriched.filter(r => r.status === "Pending"));
+                        this._rebuildFillRequests();
                     });
                 })
                 .catch(err => console.error("Failed to load prev-week requests:", err));
+        },
+
+        // ── Missed-day (day-unlock) requests routed to this manager ────────
+        // These come from HR employees, whose missed-day requests go to their
+        // reporting manager instead of HR. Shown in the same "Timesheet Fill
+        // Requests" tab as prev-week requests.
+        _loadDayUnlockRequests() {
+            const oMgrModel = this.getOwnerComponent().getModel("manager");
+            if (!oMgrModel) return;
+
+            const oComp = this.getOwnerComponent();
+            const myId  = oComp.getCurrentEmployeeId ? oComp.getCurrentEmployeeId() : null;
+
+            oMgrModel.bindList("/DayUnlockRequests").requestContexts(0, 200)
+                .then(aCtx => {
+                    // Only requests routed to this manager.
+                    const all = aCtx.map(c => c.getObject()).filter(Boolean)
+                        .filter(r => !myId || r.hrApprover_employeeId === myId);
+
+                    const empPromises = all.map(r => {
+                        if (oComp.getEmployeeById) {
+                            return oComp.getEmployeeById(r.employee_employeeId)
+                                .then(emp => { r.employeeName = emp ? emp.employeeName : r.employee_employeeId; return r; })
+                                .catch(() => { r.employeeName = r.employee_employeeId; return r; });
+                        }
+                        r.employeeName = r.employee_employeeId;
+                        return Promise.resolve(r);
+                    });
+
+                    Promise.all(empPromises).then(enriched => {
+                        enriched.forEach(r => {
+                            r.requestedOn = r.requestedOn
+                                ? new Date(r.requestedOn).toLocaleString() : "";
+                            r._kind       = "dayunlock";
+                            r.kindLabel   = "Missed Day";
+                            r.periodLabel = r.targetDate || "";
+                        });
+                        const pending = enriched.filter(r => r.status === "Pending");
+                        this._oMgrModel.setProperty("/dayUnlockRequests",     pending);
+                        this._oMgrModel.setProperty("/dayUnlockPendingCount", pending.length);
+                        this._rebuildFillRequests();
+                    });
+                })
+                .catch(err => console.error("Failed to load day-unlock requests:", err));
+        },
+
+        // Combine prev-week fill requests (all employees) and HR missed-day
+        // requests (routed to this manager) into a single "Timesheet Fill
+        // Requests" list shown in one table.
+        _rebuildFillRequests() {
+            const prev = this._oMgrModel.getProperty("/prevWeekRequests")  || [];
+            const day  = this._oMgrModel.getProperty("/dayUnlockRequests") || [];
+            const combined = prev.concat(day);
+            this._oMgrModel.setProperty("/fillRequests",     combined);
+            this._oMgrModel.setProperty("/fillPendingCount", combined.length);
+        },
+
+        // One set of action handlers for the merged table — dispatch to the
+        // correct flow based on each row's kind.
+        onApproveFillRequest(oEvent) {
+            const oItem = oEvent.getSource().getBindingContext("mgrView").getObject();
+            if (oItem && oItem._kind === "dayunlock") this.onApproveDayUnlock(oEvent);
+            else this.onApprovePrevWeek(oEvent);
+        },
+        onRejectFillRequest(oEvent) {
+            const oItem = oEvent.getSource().getBindingContext("mgrView").getObject();
+            if (oItem && oItem._kind === "dayunlock") this.onRejectDayUnlock(oEvent);
+            else this.onRejectPrevWeek(oEvent);
+        },
+
+        onApproveDayUnlock(oEvent) {
+            const oItem = oEvent.getSource().getBindingContext("mgrView").getObject();
+            MessageBox.confirm(
+                `Approve missed-day request for ${oItem.employeeName} on ${oItem.targetDate}?`,
+                {
+                    title:            "Approve Request",
+                    actions:          [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                    emphasizedAction: MessageBox.Action.OK,
+                    onClose: (sAction) => {
+                        if (sAction !== MessageBox.Action.OK) return;
+                        this._submitDayUnlockDecision(oItem, true, "");
+                    }
+                }
+            );
+        },
+
+        onRejectDayUnlock(oEvent) {
+            const oItem = oEvent.getSource().getBindingContext("mgrView").getObject();
+            const oTA = new TextArea({ placeholder: "Reason for rejection (optional)...", rows: 3, width: "100%" });
+            const oDialog = new Dialog({
+                title: "Reject Missed-Day Request",
+                content: [
+                    new VBox({
+                        items: [
+                            new Text({ text: "Provide a reason. The employee will be notified.", wrapping: true })
+                                .addStyleClass("sapUiSmallMarginBottom"),
+                            new Label({ text: "Reason", labelFor: oTA }),
+                            oTA
+                        ]
+                    }).addStyleClass("sapUiSmallMargin")
+                ],
+                beginButton: new Button({
+                    text: "Reject", type: "Reject",
+                    press: () => { const r = oTA.getValue().trim(); oDialog.close(); oDialog.destroy(); this._submitDayUnlockDecision(oItem, false, r); }
+                }),
+                endButton: new Button({ text: "Cancel", press: () => { oDialog.close(); oDialog.destroy(); } })
+            });
+            this.getView().addDependent(oDialog);
+            oDialog.open();
+        },
+
+        _submitDayUnlockDecision(oItem, bApproved, sRemarks) {
+            const oMgrModel = this.getOwnerComponent().getModel("manager");
+            if (!oMgrModel) return;
+
+            const oCtx = oMgrModel.bindContext("/approveDayUnlock(...)");
+            oCtx.setParameter("requestId", oItem.requestId);
+            oCtx.setParameter("approved",  bApproved);
+            oCtx.setParameter("hrRemarks", sRemarks || "");
+
+            oCtx.execute()
+                .then(() => {
+                    MessageToast.show(`Missed-day request ${bApproved ? "approved" : "rejected"} successfully.`);
+                    this._loadDayUnlockRequests();
+                })
+                .catch(err => {
+                    MessageBox.error((err && err.message) || "Could not process the request.", { title: "Error" });
+                });
         },
 
         // ── Approve Prev-Week Request ─────────────────────────────────────

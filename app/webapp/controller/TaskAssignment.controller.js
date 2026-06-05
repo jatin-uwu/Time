@@ -18,9 +18,8 @@ sap.ui.define([
             status:             "Open",
             startDate:          "",
             dueDate:            "",
-            attachmentName:     "",
-            attachmentMime:     "",
-            attachmentDataUrl:  "",
+            // Multiple attachments — each: { fileName, mimeType, dataBase64 }
+            attachments:        [],
             // ── Group-task additions (solo flow ignores these) ──
             taskType:           "solo",     // 'solo' | 'group'
             groupAssignees:     []          // employeeIds for group mode
@@ -151,27 +150,46 @@ sap.ui.define([
             this._oTaModel.setProperty("/filteredTasks", out);
         },
 
-        // ── Form: file uploader ─────────────────────────────────────────
+        // ── Form: file uploader (multiple) ──────────────────────────────
         onTaskFileSelected(oEvent) {
             const oFiles = oEvent.getParameter("files");
             if (!oFiles || !oFiles.length) return;
-            const file = oFiles[0];
 
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                this._oTaModel.setProperty("/form/attachmentName",    file.name);
-                this._oTaModel.setProperty("/form/attachmentMime",    file.type || "application/octet-stream");
-                this._oTaModel.setProperty("/form/attachmentDataUrl", e.target.result);
-            };
-            reader.readAsDataURL(file);
+            const MAX = 10 * 1024 * 1024;
+            Array.prototype.forEach.call(oFiles, (file) => {
+                if (file.size > MAX) {
+                    MessageToast.show(`${file.name} exceeds 10 MB — skipped.`);
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const list = (this._oTaModel.getProperty("/form/attachments") || []).slice();
+                    // Skip exact-duplicate filenames already queued.
+                    if (list.some(a => a.fileName === file.name)) {
+                        MessageToast.show(`${file.name} already added — skipped.`);
+                        return;
+                    }
+                    list.push({
+                        fileName:   file.name,
+                        mimeType:   file.type || "application/octet-stream",
+                        dataBase64: String(e.target.result).replace(/^data:[^;]+;base64,/, "")
+                    });
+                    this._oTaModel.setProperty("/form/attachments", list);
+                };
+                reader.readAsDataURL(file);
+            });
+            // Allow re-selecting the same file later.
+            const oFU = this.byId("uplTaskFile"); if (oFU) oFU.clear();
         },
 
-        onRemoveTaskFile() {
-            this._oTaModel.setProperty("/form/attachmentName",    "");
-            this._oTaModel.setProperty("/form/attachmentMime",    "");
-            this._oTaModel.setProperty("/form/attachmentDataUrl", "");
-            const oFU = this.byId("uplTaskFile");
-            if (oFU) oFU.clear();
+        onRemoveTaskFile(oEvent) {
+            const oCtx = oEvent.getSource().getBindingContext("taView");
+            const list = (this._oTaModel.getProperty("/form/attachments") || []).slice();
+            if (oCtx) {
+                const idx = parseInt(oCtx.getPath().split("/").pop(), 10);
+                if (idx >= 0) list.splice(idx, 1);
+            }
+            this._oTaModel.setProperty("/form/attachments", list);
         },
 
         // ── Form: reset / submit ────────────────────────────────────────
@@ -211,14 +229,13 @@ sap.ui.define([
             }
 
             const newTask = this._buildTask(form);
+            const attachments = (form.attachments || []).slice();
 
-            this._persistLocalTask(this._stripBinary(newTask));
+            this._persistLocalTask(newTask);
 
             this._createOnBackend(newTask)
-                .then(() => this._uploadAttachment(newTask, form))
-                .catch(() => {
-                    this._uploadAttachment(newTask, form);
-                });
+                .then(() => this._uploadDocuments(newTask.taskId, attachments))
+                .catch(() => this._uploadDocuments(newTask.taskId, attachments));
 
             this._sendAssignmentEmail(newTask);
 
@@ -262,13 +279,19 @@ sap.ui.define([
             oCtx.setParameter("dueDate",         form.dueDate || null);
             oCtx.setParameter("assignees",       ids.map(id => ({ employeeId: id, note: "" })));
 
+            const attachments = (form.attachments || []).slice();
             oCtx.execute()
                 .then(() => {
                     this._oTaModel.setProperty("/busy", false);
                     const r = (oCtx.getBoundContext() && oCtx.getBoundContext().getObject()) || {};
-                    this.onResetForm();
-                    this._loadTasks();
-                    MessageToast.show(`Group task ${r.taskId || ""} created for ${ids.length} members.`);
+                    const sNewId = r.taskId || "";
+                    const done = () => {
+                        this.onResetForm();
+                        this._loadTasks();
+                        MessageToast.show(`Group task ${sNewId} created for ${ids.length} members.`);
+                    };
+                    if (sNewId) { this._uploadDocuments(sNewId, attachments).then(done); }
+                    else { done(); }
                 })
                 .catch((err) => {
                     this._oTaModel.setProperty("/busy", false);
@@ -276,40 +299,23 @@ sap.ui.define([
                 });
         },
 
-        _stripBinary(task) {
-            const t = Object.assign({}, task);
-            delete t.attachmentDataUrl;
-            return t;
-        },
-
-        _uploadAttachment(task, form) {
-            if (!form || !form.attachmentDataUrl || !form.attachmentName) return;
-
-            const cleaned = String(form.attachmentDataUrl).replace(/^data:[^;]+;base64,/, "");
-            fetch("/manager/uploadTaskAttachment", {
+        // Upload every queued document to the task, one at a time (each via the
+        // multi-document endpoint), so a task can carry several attachments.
+        _uploadDocuments(sTaskId, attachments) {
+            const list = (attachments || []).filter(a => a && a.dataBase64 && a.fileName);
+            if (!sTaskId || !list.length) return Promise.resolve();
+            return list.reduce((p, a) => p.then(() => fetch("/manager/uploadTaskDocument", {
                 method:  "POST",
                 headers: { "Content-Type": "application/json", "Accept": "application/json" },
                 body:    JSON.stringify({
-                    taskId:     task.taskId,
-                    fileName:   form.attachmentName,
-                    mimeType:   form.attachmentMime || "application/octet-stream",
-                    dataBase64: cleaned
+                    taskId:     sTaskId,
+                    fileName:   a.fileName,
+                    mimeType:   a.mimeType || "application/octet-stream",
+                    dataBase64: a.dataBase64
                 })
-            })
-                .then(r => r.ok ? r.json() : Promise.reject(r.status))
-                .then(() => MessageToast.show(`Attachment uploaded for ${task.taskId}.`))
-                .catch(() => {
-                    const oTasksModel = this.getOwnerComponent().getModel("tasks");
-                    const items = (oTasksModel.getProperty("/items") || []).slice();
-                    const idx = items.findIndex(t => t.taskId === task.taskId);
-                    if (idx >= 0) {
-                        items[idx] = Object.assign({}, items[idx], {
-                            attachmentDataUrl: form.attachmentDataUrl
-                        });
-                        oTasksModel.setProperty("/items", items);
-                        this.getOwnerComponent().persistTasks();
-                    }
-                });
+            }).then(r => { if (!r.ok) throw new Error("upload failed"); })), Promise.resolve())
+                .then(() => MessageToast.show(`${list.length} document(s) uploaded for ${sTaskId}.`))
+                .catch(() => MessageToast.show("Some documents could not be uploaded."));
         },
 
         _buildTask(form) {
@@ -323,10 +329,7 @@ sap.ui.define([
                 startDate:              form.startDate || null,
                 dueDate:                form.dueDate || null,
                 assignedOn:             new Date().toISOString(),
-                createdAt:              new Date().toISOString(),
-                attachmentName:         form.attachmentName    || "",
-                attachmentMimeType:     form.attachmentMime    || "",
-                attachmentDataUrl:      form.attachmentDataUrl || ""
+                createdAt:              new Date().toISOString()
             };
         },
 

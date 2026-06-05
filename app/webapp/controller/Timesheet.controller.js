@@ -21,18 +21,47 @@ sap.ui.define([
     "timesheet/app/util/CustomDialog",
     "sap/m/TextArea",
     "sap/m/MessageStrip",
-    "sap/ui/core/ListItem"
+    "sap/ui/core/ListItem",
+    "sap/m/ResponsivePopover"
 ], function (
     Controller, JSONModel,
     MessageBox, MessageToast,
     Input, Select, Text, Button, HBox, VBox, Label, ObjectStatus, Item, HTML,
-    CustomDialog, TextArea, MessageStrip, ListItem
+    CustomDialog, TextArea, MessageStrip, ListItem, ResponsivePopover
 ) {
     "use strict";
 
     const BASE_URL = "/employee";
     const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const DAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+    // ── Duration formatting ───────────────────────────────────────────────────
+    // Entries are stored internally as decimal hours (e.g. 7.5) so all existing
+    // save/total/validation logic is untouched; the UI shows them as HH:MM.
+    const MINUTE_OPTIONS = [0, 15, 30, 45];
+    function pad2(n) { return String(n).padStart(2, "0"); }
+    function decToHHMM(dec) {
+        const d = parseFloat(dec) || 0;
+        if (d <= 0) return "00:00";
+        let h = Math.floor(d + 1e-9);
+        let m = Math.round((d - h) * 60);
+        if (m === 60) { h += 1; m = 0; }
+        return pad2(h) + ":" + pad2(m);
+    }
+    // Split a decimal into { h, m } where m is snapped to the nearest allowed
+    // option (00/15/30/45) so legacy free-typed decimals still preselect cleanly.
+    function decToParts(dec) {
+        const d = parseFloat(dec) || 0;
+        let h = Math.floor(d + 1e-9);
+        let m = Math.round((d - h) * 60);
+        if (m === 60) { h += 1; m = 0; }
+        if (MINUTE_OPTIONS.indexOf(m) === -1) {
+            m = MINUTE_OPTIONS.reduce(function (a, b) {
+                return Math.abs(b - m) < Math.abs(a - m) ? b : a;
+            }, 0);
+        }
+        return { h: h, m: m };
+    }
 
     return Controller.extend("timesheet.app.controller.Timesheet", {
 
@@ -498,7 +527,7 @@ sap.ui.define([
                 tbody += '<td style="padding:6px 8px;text-align:center;font-weight:600;'
                     + 'vertical-align:middle;color:#32363a;" id="'
                     + vid + '--rowTotal_' + rowIdx + '">'
-                    + (rowTotal > 0 ? rowTotal : 0) + '</td>';
+                    + decToHHMM(rowTotal) + '</td>';
                 tbody += '</tr>';
             }.bind(this));
 
@@ -522,12 +551,12 @@ sap.ui.define([
                     + 'border-right:1px solid #e5e5e5;color:'
                     + (dayTotal > 8 ? "#bb0000" : "#32363a") + ';" id="'
                     + vid + '--dayTotal_' + idx + '">'
-                    + (isSun ? '\u2014' : dayTotal) + '</td>';
+                    + (isSun ? '\u2014' : decToHHMM(dayTotal)) + '</td>';
             }.bind(this));
 
             tbody += '<td style="padding:8px 8px;text-align:center;color:#32363a;" id="'
                 + vid + '--weekTotal">'
-                + parseFloat(weekTotal.toFixed(2)) + '</td>';
+                + decToHHMM(weekTotal) + '</td>';
             tbody += '</tr></tbody>';
 
             // ── Assemble complete HTML ────────────────────────────────────
@@ -614,53 +643,7 @@ sap.ui.define([
                     }
                     if (isLocked) editable = false;
 
-                    const existingVal = row.entries[dateStr];
-                    const inp = new Input({
-                        value: existingVal != null ? String(existingVal) : "",
-                        editable: !!editable,
-                        width: "100%",
-                        type: "Number",
-                        placeholder: editable ? "0" : "",
-                        liveChange: function (evt) {
-                            const val = parseFloat(evt.getParameter("newValue")) || 0;
-                            if (val < 0 || val > 24) {
-                                evt.getSource().setValueState("Error");
-                                evt.getSource().setValueStateText("Enter a value between 0 and 24");
-                                return;
-                            }
-                            evt.getSource().setValueState("None");
-                            if (!this._rows[rowIdx].entries) this._rows[rowIdx].entries = {};
-                            this._rows[rowIdx].entries[dateStr] = val;
-
-                            // Validate daily total for this date across all rows
-                            const dailyTotal = this._rows.reduce(function (sum, r) {
-                                return sum + parseFloat(r.entries[dateStr] || 0);
-                            }, 0);
-
-                            if (dailyTotal > 24) {
-                                evt.getSource().setValueState("Error");
-                                evt.getSource().setValueStateText(
-                                    "Daily total for this day is " + dailyTotal +
-                                    " hours. Cannot exceed 24 hours across all tasks."
-                                );
-                                // Revert the value
-                                this._rows[rowIdx].entries[dateStr] = 0;
-                                evt.getSource().setValue("0");
-                                this._recalcTotals(weekDays);
-                                return;
-                            }
-
-                            this._recalcTotals(weekDays);
-
-                            // Update canSubmit
-                            const vm2 = this.getView().getModel("viewModel");
-                            const has = this._rows.some(function (r) {
-                                return r.taskId &&
-                                    Object.values(r.entries).some(function (h) { return h > 0; });
-                            });
-                            vm2.setProperty("/canSubmit", !!has);
-                        }.bind(this)
-                    });
+                    const inp = this._makeDurationCell(rowIdx, dateStr, dayIdx, editable, weekDays);
                     inp.placeAt(span);
                     this._injectedControls.push(inp);
                 }.bind(this));
@@ -685,7 +668,7 @@ sap.ui.define([
 
                 const dc = document.getElementById(vid + "--dayTotal_" + idx);
                 if (dc) {
-                    dc.textContent = dayTotal;
+                    dc.textContent = decToHHMM(dayTotal);
                     dc.style.color = dayTotal > 8 ? "#bb0000" : "#32363a";
                 }
             }.bind(this));
@@ -694,12 +677,12 @@ sap.ui.define([
             this._rows.forEach(function (row, rowIdx) {
                 const rt = this._calcRowTotal(row, wd);
                 const rtEl = document.getElementById(vid + "--rowTotal_" + rowIdx);
-                if (rtEl) rtEl.textContent = rt;
+                if (rtEl) rtEl.textContent = decToHHMM(rt);
             }.bind(this));
 
             // Week total
             const wt = document.getElementById(vid + "--weekTotal");
-            if (wt) wt.textContent = parseFloat(weekTotal.toFixed(2));
+            if (wt) wt.textContent = decToHHMM(weekTotal);
         },
 
         // Compat aliases
@@ -710,6 +693,114 @@ sap.ui.define([
             let total = 0;
             weekDays.forEach(function (d) { total += parseFloat(row.entries[d] || 0); });
             return parseFloat(total.toFixed(2));
+        },
+
+        // ══════════════════════════════════════════════════════════════════════
+        // WORK-DURATION CELL  (HH:MM picker)
+        // Each weekday cell is a read-only field that opens an "Enter Work
+        // Duration" popover with Hours (00–12) and Minutes (00/15/30/45) drop-
+        // downs. Values are kept internally as decimal hours.
+        // ══════════════════════════════════════════════════════════════════════
+        _makeDurationCell: function (rowIdx, dateStr, dayIdx, editable, weekDays) {
+            const cur = this._rows[rowIdx].entries[dateStr];
+            const display = (cur != null && parseFloat(cur) > 0) ? decToHHMM(cur) : "";
+            const inp = new Input({
+                value: display,
+                placeholder: "--:--",
+                editable: !!editable,
+                showValueHelp: !!editable,
+                valueHelpOnly: !!editable,   // whole field opens the picker; no typing
+                width: "100%",
+                textAlign: "Center",
+                valueHelpRequest: function (evt) {
+                    this._openDurationPopover(evt.getSource(), rowIdx, dateStr, weekDays);
+                }.bind(this)
+            });
+            return inp;
+        },
+
+        _openDurationPopover: function (oControl, rowIdx, dateStr, weekDays) {
+            const parts = decToParts(this._rows[rowIdx].entries[dateStr]);
+            const curH = Math.min(parts.h, 12);   // selector caps at 12h
+            const curM = parts.m;
+
+            const hourSel = new Select({ width: "5.5rem", autoAdjustWidth: false });
+            for (let h = 0; h <= 12; h++) {
+                hourSel.addItem(new Item({ key: String(h), text: pad2(h) }));
+            }
+            hourSel.setSelectedKey(String(curH));
+
+            const minSel = new Select({ width: "5.5rem", autoAdjustWidth: false });
+            MINUTE_OPTIONS.forEach(function (m) {
+                minSel.addItem(new Item({ key: String(m), text: pad2(m) }));
+            });
+            minSel.setSelectedKey(String(curM));
+
+            const hoursCol = new VBox({ items: [new Label({ text: "Hours" }), hourSel] });
+            const minsCol = new VBox({ items: [new Label({ text: "Minutes" }), minSel] });
+            const colon = new Text({ text: ":" });
+            colon.addStyleClass("sapUiSmallMarginBegin");
+            colon.addStyleClass("sapUiSmallMarginEnd");
+            const pickerRow = new HBox({
+                alignItems: "End", justifyContent: "Center",
+                items: [hoursCol, colon, minsCol]
+            });
+            const hint = new Text({ text: "Select how many hours you worked" });
+            hint.addStyleClass("sapUiTinyMarginTop");
+            const body = new VBox({ items: [pickerRow, hint] });
+            body.addStyleClass("sapUiContentPadding");
+
+            const okBtn = new Button({
+                text: "OK", type: "Emphasized",
+                press: function () {
+                    const h = parseInt(hourSel.getSelectedKey(), 10) || 0;
+                    const m = parseInt(minSel.getSelectedKey(), 10) || 0;
+                    if (this._applyDuration(rowIdx, dateStr, h + m / 60, weekDays, oControl)) {
+                        pop.close();
+                    }
+                }.bind(this)
+            });
+            const cancelBtn = new Button({ text: "Cancel", press: function () { pop.close(); } });
+
+            const pop = new ResponsivePopover({
+                title: "Enter Work Duration",
+                placement: "Auto",
+                contentWidth: "18rem",
+                content: [body],
+                beginButton: cancelBtn,
+                endButton: okBtn,
+                afterClose: function () { pop.destroy(); }
+            });
+            this.getView().addDependent(pop);
+            pop.openBy(oControl);
+        },
+
+        // Validate + store a decimal-hours value for one cell, update its display
+        // and the totals. Returns false (keeping the popover open) if rejected.
+        _applyDuration: function (rowIdx, dateStr, dec, weekDays, oControl) {
+            dec = parseFloat(dec) || 0;
+            if (dec < 0 || dec > 24) {
+                MessageToast.show("Enter a value between 0 and 24 hours.");
+                return false;
+            }
+            const others = this._rows.reduce(function (sum, r, i) {
+                return sum + (i === rowIdx ? 0 : parseFloat(r.entries[dateStr] || 0));
+            }, 0);
+            if (others + dec > 24) {
+                MessageToast.show("Daily total cannot exceed 24 hours across all tasks.");
+                return false;
+            }
+            if (!this._rows[rowIdx].entries) this._rows[rowIdx].entries = {};
+            this._rows[rowIdx].entries[dateStr] = dec;
+            if (oControl && oControl.setValue) oControl.setValue(dec > 0 ? decToHHMM(dec) : "");
+            this._recalcTotals(weekDays);
+            const vm2 = this.getView().getModel("viewModel");
+            const has = this._rows.some(function (r) {
+                return r.taskId &&
+                    Object.values(r.entries).some(function (h) { return h > 0; });
+            });
+            vm2.setProperty("/canSubmit", !!has);
+            return true;
         },
 
         // ══════════════════════════════════════════════════════════════════════
@@ -829,50 +920,7 @@ sap.ui.define([
                     if (ur && ur.status === "Approved") editable = true;
                 }
 
-                const inp = new Input({
-                    value: "",
-                    editable: !!editable,
-                    width: "100%",
-                    type: "Number",
-                    placeholder: editable ? "0" : "",
-                    liveChange: function (evt) {
-                        const val = parseFloat(evt.getParameter("newValue")) || 0;
-                        if (val < 0 || val > 24) {
-                            evt.getSource().setValueState("Error");
-                            evt.getSource().setValueStateText("Enter a value between 0 and 24");
-                            return;
-                        }
-                        evt.getSource().setValueState("None");
-                        if (!this._rows[rowIdx].entries) this._rows[rowIdx].entries = {};
-                        this._rows[rowIdx].entries[dateStr] = val;
-
-                        // Validate daily total for this date across all rows
-                        const dailyTotal = this._rows.reduce(function (sum, r) {
-                            return sum + parseFloat(r.entries[dateStr] || 0);
-                        }, 0);
-
-                        if (dailyTotal > 24) {
-                            evt.getSource().setValueState("Error");
-                            evt.getSource().setValueStateText(
-                                "Daily total for this day is " + dailyTotal +
-                                " hours. Cannot exceed 24 hours across all tasks."
-                            );
-                            // Revert the value
-                            this._rows[rowIdx].entries[dateStr] = 0;
-                            evt.getSource().setValue("0");
-                            this._recalcTotals(weekDays);
-                            return;
-                        }
-
-                        this._recalcTotals(weekDays);
-                        const vm2 = this.getView().getModel("viewModel");
-                        const has = this._rows.some(function (r) {
-                            return r.taskId &&
-                                Object.values(r.entries).some(function (h) { return h > 0; });
-                        });
-                        vm2.setProperty("/canSubmit", !!has);
-                    }.bind(this)
-                });
+                const inp = this._makeDurationCell(rowIdx, dateStr, dayIdx, editable, weekDays);
                 inp.placeAt(span);
                 this._injectedControls.push(inp);
             }.bind(this));
@@ -987,6 +1035,23 @@ sap.ui.define([
         // ══════════════════════════════════════════════════════════════════════
         _openHRUnlockDialog: async function (dateStr) {
             this._hrUnlockTargetDate = dateStr;
+
+            // HR employees cannot self-approve their own missed days — route the
+            // request to their reporting manager instead of picking an HR approver.
+            // The manager approves it on the "Timesheet Fill Requests" tab.
+            const oComp = this.getOwnerComponent();
+            let user = oComp._oCurrentUser;
+            if (!user && oComp.getCurrentUser) { try { user = await oComp.getCurrentUser(); } catch (e) { /* ignore */ } }
+            const role = (user && user.role ? String(user.role) : "").toLowerCase();
+            if (role === "hr") {
+                const managerId = user && (user.managerId || user.manager_employeeId);
+                if (!managerId) {
+                    MessageBox.warning("No reporting manager is set on your profile. Please contact admin.");
+                    return;
+                }
+                this._submitManagerUnlockRequest(dateStr, managerId);
+                return;
+            }
 
             const hrModel = this.getView().getModel("hrUnlockModel");
             hrModel.setProperty("/targetDate", dateStr);
@@ -1111,6 +1176,35 @@ sap.ui.define([
 
         onCloseHRUnlockDialog: function () {
             if (this._oHrUnlockDialog) this._oHrUnlockDialog.close();
+        },
+
+        // HR employee → route the missed-day request to their reporting manager.
+        _submitManagerUnlockRequest: function (dateStr, managerId) {
+            MessageBox.confirm(
+                `Send a request to your reporting manager to fill your missed timesheet for ${dateStr}?`,
+                {
+                    title:            "Request Manager Approval",
+                    actions:          [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                    emphasizedAction: MessageBox.Action.OK,
+                    onClose: async (sAction) => {
+                        if (sAction !== MessageBox.Action.OK) return;
+                        try {
+                            this.getView().setBusy(true);
+                            await this._callAction(BASE_URL + "/requestDayUnlock", {
+                                targetDate:      dateStr,
+                                hrApproverId:    managerId,
+                                employeeRemarks: ""
+                            });
+                            MessageToast.show("Request sent to your reporting manager.");
+                            await this._loadTimesheetData();
+                        } catch (e) {
+                            MessageBox.error("Failed to send request: " + (e.message || e));
+                        } finally {
+                            this.getView().setBusy(false);
+                        }
+                    }
+                }
+            );
         },
 
         // ══════════════════════════════════════════════════════════════════════

@@ -101,12 +101,32 @@ entity TaskMaster : managed {
                          on assignees.task = $self;
     messages           : Composition of many TaskMessage
                          on messages.task = $self;
+    documents          : Composition of many TaskDocument
+                         on documents.task = $self;
+}
+
+// ── Task documents — multiple attachments per task (assignment files) ──────
+// A manager can attach several documents when creating/assigning a task; every
+// assignee (and the reviewer/manager) can list and download them. Stored inline
+// like EmployeeDocument; served as base64 by a non-destructive download action.
+entity TaskDocument : managed {
+    key documentId : String(60);               // "<taskId>-DOC-<ts>-<rand>"
+    task           : Association to TaskMaster;
+    fileName       : String(255);
+    mimeType       : String(100);
+    fileSize       : Integer;                   // bytes
+    content        : LargeBinary;
+    uploadedBy     : Association to EmployeeMaster;
 }
 
 // ── Group task: one row per assignee, each with their own status ──────────
 // Solo tasks never create rows here; they keep using TaskMaster.assignedTo.
 entity TaskAssignee : managed {
-    key rowId    : String(40);                 // "<taskId>-AS-<employeeId>"
+    // NOTE: must NOT be named "rowId" — ROWID is a reserved keyword in SAP HANA,
+    // and the runtime emits unquoted identifiers, so an INSERT referencing a
+    // column called rowId fails with "SQL syntax error" on HANA (group-task
+    // assignment). Renamed to a non-reserved identifier.
+    key assignmentId : String(40);             // "<taskId>-AS-<employeeId>"
     task         : Association to TaskMaster;
     assignee     : Association to EmployeeMaster;
     status       : String(15) default 'pending';   // pending | in_progress | ended
@@ -296,7 +316,9 @@ entity Notification : managed {
     notifiedAt         : Timestamp;
     // Running counter for coalesced notifications (e.g. group-chat: "N new
     // messages"). Null for all existing/non-aggregated notifications.
-    count              : Integer;
+    // NOTE: avoid the name "count" — COUNT is reserved in SAP HANA and the
+    // unquoted runtime INSERT/UPDATE would fail there.
+    msgCount           : Integer;
 }
 // ── Task Review (Reviewer's decision + remarks + attachment) ─────────────
 // Created when a reviewer takes a decision on a task that is "In Review":

@@ -33,7 +33,7 @@ sap.ui.define([
     return Controller.extend("timesheet.app.controller.TaskDetail", {
 
         onInit() {
-            this._oTdModel = new JSONModel({ taskId: "", task: {}, updates: [], form: emptyForm(), canPost: true });
+            this._oTdModel = new JSONModel({ taskId: "", task: {}, updates: [], documents: [], form: emptyForm(), canPost: true });
             this.getView().setModel(this._oTdModel, "tdView");
             this.getOwnerComponent().getRouter()
                 .getRoute("task-detail").attachPatternMatched(this._onRouteMatched, this);
@@ -43,8 +43,51 @@ sap.ui.define([
             const sTaskId = oEvent.getParameter("arguments").taskId;
             this._oTdModel.setProperty("/taskId", sTaskId);
             this._oTdModel.setProperty("/form", emptyForm());
+            this._oTdModel.setProperty("/documents", []);
             const oFU = this.byId("uplFile"); if (oFU) oFU.clear();
             this._loadTask(sTaskId).then(() => { this._refreshCanPost(); this._loadUpdates(sTaskId); });
+            this._loadTaskDocuments(sTaskId);
+        },
+
+        // Load the list of manager-attached documents for this task (metadata
+        // only). Each is downloaded on demand via onDownloadDocument.
+        _loadTaskDocuments(sTaskId) {
+            fetch("/employee/getTaskDocuments", {
+                method:      "POST",
+                credentials: "include",
+                headers:     { "Content-Type": "application/json", "Accept": "application/json" },
+                body:        JSON.stringify({ taskId: sTaskId })
+            })
+                .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                .then(data => {
+                    let list = [];
+                    try { list = JSON.parse((data && (data.value || data)) || "[]"); } catch (e) { list = []; }
+                    this._oTdModel.setProperty("/documents", Array.isArray(list) ? list : []);
+                })
+                .catch(() => this._oTdModel.setProperty("/documents", []));
+        },
+
+        onDownloadDocument(oEvent) {
+            const oCtx = oEvent.getSource().getBindingContext("tdView");
+            if (!oCtx) return;
+            const doc = oCtx.getObject();
+            if (!doc || !doc.documentId) return;
+            fetch("/employee/getTaskDocument", {
+                method:      "POST",
+                credentials: "include",
+                headers:     { "Content-Type": "application/json", "Accept": "application/json" },
+                body:        JSON.stringify({ documentId: doc.documentId })
+            })
+                .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                .then(data => {
+                    const v = (data && (data.value || data)) || {};
+                    if (!v.dataBase64) { MessageToast.show("Document is not available."); return; }
+                    const a = document.createElement("a");
+                    a.href = "data:" + (v.mimeType || "application/octet-stream") + ";base64," + v.dataBase64;
+                    a.download = v.fileName || doc.fileName || "document";
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                })
+                .catch(() => MessageToast.show("Could not download the document."));
         },
 
         _loadTask(sTaskId) {
@@ -99,7 +142,12 @@ sap.ui.define([
             oComp._bAllowTaskPost = false;
 
             const bEligible = (sCurrentEmpId && sAssignee && sCurrentEmpId === sAssignee) || (sRole !== "manager");
-            this._oTdModel.setProperty("/canPost", bFromDescription && !!bEligible);
+
+            // Completed tasks are closed — no further updates may be posted.
+            const sStatus = this._oTdModel.getProperty("/task/status");
+            const bNotCompleted = sStatus !== "Completed";
+
+            this._oTdModel.setProperty("/canPost", bFromDescription && !!bEligible && bNotCompleted);
         },
 
         _loadUpdates(sTaskId) {
@@ -153,54 +201,54 @@ sap.ui.define([
         },
 
         onPostUpdate() {
+            // Completed tasks are closed to further updates.
+            if ((this._oTdModel.getProperty("/task/status")) === "Completed") {
+                MessageToast.show("This task is Completed — updates are no longer allowed.");
+                return;
+            }
             const form = this._oTdModel.getProperty("/form");
             if (!form.notes || !form.notes.trim()) { MessageToast.show("Please describe today's progress before posting."); return; }
             if (!form.updateDate) { MessageToast.show("Please select an update date."); return; }
 
             const sTaskId = this._oTdModel.getProperty("/taskId");
-            const sUserId = this.getOwnerComponent().getCurrentEmployeeId &&
-                            this.getOwnerComponent().getCurrentEmployeeId();
-            const update = {
-                updateId: this._nextUpdateId(sTaskId),
-                task_taskId: sTaskId,
+
+            // Persist to the backend (with the attachment binary) so the update —
+            // and its attachment — are downloadable by anyone with task access.
+            const payload = {
+                taskId:     sTaskId,
                 updateDate: form.updateDate,
-                notes: form.notes.trim(),
-                attachmentName: form.attachmentName || "",
-                attachmentMimeType: form.attachmentMime || "",
-                attachmentDataUrl: form.attachmentDataUrl || "",
-                updatedBy_employeeId: sUserId,
-                createdAt: new Date().toISOString()
+                notes:      form.notes.trim(),
+                fileName:   form.attachmentName || "",
+                mimeType:   form.attachmentMime || "",
+                dataBase64: String(form.attachmentDataUrl || "").replace(/^data:[^;]+;base64,/, "")
             };
 
-            const oUpdatesModel = this.getOwnerComponent().getModel("taskUpdates");
-            const byTaskId = Object.assign({}, oUpdatesModel.getProperty("/byTaskId") || {});
-            byTaskId[sTaskId] = (byTaskId[sTaskId] || []).slice();
-            byTaskId[sTaskId].push(update);
-            oUpdatesModel.setProperty("/byTaskId", byTaskId);
-            this.getOwnerComponent().persistTaskUpdates();
-
-            this._writeBackend(update).catch(() => { });
-
-            this.onClearForm();
-            this._loadUpdates(sTaskId);
-            MessageToast.show("Update posted.");
+            this._postUpdateBackend(payload)
+                .then(() => {
+                    this.onClearForm();
+                    this._loadUpdates(sTaskId);
+                    MessageToast.show("Update posted.");
+                })
+                .catch((err) => {
+                    MessageToast.show((err && err.message) || "Could not post the update.");
+                });
         },
 
-        _writeBackend(update) {
-            const oModel = this.getOwnerComponent().getModel();
-            if (!oModel) return Promise.resolve();
-            try {
-                oModel.bindList("/TaskUpdates").create({
-                    updateId: update.updateId,
-                    task_taskId: update.task_taskId,
-                    updateDate: update.updateDate,
-                    notes: update.notes,
-                    attachmentName: update.attachmentName,
-                    attachmentMimeType: update.attachmentMimeType,
-                    updatedBy_employeeId: update.updatedBy_employeeId
-                });
-                return oModel.submitBatch ? oModel.submitBatch(oModel.getUpdateGroupId()) : Promise.resolve();
-            } catch (e) { return Promise.reject(e); }
+        _postUpdateBackend(payload) {
+            return fetch("/employee/postTaskUpdate", {
+                method:      "POST",
+                credentials: "include",
+                headers:     { "Content-Type": "application/json", "Accept": "application/json" },
+                body:        JSON.stringify(payload)
+            }).then(async (r) => {
+                if (!r.ok) {
+                    const txt = await r.text();
+                    let msg = txt;
+                    try { msg = JSON.parse(txt).error?.message || txt; } catch (e) { /**/ }
+                    throw new Error(msg || ("Request failed: " + r.status));
+                }
+                return r.json().catch(() => ({}));
+            });
         },
 
         _nextUpdateId(sTaskId) {
@@ -276,18 +324,49 @@ sap.ui.define([
             const oCtx = oEvent.getSource().getBindingContext("tdView");
             if (!oCtx) return;
             const update = oCtx.getObject();
-            if (!update.attachmentDataUrl) { MessageToast.show("Attachment is not available offline."); return; }
-            const a = document.createElement("a");
-            a.href = update.attachmentDataUrl;
-            a.download = update.attachmentName || "attachment";
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+
+            const triggerDownload = (dataUrl, name) => {
+                const a = document.createElement("a");
+                a.href = dataUrl;
+                a.download = name || "attachment";
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            };
+
+            // Prefer the backend (works across users/sessions); fall back to a
+            // locally-held data URL if the update was only just posted offline.
+            if (update.updateId) {
+                fetch("/employee/getTaskUpdateAttachment", {
+                    method:      "POST",
+                    credentials: "include",
+                    headers:     { "Content-Type": "application/json", "Accept": "application/json" },
+                    body:        JSON.stringify({ updateId: update.updateId })
+                })
+                    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                    .then(data => {
+                        const v = (data && (data.value || data)) || {};
+                        if (!v.dataBase64) throw new Error("no content");
+                        triggerDownload("data:" + (v.mimeType || "application/octet-stream") +
+                            ";base64," + v.dataBase64, v.fileName || update.attachmentName);
+                    })
+                    .catch(() => {
+                        if (update.attachmentDataUrl) triggerDownload(update.attachmentDataUrl, update.attachmentName);
+                        else MessageToast.show("Attachment is not available for download.");
+                    });
+            } else if (update.attachmentDataUrl) {
+                triggerDownload(update.attachmentDataUrl, update.attachmentName);
+            } else {
+                MessageToast.show("Attachment is not available for download.");
+            }
         },
 
         formatPriorityState(sValue) { return PRIORITY_STATE[sValue] || "None"; },
         formatStatusState(sValue)   { return STATUS_STATE[sValue]   || "None"; },
 
         onNavBack() {
-            this.getOwnerComponent().getRouter().navTo("task-description");
+            // Return to whichever screen opened this task detail (Task Description,
+            // Task Status, or Team Task Status) — defaulting to Task Description.
+            const sSource = this.getOwnerComponent()._taskDetailSource || "task-description";
+            this.getOwnerComponent().getRouter().navTo(sSource);
         }
     });
 });

@@ -123,25 +123,27 @@
                     </VBox>
 
                     <VBox class="sapUiSmallMargin">
-                        <Label text="Attachment (optional)" />
+                        <Label text="Attachments (optional) — you can add multiple files" />
                         <u:FileUploader id="uplTaskFile"
                                         name="taskAttachment"
-                                        placeholder="Click 'Browse' to attach a reference document or image"
+                                        multiple="true"
+                                        placeholder="Click 'Browse' to attach reference documents or images"
                                         buttonText="Browse..."
                                         fileType="png,jpg,jpeg,gif,pdf,doc,docx,xls,xlsx,txt"
                                         change=".onTaskFileSelected"
                                         width="100%" />
-                        <HBox alignItems="Center" class="sapUiTinyMarginTop"
-                              visible="{= !!${taView>/form/attachmentName} }">
-                            <core:Icon src="sap-icon://attachment" size="0.9rem" color="#3b82f6" />
-                            <Text text="{taView>/form/attachmentName}"
-                                  class="tsAttachmentName sapUiTinyMarginBegin" />
-                            <Button icon="sap-icon://decline"
-                                    type="Transparent"
-                                    tooltip="Remove attachment"
-                                    press=".onRemoveTaskFile"
-                                    class="sapUiTinyMarginBegin" />
-                        </HBox>
+                        <VBox class="sapUiTinyMarginTop" items="{taView>/form/attachments}">
+                            <HBox alignItems="Center">
+                                <core:Icon src="sap-icon://attachment" size="0.9rem" color="#3b82f6" />
+                                <Text text="{taView>fileName}"
+                                      class="tsAttachmentName sapUiTinyMarginBegin" />
+                                <Button icon="sap-icon://decline"
+                                        type="Transparent"
+                                        tooltip="Remove attachment"
+                                        press=".onRemoveTaskFile"
+                                        class="sapUiTinyMarginBegin" />
+                            </HBox>
+                        </VBox>
                     </VBox>
 
                     <HBox justifyContent="End" class="sapUiSmallMargin">

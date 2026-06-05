@@ -93,6 +93,20 @@
                     </HBox>
                 </Panel>
 
+                <!-- ── Reference Documents (manager-attached) ───────────────── -->
+                <Panel headerText="Reference Documents" class="tsTaskUpdatesCard sapUiSmallMarginTop"
+                       expandable="false"
+                       visible="{= ${gtdView>/documents}.length > 0 }">
+                    <VBox class="sapUiSmallMargin" items="{gtdView>/documents}">
+                        <HBox alignItems="Center" class="sapUiTinyMarginTop">
+                            <core:Icon src="sap-icon://attachment" size="0.95rem" color="#3b82f6" />
+                            <Link text="{gtdView>fileName}"
+                                  press=".onDownloadDocument"
+                                  class="sapUiTinyMarginBegin" />
+                        </HBox>
+                    </VBox>
+                </Panel>
+
                 <!-- ── Task Updates (newest first) ────────────────────────── -->
                 <Panel headerText="Task Updates" class="tsTaskUpdatesCard sapUiSmallMarginTop" expandable="false">
 

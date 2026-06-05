@@ -14,6 +14,30 @@ sap.ui.define([
     CustomDialog, Button, Input, Label, VBox) => {
     "use strict";
 
+    // Plain fetch caller for /hr actions (CSRF + JSON, NO $batch). A document's
+    // base64 can be several MB; fetching it through an OData $batch can fail
+    // ("batch failed") in deployment, so we hit the action endpoint directly.
+    async function callHr(action, params) {
+        let token = null;
+        try {
+            const h = await fetch("/hr/", { headers: { "X-CSRF-Token": "Fetch" }, credentials: "include" });
+            token = h.headers.get("x-csrf-token");
+        } catch (e) { /* ignore */ }
+        const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+        if (token) headers["X-CSRF-Token"] = token;
+        const resp = await fetch("/hr/" + action, {
+            method: "POST", headers, body: JSON.stringify(params || {}), credentials: "include"
+        });
+        if (!resp.ok) {
+            let detail = resp.statusText;
+            try { const j = await resp.json(); detail = (j.error && j.error.message) || detail; }
+            catch (e) { try { detail = await resp.text(); } catch (e2) { /* */ } }
+            throw new Error(detail);
+        }
+        const j = await resp.json().catch(() => ({}));
+        return (j && j.value !== undefined) ? j.value : j;
+    }
+
     function initialsOf(sName) {
         if (!sName) return "?";
         const p = sName.trim().split(/\s+/);
@@ -201,11 +225,7 @@ sap.ui.define([
             const docId = aData && aData.length ? aData[0].getValue() : null;
             if (!docId) return;
 
-            const oModel = this.getOwnerComponent().getModel("hr");
-            const ctx = oModel.bindContext("/getEmployeeDocument(...)");
-            ctx.setParameter("documentId", docId);
-            ctx.execute().then(() => {
-                const r = ctx.getBoundContext().getObject();
+            callHr("getEmployeeDocument", { documentId: docId }).then((r) => {
                 if (!r || !r.dataBase64) { MessageToast.show("Document is empty."); return; }
                 const bytes = Uint8Array.from(atob(r.dataBase64), c => c.charCodeAt(0));
                 const blob  = new Blob([bytes], { type: r.mimeType || "application/octet-stream" });

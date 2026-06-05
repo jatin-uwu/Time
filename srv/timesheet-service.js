@@ -14,6 +14,7 @@ const TASK_ASSIGNEE = 'ccentrik.employee.timesheet.schema.timesheet.TaskAssignee
 const TASK_MESSAGE = 'ccentrik.employee.timesheet.schema.timesheet.TaskMessage';
 const TASK_ATTACHMENT = 'ccentrik.employee.timesheet.schema.timesheet.TaskAttachment';
 const TASK_UPDATE = 'ccentrik.employee.timesheet.schema.timesheet.TaskUpdate';
+const TASK_DOCUMENT = 'ccentrik.employee.timesheet.schema.timesheet.TaskDocument';
 
 
 const PRIORITY_PREFIX = {
@@ -66,10 +67,10 @@ async function createNotification(employeeId, type, title, message, referenceId)
 // Resolve the caller's EmployeeMaster row (by JWT email). Returns null if none.
 async function resolveCaller(req) {
     const user = req.user || {};
-    const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+    const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
     const uid = user.id || '';
     let emp = null;
-    if (email) emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email').where({ email });
+    if (email) emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email').where('lower(email) =', email);
     return { email, uid, emp, employeeId: emp && emp.employeeId };
 }
 
@@ -105,9 +106,9 @@ async function notifyGroupChat(taskId, taskName, senderId, recipientIds) {
                 type: 'GROUP_CHAT_MESSAGE', isRead: false
             });
             if (existing) {
-                const c = (existing.count || 1) + 1;
+                const c = (existing.msgCount || 1) + 1;
                 await UPDATE(NOTIFICATION).set({
-                    count: c,
+                    msgCount: c,
                     message: `${c} new messages in group task chat “${taskName}”`,
                     notifiedAt: new Date()
                 }).where({ notificationId: existing.notificationId });
@@ -121,7 +122,7 @@ async function notifyGroupChat(taskId, taskName, senderId, recipientIds) {
                     isRead: false,
                     referenceId: taskId,
                     notifiedAt: new Date(),
-                    count: 1
+                    msgCount: 1
                 });
             }
         } catch (e) { cds.log('notif').warn('chat notify failed:', e.message || e); }
@@ -176,8 +177,74 @@ async function myGroupTasks(employeeId) {
     }));
 }
 
+// Can the caller see a task's documents/updates? True for the assignee, the
+// reviewer, any group member, or a manager. Used to gate task-document and
+// update-attachment downloads (works for both solo and group tasks).
+async function canAccessTask(req, taskId) {
+    const caller = await resolveCaller(req);
+    if (!caller.employeeId || !taskId) return { ok: false, caller, task: null };
+    const task = await SELECT.one.from(TASK)
+        .columns('taskId', 'taskType', 'status', 'assignedTo_employeeId', 'reviewer_employeeId')
+        .where({ taskId });
+    if (!task) return { ok: false, caller, task: null };
+    const isManager = !!(req.user && req.user.is && req.user.is('Manager'));
+    if (isManager) return { ok: true, caller, task };
+    if (task.assignedTo_employeeId === caller.employeeId) return { ok: true, caller, task };
+    if (task.reviewer_employeeId === caller.employeeId) return { ok: true, caller, task };
+    if (task.taskType === 'group') {
+        const ctx = await loadGroupContext(taskId, caller);
+        if (ctx.isMember) return { ok: true, caller, task };
+    }
+    return { ok: false, caller, task };
+}
+
+// Maps a notification type to the sidebar menu route whose badge it should
+// drive. DAY_UNLOCK_REQUEST is role-dependent (HR vs the reporting manager).
+// Returns null for types with no dedicated badge — including group-task types,
+// which already have their own "Group Tasks" counter.
+function routeForNotif(type, isHR) {
+    switch (type) {
+        case 'GROUP_CHAT_MESSAGE':
+        case 'GROUP_TASK_ASSIGNED':
+        case 'GROUP_TASK_UPDATE':
+        case 'GROUP_TASK_COMPLETED':   return 'group-tasks';
+        case 'TASK_ASSIGNED':
+        case 'TASK_REVIEW_REQUESTED':  return 'task-description';
+        case 'TIMESHEET_SUBMITTED':
+        case 'PREVWEEK_REQUEST':
+        case 'LEAVE_REQUEST':          return 'manager';
+        case 'DAY_UNLOCK_REQUEST':     return isHR ? 'hr-approvals' : 'manager';
+        case 'TIMESHEET_APPROVED':
+        case 'TIMESHEET_REJECTED':     return 'history';
+        case 'PREVWEEK_APPROVED':
+        case 'PREVWEEK_REJECTED':
+        case 'DAY_UNLOCK_APPROVED':
+        case 'DAY_UNLOCK_REJECTED':    return 'timesheet';
+        case 'LEAVE_APPROVED':
+        case 'LEAVE_REJECTED':         return 'leave-history';
+        case 'PERFORMANCE_RATED':      return 'rating-history';
+        default:                       return null;
+    }
+}
+
+// Block any request from a deactivated account. getCurrentUser is allowed
+// through so the UI can resolve identity, detect inactivity, and show the
+// "account is inactive" message; every other operation is denied server-side.
+async function blockIfInactive(req) {
+    if (req.event === 'getCurrentUser') return;
+    const user = req.user || {};
+    const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+    if (!email) return;
+    const emp = await SELECT.one.from(EMPLOYEE).columns('isActive').where('lower(email) =', email);
+    if (emp && emp.isActive === false) {
+        return req.reject(403, 'Your account is inactive. Please contact the administrator.');
+    }
+}
+
 class EmployeeService extends cds.ApplicationService {
     async init() {
+
+        this.before('*', blockIfInactive);
 
         this.on('getUserRole', (req) => {
             const user = req.user;
@@ -189,7 +256,7 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('getCurrentUser', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
             const role = user.is && user.is('HR') ? 'hr'
                 : user.is && user.is('Manager') ? 'manager'
                     : user.is && user.is('Employee') ? 'employee'
@@ -197,7 +264,7 @@ class EmployeeService extends cds.ApplicationService {
 
             let emp = null;
             if (email) {
-                emp = await SELECT.one.from(EMPLOYEE).where({ email: email });
+                emp = await SELECT.one.from(EMPLOYEE).where('lower(email) =', email);
             }
 
             if (!emp) {
@@ -395,7 +462,7 @@ class EmployeeService extends cds.ApplicationService {
             if (!ctx.mine) return req.error(403, 'You are not assigned to this task.');
 
             if (ctx.mine.status !== 'ended') {
-                await UPDATE(TASK_ASSIGNEE).set({ status: 'ended', endedAt: new Date() }).where({ rowId: ctx.mine.rowId });
+                await UPDATE(TASK_ASSIGNEE).set({ status: 'ended', endedAt: new Date() }).where({ assignmentId: ctx.mine.assignmentId });
             }
 
             const rows = await SELECT.from(TASK_ASSIGNEE).where({ task_taskId: taskId });
@@ -507,7 +574,7 @@ class EmployeeService extends cds.ApplicationService {
             // A member who's actively chatting is "in progress" (not pending).
             if (ctx.mine && ctx.mine.status === 'pending') {
                 await UPDATE(TASK_ASSIGNEE).set({ status: 'in_progress' })
-                    .where({ rowId: ctx.mine.rowId, status: 'pending' });
+                    .where({ assignmentId: ctx.mine.assignmentId, status: 'pending' });
             }
 
             // Coalesced chat notifications to everyone else.
@@ -626,7 +693,7 @@ class EmployeeService extends cds.ApplicationService {
             // Posting an update means the member is actively working → in_progress.
             if (ctx.mine.status === 'pending') {
                 await UPDATE(TASK_ASSIGNEE).set({ status: 'in_progress' })
-                    .where({ rowId: ctx.mine.rowId, status: 'pending' });
+                    .where({ assignmentId: ctx.mine.assignmentId, status: 'pending' });
             }
 
             // Notify the other members + creator that a new update was posted.
@@ -643,15 +710,18 @@ class EmployeeService extends cds.ApplicationService {
             return { updateId };
         });
 
-        // Download a group-task update attachment (membership-checked) as base64.
+        // Download a task-update attachment (access-checked) as base64. Works for
+        // both solo and group tasks — the old version only allowed group members,
+        // so solo-task update attachments 403'd and appeared "not downloadable".
         this.on('getTaskUpdateAttachment', async (req) => {
             const { updateId } = req.data;
             if (!updateId) return req.error(400, 'updateId is required.');
-            const upd = await SELECT.one.from(TASK_UPDATE).where({ updateId });
+            const upd = await SELECT.one.from(TASK_UPDATE)
+                .columns('updateId', 'task_taskId', 'attachmentName', 'attachmentMimeType', 'attachment')
+                .where({ updateId });
             if (!upd) return req.error(404, 'Update not found.');
-            const caller = await resolveCaller(req);
-            const ctx = await loadGroupContext(upd.task_taskId, caller);
-            if (!ctx.isMember) return req.error(403, 'You do not have access to this attachment.');
+            const access = await canAccessTask(req, upd.task_taskId);
+            if (!access.ok) return req.error(403, 'You do not have access to this attachment.');
             const dataBase64 = await binaryToBase64(upd.attachment);
             if (!dataBase64) return req.error(404, 'Attachment has no content.');
             return {
@@ -659,6 +729,80 @@ class EmployeeService extends cds.ApplicationService {
                 mimeType: upd.attachmentMimeType || 'application/octet-stream',
                 dataBase64
             };
+        });
+
+        // ── Multi-document task attachments ───────────────────────────────────
+        // List metadata (no binary) for every document attached to a task.
+        this.on('getTaskDocuments', async (req) => {
+            const { taskId } = req.data;
+            if (!taskId) return req.error(400, 'taskId is required.');
+            const access = await canAccessTask(req, taskId);
+            if (!access.ok) return req.error(403, 'You do not have access to this task.');
+            const rows = await SELECT.from(TASK_DOCUMENT)
+                .columns('documentId', 'fileName', 'mimeType', 'fileSize', 'createdAt')
+                .where({ task_taskId: taskId })
+                .orderBy('createdAt asc');
+            return JSON.stringify((rows || []).map(r => ({
+                documentId: r.documentId,
+                fileName:   r.fileName || 'document',
+                mimeType:   r.mimeType || 'application/octet-stream',
+                fileSize:   r.fileSize || 0
+            })));
+        });
+
+        // Non-destructive download of one task document as base64.
+        this.on('getTaskDocument', async (req) => {
+            const { documentId } = req.data;
+            if (!documentId) return req.error(400, 'documentId is required.');
+            const doc = await SELECT.one.from(TASK_DOCUMENT)
+                .columns('documentId', 'task_taskId', 'fileName', 'mimeType', 'content')
+                .where({ documentId });
+            if (!doc) return req.error(404, 'Document not found.');
+            const access = await canAccessTask(req, doc.task_taskId);
+            if (!access.ok) return req.error(403, 'You do not have access to this document.');
+            const dataBase64 = await binaryToBase64(doc.content);
+            if (!dataBase64) return req.error(404, 'Document has no content.');
+            return {
+                fileName: doc.fileName || 'document',
+                mimeType: doc.mimeType || 'application/octet-stream',
+                dataBase64
+            };
+        });
+
+        // Post a progress update on a SOLO task, persisting the optional file
+        // binary so it can be downloaded later by anyone with task access.
+        this.on('postTaskUpdate', async (req) => {
+            const { taskId } = req.data;
+            const sNotes = (req.data.notes || '').trim();
+            if (!taskId) return req.error(400, 'taskId is required.');
+            if (!sNotes) return req.error(400, 'An update note is required.');
+            const access = await canAccessTask(req, taskId);
+            if (!access.ok) return req.error(403, 'You do not have access to this task.');
+            if (access.task && access.task.status === 'Completed') {
+                return req.error(403, 'This task is Completed — updates are no longer allowed.');
+            }
+
+            let buf = null;
+            if (req.data.dataBase64) {
+                try { buf = Buffer.from(String(req.data.dataBase64).replace(/^data:[^;]+;base64,/, ''), 'base64'); }
+                catch (e) { buf = null; }
+                if (buf && buf.length > 10 * 1024 * 1024) {
+                    return req.error(400, 'Attachment exceeds the 10 MB limit.');
+                }
+            }
+
+            const updateId = `${taskId}-UPD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+            await INSERT.into(TASK_UPDATE).entries({
+                updateId,
+                task_taskId: taskId,
+                updateDate: req.data.updateDate || new Date().toISOString().slice(0, 10),
+                notes: sNotes,
+                attachmentName: buf ? (req.data.fileName || 'attachment') : null,
+                attachmentMimeType: buf ? (req.data.mimeType || 'application/octet-stream') : null,
+                attachment: buf || null,
+                updatedBy_employeeId: access.caller.employeeId
+            });
+            return { updateId };
         });
 
         // Unread group-task notifications for the caller → "Group Tasks" badge.
@@ -677,6 +821,48 @@ class EmployeeService extends cds.ApplicationService {
             }
         });
 
+        // ── Sidebar menu badges (unread notifications per menu route) ─────────
+        this.on('getSidebarBadges', async (req) => {
+            const caller = await resolveCaller(req);
+            if (!caller.employeeId) return JSON.stringify({});
+            const isHR = !!(req.user && req.user.is && req.user.is('HR'));
+            let rows = [];
+            try {
+                rows = await SELECT.from(NOTIFICATION).columns('type')
+                    .where({ employee_employeeId: caller.employeeId, isRead: false });
+            } catch (e) { return JSON.stringify({}); }
+            const counts = {};
+            rows.forEach(r => {
+                const route = routeForNotif(r.type, isHR);
+                if (route) counts[route] = (counts[route] || 0) + 1;
+            });
+            return JSON.stringify(counts);
+        });
+
+        // Clear a menu's badge by marking its related unread notifications read.
+        this.on('markRouteNotificationsRead', async (req) => {
+            const route = ((req.data && req.data.route) || '').trim();
+            const caller = await resolveCaller(req);
+            if (!caller.employeeId || !route) return { updated: 0 };
+            const isHR = !!(req.user && req.user.is && req.user.is('HR'));
+            let rows = [];
+            try {
+                rows = await SELECT.from(NOTIFICATION).columns('notificationId', 'type')
+                    .where({ employee_employeeId: caller.employeeId, isRead: false });
+            } catch (e) { return { updated: 0 }; }
+            const ids = rows.filter(r => {
+                if (routeForNotif(r.type, isHR) !== route) return false;
+                // Group chat messages are cleared by opening the specific task's
+                // chat (markChatRead), not by visiting the list — this preserves
+                // each task's "unread chat" indicator.
+                if (route === 'group-tasks' && r.type === 'GROUP_CHAT_MESSAGE') return false;
+                return true;
+            }).map(r => r.notificationId);
+            if (!ids.length) return { updated: 0 };
+            await UPDATE(NOTIFICATION).set({ isRead: true }).where({ notificationId: { in: ids } });
+            return { updated: ids.length };
+        });
+
         // ── Upload Profile Photo ──────────────────────────────────────────────
         // CAP's UPDATE().set() silently skips LargeBinary columns annotated
         // with @Core.MediaType in SQLite. We use raw SQL to bypass this.
@@ -685,13 +871,13 @@ class EmployeeService extends cds.ApplicationService {
             if (!dataBase64) return req.error(400, 'dataBase64 is required.');
 
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
             if (!email) return req.error(401, 'Cannot identify user — no email in token.');
 
             // Resolve employeeId from email
             const emp = await SELECT.one.from(EMPLOYEE)
                 .columns('employeeId')
-                .where({ email: email });
+                .where('lower(email) =', email);
             if (!emp) return req.error(404, 'Employee record not found for this login.');
 
             // Parse "data:image/jpeg;base64,<data>"
@@ -737,13 +923,13 @@ class EmployeeService extends cds.ApplicationService {
         // Also uses raw SQL so the BLOB is read correctly from SQLite.
         this.on('getProfilePhoto', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
             if (!email) return { dataBase64: '', mimeType: '' };
 
             // Resolve employeeId first (safe — no BLOB involved)
             const emp = await SELECT.one.from(EMPLOYEE)
                 .columns('employeeId')
-                .where({ email: email });
+                .where('lower(email) =', email);
             if (!emp) return { dataBase64: '', mimeType: '' };
 
             // Read BLOB via CQN (DB-agnostic — works on SQLite and HANA alike).
@@ -873,9 +1059,9 @@ class EmployeeService extends cds.ApplicationService {
             // before, so no existing flow is broken.)
             {
                 const user = req.user || {};
-                const callerEmail = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+                const callerEmail = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
                 const caller = callerEmail
-                    ? await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email: callerEmail })
+                    ? await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', callerEmail)
                     : null;
                 if (caller && caller.employeeId !== employeeId) {
                     return req.error(403, 'You can only apply for leave for yourself.');
@@ -923,8 +1109,8 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('getRecentNotifications', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!emp) return [];
             const rows = await SELECT.from(NOTIFICATION).where({ employee_employeeId: emp.employeeId }).orderBy({ notifiedAt: 'desc' }).limit(4);
             return (rows || []).map(n => ({
@@ -936,8 +1122,8 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('markAllNotificationsRead', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const empRow = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const empRow = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!empRow) return req.error(404, 'Employee not found.');
 
             // Count unread BEFORE updating (affectedRows not reliable in CDS)
@@ -962,8 +1148,8 @@ class EmployeeService extends cds.ApplicationService {
         // (getRecentNotifications showed them). Implemented here.
         this.on('getNotifications', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!emp) return { itemsJSON: '[]', totalCount: 0, unreadCount: 0 };
 
             const page     = Math.max(1, parseInt(req.data.page, 10) || 1);
@@ -992,8 +1178,8 @@ class EmployeeService extends cds.ApplicationService {
         // ── Mark a single notification as read ─────────────────────────────────
         this.on('markNotificationRead', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             const { notificationId } = req.data;
             if (!emp || !notificationId) return { success: false };
             await UPDATE(NOTIFICATION).set({ isRead: true })
@@ -1004,8 +1190,8 @@ class EmployeeService extends cds.ApplicationService {
         // ── Delete / dismiss a single notification ─────────────────────────────
         this.on('deleteNotification', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             const { notificationId } = req.data;
             if (!emp || !notificationId) return { success: false };
             await DELETE.from(NOTIFICATION)
@@ -1034,8 +1220,8 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('getLeaveOverview', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!emp) return { casual: 0, sick: 0, annual: 0, unpaid: 0, totalDays: 0, takenJSON: JSON.stringify([]) };
             const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
             const balance = await SELECT.one.from(LEAVE_BALANCE).where({ employee_employeeId: emp.employeeId });
@@ -1054,8 +1240,8 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('getWorkAnniversary', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'joiningDate').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'joiningDate').where('lower(email) =', email);
             if (!emp || !emp.joiningDate) return { yearsCompleted: 0, joiningDate: null, message: 'No joining date found.' };
             const joining = new Date(emp.joiningDate);
             const today = new Date();
@@ -1072,8 +1258,8 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('getPerformanceRating', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!emp) return { ratingValue: 0, ratingCategory: 'N/A', reviewMonth: 0, reviewYear: 0, reviewComment: '' };
             const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
             const ratings = await SELECT.from(PERF).where({ employee_employeeId: emp.employeeId }).orderBy('reviewYear desc', 'reviewMonth desc').limit(1);
@@ -1089,9 +1275,9 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('getPerformanceTrend', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
             const year = req.data.year || new Date().getFullYear();
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!emp) return { trendJSON: JSON.stringify(Array(12).fill(null)) };
             const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
             const ratings = await SELECT.from(PERF).where({ employee_employeeId: emp.employeeId, reviewYear: year }).orderBy('reviewMonth asc');
@@ -1102,8 +1288,8 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('getTaskSummary', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!emp) return { total: 0, notStarted: 0, inProgress: 0, inReview: 0, completed: 0 };
 
             // Include tasks assigned to the employee AND tasks where they are the
@@ -1137,8 +1323,8 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('getLeaveBalance', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!emp) return { casualLeave: 0, sickLeave: 0, annualLeave: 0, total: 0 };
             const LEAVE_BALANCE = 'ccentrik.employee.timesheet.schema.timesheet.LeaveBalance';
             const balance = await SELECT.one.from(LEAVE_BALANCE).where({ employee_employeeId: emp.employeeId });
@@ -1151,8 +1337,8 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('getMyTasks', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!emp) return { totalPending: 0, highPriorityCount: 0, mediumPriorityCount: 0, lowPriorityCount: 0 };
 
             // Include tasks assigned to the employee AND tasks where they are the
@@ -1186,9 +1372,9 @@ class EmployeeService extends cds.ApplicationService {
         this.on('markAttendance', async (req) => {
             const { attendanceDate, attendanceDay, attendanceTime } = req.data;
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
             if (!attendanceDate) return req.error(400, 'attendanceDate is required.');
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ email });
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where('lower(email) =', email);
             if (!emp) return req.error(404, 'Employee not found for this login.');
             const existing = await SELECT.one.from(ATTENDANCE).where({ employee_employeeId: emp.employeeId, attendanceDate });
             if (existing) return req.error(409, `Attendance already marked for ${attendanceDate} at ${existing.attendanceTime}.`);
@@ -1205,8 +1391,8 @@ class EmployeeService extends cds.ApplicationService {
 
         this.on('getAttendance', async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!emp) return { attendancePercentage: 0, presentCount: 0, absentCount: 0, monthLabel: new Date().toLocaleString('default', { month: 'long' }) };
             const now = new Date();
             const year = now.getFullYear();
@@ -1229,11 +1415,22 @@ class EmployeeService extends cds.ApplicationService {
         this.on('getTodayAttendance', async (req) => {
             const { attendanceDate } = req.data;
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
-            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
             if (!emp) return { alreadyMarked: false, attendanceTime: null, attendanceDay: null };
             const existing = await SELECT.one.from(ATTENDANCE).where({ employee_employeeId: emp.employeeId, attendanceDate });
             return { alreadyMarked: !!existing, attendanceTime: existing ? existing.attendanceTime : null, attendanceDay: existing ? existing.attendanceDay : null };
+        });
+
+        // Issue 2: no updates may be posted on a Completed task. Guards the
+        // OData create path used by the solo Task Detail "Post an update" form.
+        this.before('CREATE', 'TaskUpdates', async (req) => {
+            const sTaskId = req.data && (req.data.task_taskId || (req.data.task && req.data.task.taskId));
+            if (!sTaskId) return;
+            const task = await SELECT.one.from(TASK).columns('status').where({ taskId: sTaskId });
+            if (task && task.status === 'Completed') {
+                return req.reject(403, 'This task is Completed — updates are no longer allowed.');
+            }
         });
 
         this.on('updateTaskStatus', async (req) => {
@@ -1311,9 +1508,9 @@ class EmployeeService extends cds.ApplicationService {
 
             // Resolve reviewer from logged-in user
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
             const reviewer = email
-                ? await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ email })
+                ? await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where('lower(email) =', email)
                 : null;
             if (!reviewer) return req.error(401, 'Cannot identify reviewer.');
 
@@ -1447,6 +1644,8 @@ class EmployeeService extends cds.ApplicationService {
 class ManagerService extends cds.ApplicationService {
     async init() {
 
+        this.before('*', blockIfInactive);
+
         this.on('approveTimesheet', async (req) => {
             const { timesheetId, remarks } = req.data;
             const header = await SELECT.one.from(HEADER).where({ timesheetId });
@@ -1472,9 +1671,9 @@ class ManagerService extends cds.ApplicationService {
 
             // ── Validate manager is rating their own team member ──
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
             const manager = email
-                ? await SELECT.one.from(EMPLOYEE).where({ email })
+                ? await SELECT.one.from(EMPLOYEE).where('lower(email) =', email)
                 : null;
             if (!manager) return req.error(403, 'Manager record not found.');
 
@@ -1566,6 +1765,41 @@ class ManagerService extends cds.ApplicationService {
             return `Attachment uploaded for task '${taskId}'.`;
         });
 
+        // Attach ONE document to a task. Called once per file, so a manager can
+        // attach multiple documents to the same task. Stored in TaskDocument and
+        // downloadable (non-destructively) by every assignee/reviewer.
+        this.on('uploadTaskDocument', async (req) => {
+            const { taskId, fileName, mimeType, dataBase64 } = req.data;
+            if (!taskId) return req.error(400, 'taskId is required.');
+            if (!fileName) return req.error(400, 'fileName is required.');
+            if (!dataBase64) return req.error(400, 'dataBase64 is required.');
+            const exists = await SELECT.one.from(TASK).columns('taskId').where({ taskId });
+            if (!exists) return req.error(404, `Task '${taskId}' not found.`);
+            let buf;
+            try { buf = Buffer.from(String(dataBase64).replace(/^data:[^;]+;base64,/, ''), 'base64'); }
+            catch (e) { return req.error(400, 'dataBase64 is not valid base64.'); }
+            if (buf.length > 10 * 1024 * 1024) return req.error(400, 'Document exceeds the 10 MB limit.');
+
+            const user = req.user || {};
+            const callerEmail = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+            const uploader = callerEmail
+                ? await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', callerEmail)
+                : null;
+
+            const documentId = `${taskId}-DOC-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+            await INSERT.into(TASK_DOCUMENT).entries({
+                documentId,
+                task_taskId: taskId,
+                fileName,
+                mimeType: mimeType || 'application/octet-stream',
+                fileSize: buf.length,
+                content: buf,
+                uploadedBy_employeeId: uploader ? uploader.employeeId : null
+            });
+            cds.log('attach').info(`Task document '${fileName}' (${buf.length} bytes) stored for task ${taskId}`);
+            return { documentId };
+        });
+
         // ── Create a group task + seed its assignees (manager only) ────────────
         this.on('createGroupTask', async (req) => {
             const d = req.data || {};
@@ -1590,7 +1824,7 @@ class ManagerService extends cds.ApplicationService {
 
             for (const a of uniq) {
                 await INSERT.into(TASK_ASSIGNEE).entries({
-                    rowId: `${taskId}-AS-${a.employeeId}`,
+                    assignmentId: `${taskId}-AS-${a.employeeId}`,
                     task_taskId: taskId,
                     assignee_employeeId: a.employeeId,
                     status: 'pending',
@@ -1645,10 +1879,10 @@ class ManagerService extends cds.ApplicationService {
         this.on('READ', 'Employees', async (req) => {
             // Resolve logged-in manager from email
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
 
             const manager = email
-                ? await SELECT.one.from(EMPLOYEE).where({ email })
+                ? await SELECT.one.from(EMPLOYEE).where('lower(email) =', email)
                 : null;
 
             if (!manager) return req.error(404, 'Manager record not found.');
@@ -1671,9 +1905,9 @@ class ManagerService extends cds.ApplicationService {
         // OData $expand / paging / the projection's status filter intact.
         const _resolveManager = async (req) => {
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
             return email
-                ? await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email })
+                ? await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email)
                 : null;
         };
         const _teamIdsOf = async (managerId) => {
@@ -1727,9 +1961,9 @@ class ManagerService extends cds.ApplicationService {
 
             // 1. Resolve the logged-in manager
             const user = req.user || {};
-            const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+            const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
             const manager = email
-                ? await SELECT.one.from(EMPLOYEE).where({ email })
+                ? await SELECT.one.from(EMPLOYEE).where('lower(email) =', email)
                 : null;
             if (!manager) return req.error(404, 'Manager record not found.');
 
@@ -1860,9 +2094,9 @@ class ManagerService extends cds.ApplicationService {
     async _managesEmployee(req, sEmployeeId) {
         if (!sEmployeeId) return false;
         const user = req.user || {};
-        const email = (user.attr && (user.attr.email || user.attr.mail)) || user.id || '';
+        const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
         if (!email) return false;
-        const manager = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email });
+        const manager = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
         if (!manager) return false;
         const emp = await SELECT.one.from(EMPLOYEE)
             .columns('manager_employeeId').where({ employeeId: sEmployeeId });
@@ -1873,6 +2107,8 @@ class ManagerService extends cds.ApplicationService {
 const DOCUMENT = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeDocument';
 class HRService extends cds.ApplicationService {
     async init() {
+
+        this.before('*', blockIfInactive);
 
         const generateEmployeeId = async () => {
             const rows = await SELECT.from(EMPLOYEE).columns('employeeId');
@@ -1886,12 +2122,17 @@ class HRService extends cds.ApplicationService {
             const d = req.data || {};
             if (!d.employeeName) return req.error(400, 'employeeName is required.');
             if (!d.email) return req.error(400, 'email is required.');
-            const dup = await SELECT.one.from(EMPLOYEE).where({ email: d.email });
-            if (dup) return req.error(409, `An employee with email '${d.email}' already exists.`);
+            // Identity is resolved by matching the IdP-asserted email against this
+            // column on every request, so store a single canonical form (trimmed,
+            // lower-cased). Without this, a mismatched case means login works but
+            // no per-user data (dashboard tiles, anniversary, leave…) ever resolves.
+            const normEmail = String(d.email).trim().toLowerCase();
+            const dup = await SELECT.one.from(EMPLOYEE).where('lower(email) =', normEmail);
+            if (dup) return req.error(409, `An employee with email '${normEmail}' already exists.`);
             const newId = await generateEmployeeId();
             await INSERT.into(EMPLOYEE).entries({
                 employeeId: newId, employeeName: d.employeeName, designation: d.designation || null,
-                email: d.email, address: d.address || null, mobileNumber: d.mobileNumber || null,
+                email: normEmail, address: d.address || null, mobileNumber: d.mobileNumber || null,
                 manager_employeeId: d.managerEmployeeId || null, isActive: true,
                 dateOfBirth: d.dateOfBirth || null, gender: d.gender || null, department: d.department || null,
                 joiningDate: d.joiningDate || null, employmentType: d.employmentType || null,
@@ -1968,9 +2209,11 @@ class HRService extends cds.ApplicationService {
             const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ employeeId: d.employeeId });
             if (!emp) return req.error(404, `Employee '${d.employeeId}' not found.`);
 
-            // Email uniqueness guard (if email is being changed)
+            // Email uniqueness guard (if email is being changed). Normalize to the
+            // same canonical form used for identity resolution on every request.
             if (d.email) {
-                const dup = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ email: d.email });
+                d.email = String(d.email).trim().toLowerCase();
+                const dup = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', d.email);
                 if (dup && dup.employeeId !== d.employeeId) {
                     return req.error(409, `Another employee already uses email '${d.email}'.`);
                 }

@@ -110,6 +110,12 @@ sap.ui.define([
                 showNewsletter: false,
                 // Unread group-task notifications → badge on the Group Tasks menu.
                 groupTasksUnread: 0,
+                // Per-menu unread badges (route → count). Initialised to 0 so
+                // every bound counter exists (0 = hidden).
+                sidebarBadges: {
+                    "group-tasks": 0, "task-description": 0, "manager": 0, "hr-approvals": 0,
+                    "history": 0, "leave-history": 0, "rating-history": 0, "timesheet": 0
+                },
                 // data: URL bound to the toolbar Avatar.src and popover img
                 profilePhotoSrc: "",
                 profilePhotoDataUrl: ""
@@ -181,6 +187,7 @@ sap.ui.define([
                     markResolved();
                     this._refreshNewsletterBadge();
                     this._refreshGroupTasksBadge();
+                    this._refreshSidebarBadges();
                 }).catch(() => markResolved());
             } else {
                 markResolved();
@@ -197,7 +204,7 @@ sap.ui.define([
             // so the menu badge updates immediately — not only on navigation.
             try {
                 sap.ui.getCore().getEventBus().subscribe("groupTasks", "changed",
-                    () => this._refreshGroupTasksBadge(), this);
+                    () => { this._refreshGroupTasksBadge(); this._refreshSidebarBadges(); }, this);
             } catch (e) { /* EventBus optional */ }
 
             // Hide the SplitApp's built-in master toggle button — the sidebar is
@@ -282,6 +289,36 @@ sap.ui.define([
                 const n = (r && typeof r.count === "number") ? r.count : 0;
                 this._oAppModel.setProperty("/groupTasksUnread", n);
             }).catch(() => { /* leave as-is on failure */ });
+        },
+
+        // Menu items that can show an unread-notification badge.
+        _BADGE_ROUTES: [
+            "group-tasks", "task-description", "manager", "hr-approvals",
+            "history", "leave-history", "rating-history", "timesheet"
+        ],
+
+        // Pull per-menu unread counts and update the sidebar badges. Always sets
+        // every known route (defaulting to 0) so each bound counter stays defined.
+        _refreshSidebarBadges() {
+            callAction("getSidebarBadges").then((r) => {
+                let counts = {};
+                try { counts = JSON.parse(r || "{}") || {}; } catch (e) { counts = {}; }
+                const full = {};
+                this._BADGE_ROUTES.forEach((rt) => { full[rt] = counts[rt] || 0; });
+                this._oAppModel.setProperty("/sidebarBadges", full);
+            }).catch(() => { /* leave as-is on failure */ });
+        },
+
+        // When the user opens a page, clear its badge: optimistically zero it,
+        // mark the related notifications read on the backend, then re-sync all.
+        _clearRouteBadge(sRoute) {
+            if (this._BADGE_ROUTES.indexOf(sRoute) === -1) { this._refreshSidebarBadges(); return; }
+            const current = this._oAppModel.getProperty("/sidebarBadges/" + sRoute) || 0;
+            if (!current) { this._refreshSidebarBadges(); return; }
+            this._oAppModel.setProperty("/sidebarBadges/" + sRoute, 0);
+            callAction("markRouteNotificationsRead", { route: sRoute })
+                .then(() => this._refreshSidebarBadges())
+                .catch(() => this._refreshSidebarBadges());
         },
 
         // Mark the current newsletter as seen → hide the button until a new one.
@@ -712,6 +749,10 @@ sap.ui.define([
             // Keep the Group Tasks unread badge fresh as the user navigates.
             this._refreshGroupTasksBadge();
 
+            // Clear the badge for the page just opened (mark its notifications
+            // read), and re-sync the rest of the menu badges.
+            this._clearRouteBadge(sRouteName);
+
             // ── Role guard: Management screens are manager-only ──────────────
             // Redirect any non-manager who reaches a manager route to the
             // dashboard. Uses the backend-resolved role; falls back to the
@@ -818,6 +859,9 @@ sap.ui.define([
 
             const useEmp = (emp) => {
                 if (!emp) return;
+                // Issue 3: a deactivated account may authenticate via the IdP but
+                // must not be allowed to use the app — block it and show a message.
+                if (emp.isActive === false) { this._blockInactiveAccount(); return; }
                 this._oAppModel.setProperty("/userName", emp.employeeName || "");
                 this._oAppModel.setProperty("/userInitials", buildInitials(emp.employeeName));
                 this._oAppModel.setProperty("/userProfile", {
@@ -845,6 +889,20 @@ sap.ui.define([
             if (oComp.getCurrentEmployeeId && oComp.getEmployeeById) {
                 oComp.getEmployeeById(oComp.getCurrentEmployeeId()).then(useEmp);
             }
+        },
+
+        // Issue 3: deactivated account — show the message once and sign out so
+        // the user cannot reach any screen. Backend before('*') guards enforce
+        // the same rule server-side for direct API calls.
+        _blockInactiveAccount() {
+            if (this._bInactiveBlocked) return;
+            this._bInactiveBlocked = true;
+            MessageBox.error("Your account is inactive. Please contact the administrator.", {
+                title: "Account Inactive",
+                actions: [MessageBox.Action.OK],
+                emphasizedAction: MessageBox.Action.OK,
+                onClose: () => this._performLogout()
+            });
         },
 
         onNavPerfRating() {
