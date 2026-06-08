@@ -62,6 +62,16 @@
                 "email": "punit.sharma@ccentrik.com"
               }
             },
+            "priya": {
+              "password": "priya",
+              "roles": [
+                "HR",
+                "Employee"
+              ],
+              "attr": {
+                "email": "priya.singh@ccentrik.com"
+              }
+            },
             "neha": {
               "password": "neha",
               "roles": [
@@ -93,7 +103,10 @@
             "founder": {
               "password": "founder",
               "roles": [
-                "Manager"
+                "Founder",
+                "Manager",
+                "HR",
+                "Employee"
               ],
               "attr": {
                 "email": "founder@ccentrik.com"

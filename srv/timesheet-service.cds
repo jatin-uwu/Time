@@ -727,3 +727,39 @@ service HRService @(path: '/hr')@(requires: 'HR') {
     // Holiday master — HR maintains national/regional holidays here.
     entity Holidays                            as projection on db.timesheet.HolidayMaster;
 }
+
+// ── Founder Service ───────────────────────────────────────────────────────────
+// Executive analytics for the Founder Dashboard. Returns pre-aggregated JSON
+// (LargeString) computed live from the CDS entities. Gated to the Founder role.
+service FounderService @(path: '/founder') @(requires: 'Founder') {
+
+    // Whole-organisation analytics (Overall view).
+    action getFounderAnalytics()                                          returns LargeString;
+
+    // Department-scoped analytics (Department view).
+    action getDepartmentAnalytics(department: String, period: String)     returns LargeString;
+
+    // Single-employee drill-down (Founder → Department → Employee).
+    action getEmployeeAnalytics(employeeId: String)                       returns LargeString;
+
+    // Org-wide lists for the Founder sidebar destinations (read-only overview).
+    action getFounderApprovals()                                          returns LargeString;
+    action getFounderTasks()                                              returns LargeString;
+    action getFounderRatings()                                            returns LargeString;
+
+    // Active-employee directory (for assign-task / submit-rating pickers).
+    action getFounderEmployees()                                          returns LargeString;
+
+    // ── Founder write actions ─────────────────────────────────────────────────
+    // These operate org-wide (no manager scoping) but write to the SAME tables
+    // and emit the SAME notifications as the Manager/HR flows, so every Founder
+    // action immediately reflects in dashboard KPIs, analytics and the records
+    // seen by Employees / Managers / HR. No new entities are introduced.
+    action founderDecideTimesheet(timesheetId: String, approve: Boolean, remarks: String) returns LargeString;
+    action founderDecideLeave(leaveId: String, approve: Boolean, remarks: String)          returns LargeString;
+    action founderDecideFillRequest(kind: String, requestId: String, approve: Boolean, remarks: String) returns LargeString;
+    action founderAssignTask(taskName: String, taskDescription: String, priority: String,
+                             startDate: String, dueDate: String, assigneeId: String, reviewerId: String) returns LargeString;
+    action founderSubmitRating(employeeId: String, ratingValue: Decimal, reviewMonth: Integer,
+                               reviewYear: Integer, reviewComment: String, ratingCategory: String) returns LargeString;
+}

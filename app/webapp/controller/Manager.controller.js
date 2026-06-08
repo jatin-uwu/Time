@@ -8,8 +8,9 @@ sap.ui.define([
     "sap/m/VBox",
     "sap/m/Text",
     "sap/m/Label",
-    "sap/m/TextArea"
-], (Controller, JSONModel, MessageBox, MessageToast, Dialog, Button, VBox, Text, Label, TextArea) => {
+    "sap/m/TextArea",
+    "timesheet/app/util/TimesheetPreview"
+], (Controller, JSONModel, MessageBox, MessageToast, Dialog, Button, VBox, Text, Label, TextArea, TimesheetPreview) => {
     "use strict";
 
     const DAYS      = ["mon","tue","wed","thu","fri","sat","sun"];
@@ -186,6 +187,21 @@ sap.ui.define([
             }
         },
 
+        // ── Preview a submitted timesheet (read-only) before deciding ─────
+        onPreviewTimesheet(oEvent) {
+            const sub = oEvent.getSource().getBindingContext("mgrView").getObject();
+            TimesheetPreview.open(this.getOwnerComponent(), {
+                timesheetId:  sub.timesheetId,
+                employeeName: sub.employeeName,
+                employeeId:   sub.employeeId || sub.employee_employeeId,
+                weekRange:    sub.weekRange,
+                weekStart:    sub.weekStart,
+                submittedOn:  sub.submittedOn,
+                status:       sub.status,
+                remarks:      sub.remarks
+            });
+        },
+
         // ── Inline Approve / Reject (table row buttons) ───────────────────
         onApproveTimesheetInline(oEvent) {
             const oCtx = oEvent.getSource().getBindingContext("mgrView");
@@ -295,11 +311,17 @@ sap.ui.define([
 
                     const rowMap = new Map();
                     entries.forEach(entry => {
-                        const taskId   = entry.task_taskId || "unknown";
-                        const taskName = (entry.task && entry.task.taskName) || "Unknown Task";
-                        const taskDesc = (entry.task && entry.task.taskDescription) || "";
+                        // Custom ("Others") entries carry free text and no taskId —
+                        // group them by their text and flag them so the approval
+                        // table can label/badge them instead of "Unknown Task".
+                        const isCustom = !!entry.isCustomTask;
+                        const taskId   = isCustom ? ("__custom__" + (entry.customTaskText || ""))
+                                                  : (entry.task_taskId || "unknown");
+                        const taskName = isCustom ? (entry.customTaskText || "Custom Task")
+                                                  : ((entry.task && entry.task.taskName) || "Unknown Task");
+                        const taskDesc = isCustom ? "" : ((entry.task && entry.task.taskDescription) || "");
                         if (!rowMap.has(taskId)) {
-                            rowMap.set(taskId, { taskId, projectName: taskName, taskName: taskDesc,
+                            rowMap.set(taskId, { taskId, projectName: taskName, taskName: taskDesc, _isCustom: isCustom,
                                 mon:0, tue:0, wed:0, thu:0, fri:0, sat:0, sun:0 });
                         }
                         const idx = weekDates.indexOf(entry.workDate);
@@ -307,7 +329,7 @@ sap.ui.define([
                     });
 
                     const dataRows = Array.from(rowMap.values()).map(row => {
-                        const r = { taskId: row.taskId, projectName: row.projectName, taskName: row.taskName };
+                        const r = { taskId: row.taskId, projectName: row.projectName, taskName: row.taskName, _isCustom: !!row._isCustom };
                         DAYS.forEach(d => { r[d] = row[d] > 0 ? this._toHHMM(row[d]) : ""; });
                         const rowDec = DAYS.reduce((sum, d) => sum + this._parseHHMM(r[d]), 0);
                         r._type      = "data";

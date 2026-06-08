@@ -31,6 +31,14 @@ sap.ui.define([
         "performance-rating"
     ];
 
+    // Standalone Founder module — its own full-screen shell + sidebar.
+    const FOUNDER_ROUTES = [
+        "founder-dashboard",
+        "founder-approvals",
+        "founder-tasks",
+        "founder-ratings"
+    ];
+
     function buildInitials(sName) {
         if (!sName) return "JD";
         const parts = sName.trim().split(/\s+/);
@@ -185,6 +193,11 @@ sap.ui.define([
                     const sRole = u && (u.role || (u.value && u.value.role));
                     applyRole(sRole);
                     markResolved();
+                    // Founders go straight to their dedicated executive dashboard.
+                    if (String(sRole || "").toLowerCase() === "founder") {
+                        this._redirectFounder();
+                        return;
+                    }
                     this._refreshNewsletterBadge();
                     this._refreshGroupTasksBadge();
                     this._refreshSidebarBadges();
@@ -732,9 +745,44 @@ sap.ui.define([
             if (oBody) oBody.toggleStyleClass("tsNavOpen", bOpen);
         },
 
+        // Send the Founder to their dedicated dashboard (once) and hide the shell.
+        _redirectFounder() {
+            try {
+                this._applyFounderShell("founder-dashboard");
+                if (!/founder-dashboard/.test(window.location.hash || "")) {
+                    this.getOwnerComponent().getRouter().navTo("founder-dashboard", {}, true);
+                }
+            } catch (e) { /* ignore */ }
+        },
+
+        // The Founder module is a standalone full-screen experience — hide the
+        // SplitApp master (sidebar) and let the page fill the viewport.
+        _applyFounderShell(sRouteName) {
+            const bFounder = FOUNDER_ROUTES.indexOf(sRouteName) !== -1;
+            try {
+                const oApp = this.byId("app");
+                if (oApp) { if (bFounder) oApp.hideMaster(); else oApp.showMaster(); }
+                document.body.classList.toggle("tsFounderMode", bFounder);
+            } catch (e) { /* ignore */ }
+        },
+
         // ── Route matched — highlight the active item, auto-expand its group ──
         _onRouteMatched(oEvent) {
             const sRouteName = oEvent.getParameter("name");
+
+            // Toggle the standalone full-screen shell for the Founder Dashboard.
+            this._applyFounderShell(sRouteName);
+
+            // Guard: only a Founder may open the Founder module. Others bounce
+            // to their normal dashboard (the data endpoints are 403-gated anyway).
+            if (FOUNDER_ROUTES.indexOf(sRouteName) !== -1) {
+                const oC = this.getOwnerComponent();
+                const sR = (oC._oCurrentUser && oC._oCurrentUser.role) || this._oAppModel.getProperty("/userRole") || "";
+                if (oC._oCurrentUser && String(sR).toLowerCase() !== "founder") {
+                    oC.getRouter().navTo("dashboard", {}, true);
+                    return;
+                }
+            }
 
             // Re-check for a newly published newsletter when landing on the
             // dashboard, so the button reappears mid-session after HR publishes.

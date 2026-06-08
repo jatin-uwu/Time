@@ -134,6 +134,7 @@
                             <Column><Text text="Submitted On" /></Column>
                             <Column><Text text="Status"       /></Column>
                             <Column><Text text="Remarks"      /></Column>
+                            <Column hAlign="Center" width="7rem"><Text text="Action" /></Column>
                         </columns>
                         <items>
                             <ColumnListItem>
@@ -145,6 +146,10 @@
                                         text="{approvalHistView>status}"
                                         state="{path:'approvalHistView>status', formatter:'.formatStatusState'}" />
                                     <Text text="{approvalHistView>remarks}" wrapping="false" maxLines="2" />
+                                    <Button text="View"
+                                            type="Transparent"
+                                            icon="sap-icon://show"
+                                            press=".onViewTimesheet" />
                                 </cells>
                             </ColumnListItem>
                         </items>

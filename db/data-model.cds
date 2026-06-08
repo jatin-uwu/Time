@@ -204,11 +204,18 @@ entity TimesheetEntry : managed {
     key entryId        : String(60);
 
     timesheet          : Association to TimesheetHeader;
-    task               : Association to TaskMaster;
+    task               : Association to TaskMaster;   // null for custom ("Others") entries
 
     workDate           : Date;
     hoursWorked        : Decimal(4,2);
     description        : String(255);
+
+    // ── Custom ("Others") task support ────────────────────────────────────
+    // When the employee picks "Others" instead of an assigned task, the work
+    // is recorded here (no task association) and flagged so every screen can
+    // visually distinguish it from manager-assigned work.
+    isCustomTask       : Boolean default false;
+    customTaskText     : String(30);   // free-text task name, max 30 chars
 
     entryStatus        : String(20);   // Open, Locked, Approved
     isLocked           : Boolean default false;

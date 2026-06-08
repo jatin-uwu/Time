@@ -22,6 +22,14 @@ function toISODate(d) {
     return `${y}-${m}-${day}`;
 }
 
+// Stable short hash (base36) — used to key custom-task entries that have no taskId.
+function shortHash(s) {
+    let h = 0;
+    const str = String(s || '');
+    for (let i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; }
+    return h.toString(36);
+}
+
 function getMondayOfWeek(date) {
     const d   = new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const day = d.getDay();
@@ -238,7 +246,18 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
 
         let saved = 0;
         for (const e of entries) {
-            if (!e.taskId || !e.workDate || e.hoursWorked == null) continue;
+            // ── Custom ("Others") task entries carry free text instead of a taskId.
+            const isCustom = !!e.isCustomTask;
+            let customText = '';
+            if (isCustom) {
+                customText = String(e.customTaskText || '').trim();
+                if (!customText) {
+                    return req.error(400, 'Please enter task details (maximum 30 characters).');
+                }
+                if (customText.length > 30) customText = customText.slice(0, 30);
+            }
+
+            if ((!isCustom && !e.taskId) || !e.workDate || e.hoursWorked == null) continue;
 
             // Guard against impossible daily hours (a single day cannot exceed 24,
             // and negative hours are nonsensical). The grid only ever sends sane
@@ -248,22 +267,34 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
                 return req.error(400, `Hours for ${e.workDate} must be between 0 and 24.`);
             }
 
-            const entryId  = `${hdr.timesheetId}-${e.taskId}-${e.workDate}`;
+            // Custom entries have no taskId — key them by a stable hash of the text
+            // so each (custom task, day) is one upsertable row.
+            const entryId  = isCustom
+                ? `${hdr.timesheetId}-C${shortHash(customText.toLowerCase())}-${e.workDate}`
+                : `${hdr.timesheetId}-${e.taskId}-${e.workDate}`;
             const existing = await SELECT.one.from(ENTRY).where({ entryId });
 
             if (existing) {
                 if (existing.isLocked) continue;
                 await UPDATE(ENTRY)
-                    .set({ hoursWorked: e.hoursWorked, description: e.description || '', entryStatus: 'Open' })
+                    .set({
+                        hoursWorked:    e.hoursWorked,
+                        description:    e.description || (isCustom ? customText : ''),
+                        isCustomTask:   isCustom,
+                        customTaskText: isCustom ? customText : null,
+                        entryStatus:    'Open'
+                    })
                     .where({ entryId });
             } else {
                 await INSERT.into(ENTRY).entries({
                     entryId,
                     timesheet_timesheetId: hdr.timesheetId,
-                    task_taskId:           e.taskId,
+                    task_taskId:           isCustom ? null : e.taskId,
                     workDate:              e.workDate,
                     hoursWorked:           e.hoursWorked,
-                    description:           e.description || '',
+                    description:           e.description || (isCustom ? customText : ''),
+                    isCustomTask:          isCustom,
+                    customTaskText:        isCustom ? customText : null,
                     entryStatus:           'Open',
                     isLocked:              false
                 });

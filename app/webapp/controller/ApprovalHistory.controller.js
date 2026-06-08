@@ -1,7 +1,8 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
-    "sap/ui/model/json/JSONModel"
-], (Controller, JSONModel) => {
+    "sap/ui/model/json/JSONModel",
+    "timesheet/app/util/TimesheetPreview"
+], (Controller, JSONModel, TimesheetPreview) => {
     "use strict";
 
     const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -96,13 +97,18 @@ sap.ui.define([
                     const records = rows.map(ts => {
                         const ws = ts.weekStartDate ? new Date(ts.weekStartDate + "T00:00:00") : null;
                         const we = ts.weekEndDate   ? new Date(ts.weekEndDate   + "T00:00:00") : null;
+                        const decisionOn = ts.approvedOn || ts.rejectedOn || null;
                         return {
                             employeeName: ts.__name || ts.employee_employeeId || "—",
                             weekRange:    ws && we ? `${toShortLabel(ws)} – ${toShortLabel(we)}` : ts.weekStartDate || "",
                             submittedOn:  ts.submittedOn ? new Date(ts.submittedOn).toLocaleString() : "",
                             status:       ts.status || "—",
                             remarks:      ts.remarks || "",
-                            weekStartDate: ts.weekStartDate || ""
+                            weekStartDate: ts.weekStartDate || "",
+                            // ── For the read-only preview ──
+                            timesheetId:  ts.timesheetId || "",
+                            employeeId:   ts.employee_employeeId || "",
+                            approvalDate: decisionOn ? new Date(decisionOn).toLocaleString() : ""
                         };
                     });
                     records.sort((a, b) => (b.weekStartDate || "").localeCompare(a.weekStartDate || ""));
@@ -301,6 +307,25 @@ sap.ui.define([
         // ── Refresh ───────────────────────────────────────────────────────
         onRefresh() {
             this._loadAll();
+        },
+
+        // ── View a submitted timesheet (read-only preview) ────────────────
+        onViewTimesheet(oEvent) {
+            const oCtx = oEvent.getSource().getBindingContext("approvalHistView")
+                || (oEvent.getParameter("listItem") && oEvent.getParameter("listItem").getBindingContext("approvalHistView"));
+            if (!oCtx) return;
+            const r = oCtx.getObject();
+            TimesheetPreview.open(this.getOwnerComponent(), {
+                timesheetId:  r.timesheetId,
+                employeeName: r.employeeName,
+                employeeId:   r.employeeId,
+                weekRange:    r.weekRange,
+                weekStart:    r.weekStartDate,
+                submittedOn:  r.submittedOn,
+                status:       r.status,
+                remarks:      r.remarks,
+                approvalDate: r.approvalDate
+            });
         },
 
         // ── Formatter ─────────────────────────────────────────────────────

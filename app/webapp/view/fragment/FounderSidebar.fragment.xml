@@ -1,0 +1,17 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+
+    <!-- ─────────────────────────────────────────────────────────────────────
+         Founder Sidebar — declarative anchor.
+
+         The collapsible rail itself is rendered and driven by
+         util/FounderSidebar.js (mounted into <body> so it persists across the
+         dashboard's frequent HTML re-renders). This fragment is included by the
+         Founder screens to document the shared navigation component and to give
+         each view a stable hook; the actual controls are created by the helper
+         via FounderSidebar.attach(this) in each controller.
+         ───────────────────────────────────────────────────────────────────── -->
+    <core:HTML id="founderSidebarAnchor" content="&lt;span class='fsbAnchor' style='display:none'&gt;&lt;/span&gt;" />
+
+</core:FragmentDefinition>

@@ -21,6 +21,7 @@
 </VBox>
 
 <Toolbar visible="{appView>/roleResolved}"
+         class="tsAppTopBar"
          style="background:#1e293b; min-height:72px; padding:0px 20px; box-shadow:0 2px 12px rgba(0,0,0,0.35);">
 
     <Button id="menuToggleBtn"

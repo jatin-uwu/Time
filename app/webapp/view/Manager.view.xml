@@ -100,6 +100,11 @@
                                         text="{mgrView>status}"
                                         state="{path:'mgrView>status', formatter:'.formatStatusState'}" />
                                     <HBox>
+                                        <Button text="Preview"
+                                                type="Transparent"
+                                                icon="sap-icon://show"
+                                                press=".onPreviewTimesheet"
+                                                class="sapUiTinyMarginEnd" />
                                         <Button text="Approve"
                                                 type="Accept"
                                                 icon="sap-icon://accept"
@@ -322,9 +327,15 @@
                             <table:label><Label text="Project / Task" /></table:label>
                             <table:template>
                                 <VBox class="tsProjectCell">
-                                    <Text text="{mgrView>projectName}"
-                                        class="{path:'mgrView>_type', formatter:'.formatProjectClass'}"
-                                        wrapping="false" />
+                                    <HBox alignItems="Center">
+                                        <Text text="{mgrView>projectName}"
+                                            class="{path:'mgrView>_type', formatter:'.formatProjectClass'}"
+                                            wrapping="false" />
+                                        <Label text="Custom Task"
+                                            class="tsCustomBadge sapUiTinyMarginBegin"
+                                            visible="{mgrView>_isCustom}"
+                                            tooltip="This task was entered by the employee and was not assigned by a manager." />
+                                    </HBox>
                                     <Text text="{mgrView>taskName}" class="tsTaskName" wrapping="false" />
                                 </VBox>
                             </table:template>

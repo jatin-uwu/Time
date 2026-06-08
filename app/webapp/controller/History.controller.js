@@ -165,13 +165,17 @@ sap.ui.define([
                 const taskMap = {};
                 tasks.forEach(function (t) { taskMap[t.taskId] = t.taskName; });
 
-                // Group entries by taskId — one row per task
+                // Group entries — one row per task. Custom ("Others") entries have
+                // no taskId, so group them by their free text and flag them.
                 const rowMap = {};
                 entries.forEach(function (e) {
-                    const key = e.task_taskId;
+                    const isCustom = !!e.isCustomTask;
+                    const key = isCustom ? ("__custom__" + (e.customTaskText || "")) : e.task_taskId;
                     if (!rowMap[key]) {
                         rowMap[key] = {
-                            taskName: taskMap[key] || key,
+                            taskName: isCustom ? (e.customTaskText || "Custom Task")
+                                               : (taskMap[e.task_taskId] || e.task_taskId),
+                            isCustom: isCustom,
                             entries: {}
                         };
                     }
@@ -258,9 +262,20 @@ sap.ui.define([
                 rows.forEach(function (row) {
                     let rowTotal = 0;
                     tbody += '<tr style="border-bottom:1px solid #e5e5e5;">';
+                    // Escape the (possibly user-entered) task name before injecting.
+                    const esc = String(row.taskName || "").replace(/[&<>"]/g, function (c) {
+                        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+                    });
+                    const tip = "This task was entered by the employee and was not assigned by a manager.";
+                    const nameHtml = row.isCustom
+                        ? '<span style="color:#6d28d9;font-weight:600;" title="' + tip + '">' + esc + '</span>'
+                          + ' <span style="display:inline-block;background:#ede9fe;color:#6d28d9;'
+                          + 'font-size:0.62rem;font-weight:700;padding:1px 8px;border-radius:10px;" title="' + tip + '">'
+                          + 'Custom Task</span>'
+                        : esc;
                     tbody += '<td style="padding:10px 12px;border-right:1px solid #e5e5e5;'
                         + 'font-size:0.875rem;color:#32363a;font-weight:500;">'
-                        + (row.taskName || "") + '</td>';
+                        + nameHtml + '</td>';
 
                     weekDays.forEach(function (dateStr, idx) {
                         const isSun = idx === 6;

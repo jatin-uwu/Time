@@ -3151,3 +3151,29 @@ html .sapUiBlockLayer {
 .tsNewsletterDoc td, .tsNewsletterDoc th { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: left; }
 .tsNewsletterDoc th { background: #f8fafc; }
 .tsNewsletterLoading, .tsNewsletterFail { color: #64748b; text-align: center; padding: 28px 12px; }
+
+/* ── Custom ("Others") task styling ─────────────────────────────────────────
+   Distinguishes employee-entered tasks from manager-assigned ones across the
+   app (Timesheet entry, History, Approvals). Indigo accent + "Custom Task" tag. */
+.tsCustomFieldHead { margin-top: 6px; }
+.tsCustomFieldLabel { font-size: 0.72rem; font-weight: 600; color: #6d28d9; }
+.tsCustomInput { margin-top: 2px; }
+.tsCustomCounter { font-size: 0.7rem; color: #9ca3af; text-align: right; display: block; margin-top: 2px; }
+.tsCustomBadge {
+    display: inline-block;
+    background: #ede9fe;
+    color: #6d28d9;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 1px 8px;
+    border-radius: 10px;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+/* Custom task name wherever it appears as text (history/approval/reports). */
+.tsCustomTaskText { color: #6d28d9; font-weight: 600; }
+
+/* Timesheet preview dialog — cap the scrollable content within the viewport so
+   it never overflows the screen (which clipped the top/bottom rows). */
+.tsPreviewDialog .sapMDialogScrollCont { max-height: 78vh; }

@@ -1,0 +1,15 @@
+<mvc:View
+    controllerName="timesheet.app.controller.FounderDashboard"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    height="100%">
+
+    <!-- Freestyle, full-screen executive dashboard. The controller renders the
+         entire premium UI (glassmorphism cards, KPIs, Chart.js charts) into the
+         HTML host below from live CAP analytics, and keeps it in sync over SSE. -->
+    <Page id="founderPage" showHeader="false" backgroundDesign="Transparent" class="founderPage">
+        <core:HTML id="founderHost" content="&lt;div class='fdRoot'&gt;&lt;div class='fdLoading'&gt;Loading executive analytics…&lt;/div&gt;&lt;/div&gt;" />
+    </Page>
+
+</mvc:View>

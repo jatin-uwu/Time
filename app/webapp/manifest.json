@@ -47,7 +47,9 @@
         },
         "resources": {
             "css": [
-                { "uri": "css/style.css?v=47" }
+                { "uri": "css/style.css?v=47" },
+                { "uri": "css/FounderDashboard.css?v=1" },
+                { "uri": "css/FounderSidebar.css?v=1" }
             ]
         },
         "models": {
@@ -123,7 +125,11 @@
                 { "name": "approval-history", "pattern": "approval-history", "target": "approval-history" },
                 { "name": "leave-history", "pattern": "leave-history", "target": "leave-history" },
                 { "name": "rating-history", "pattern": "rating-history", "target": "rating-history" },
-                { "name": "hr-approvals", "pattern": "hr-approvals", "target": "hr-approvals" }
+                { "name": "hr-approvals", "pattern": "hr-approvals", "target": "hr-approvals" },
+                { "name": "founder-dashboard", "pattern": "founder-dashboard", "target": "founder-dashboard" },
+                { "name": "founder-approvals", "pattern": "founder-approvals", "target": "founder-approvals" },
+                { "name": "founder-tasks", "pattern": "founder-tasks", "target": "founder-tasks" },
+                { "name": "founder-ratings", "pattern": "founder-ratings", "target": "founder-ratings" }
             ],
             "targets": {
                 "dashboard":     { "viewName": "Dashboard"     },
@@ -147,7 +153,11 @@
                 "approval-history": { "viewName": "ApprovalHistory" },
                 "leave-history":  { "viewName": "LeaveHistory" },
                 "rating-history": { "viewName": "RatingHistory" },
-                "hr-approvals":   { "viewName": "HrApproval" }
+                "hr-approvals":   { "viewName": "HrApproval" },
+                "founder-dashboard": { "viewName": "FounderDashboard" },
+                "founder-approvals": { "viewName": "FounderApprovals" },
+                "founder-tasks": { "viewName": "FounderTasks" },
+                "founder-ratings": { "viewName": "FounderRatings" }
             }
         }
     }

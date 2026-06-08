@@ -171,10 +171,109 @@ sap.ui.define([
                     usedTaskIds.add(row.taskId);
                 }
             });
-            // Return tasks not used in other rows
+            // The task already chosen in THIS row (kept visible even if completed,
+            // so an existing entry on a now-completed task still renders).
+            const currentTaskId = (this._rows[currentRowIdx] && this._rows[currentRowIdx].taskId) || null;
+
+            const isCompleted = function (t) {
+                return String(t.status || "").toLowerCase().replace(/\s+/g, "") === "completed";
+            };
+
+            // Exclude tasks used in other rows and Completed tasks — a completed
+            // task can no longer be worked on, so it must not be selectable.
             return this._tasks.filter(function (t) {
-                return !usedTaskIds.has(t.taskId);
+                if (usedTaskIds.has(t.taskId)) return false;
+                if (isCompleted(t) && t.taskId !== currentTaskId) return false;
+                return true;
             });
+        },
+
+        // ── Custom ("Others") task support ────────────────────────────────────
+        // Shared change handler for a row's task Select. Selecting "Others" flags
+        // the row as custom and reveals the free-text field; selecting a real task
+        // clears it.
+        _onTaskSelectChange: function (rowIdx, weekDays, canEdit) {
+            return function (evt) {
+                const key = evt.getParameter("selectedItem").getKey();
+                const r = this._rows[rowIdx];
+                if (key === "__OTHERS__") {
+                    r.isCustom = true; r.taskId = null; r.taskName = "Others";
+                } else {
+                    r.isCustom = false; r.customTaskText = ""; r.taskId = key;
+                    r.taskName = evt.getParameter("selectedItem").getText();
+                }
+                this._renderRowCustomInput(rowIdx, canEdit);
+                this._recalcTotals(weekDays);
+                this._refreshTaskDropdowns(weekDays, canEdit);
+            }.bind(this);
+        },
+
+        // Render (or remove) the custom-task text field below a row's dropdown.
+        // Shown only when the row is "Others": label, 30-char input with a live
+        // counter, and a "Custom Task" badge with an explanatory tooltip.
+        _renderRowCustomInput: function (rowIdx, canEdit) {
+            const vid = this.getView().getId();
+            const taskSpan = document.getElementById(vid + "--taskCell_" + rowIdx);
+            if (!taskSpan) return;
+
+            this._customInputs = this._customInputs || {};
+            if (this._customInputs[rowIdx]) {
+                this._customInputs[rowIdx].forEach(function (c) { try { c.destroy(); } catch (e) { /**/ } });
+                this._customInputs[rowIdx] = null;
+            }
+
+            const row = this._rows[rowIdx];
+            if (!row || !row.isCustom) return;
+
+            const MAX = 30;
+            const oCounter = new Text({ text: (row.customTaskText || "").length + "/" + MAX });
+            oCounter.addStyleClass("tsCustomCounter");
+
+            const oInput = new Input({
+                width: "100%",
+                value: row.customTaskText || "",
+                editable: !!canEdit,
+                maxLength: MAX,
+                placeholder: "Enter task details...",
+                liveChange: function (evt) {
+                    let v = evt.getParameter("value") || "";
+                    if (v.length > MAX) { v = v.slice(0, MAX); evt.getSource().setValue(v); }
+                    this._rows[rowIdx].customTaskText = v;
+                    oCounter.setText(v.length + "/" + MAX);
+                    const ok = !!v.trim();
+                    evt.getSource().setValueState(ok ? "None" : "Error");
+                    if (!ok) evt.getSource().setValueStateText("Please enter task details (maximum 30 characters).");
+                }.bind(this)
+            });
+            oInput.addStyleClass("tsCustomInput");
+
+            const oLabel = new Label({ text: "Describe the task worked on" });
+            oLabel.addStyleClass("tsCustomFieldLabel");
+            const oBadge = new Label({ text: "Custom Task" });
+            oBadge.addStyleClass("tsCustomBadge");
+            oBadge.setTooltip("This task was entered by the employee and was not assigned by a manager.");
+            const oHead = new HBox({ alignItems: "Center", justifyContent: "SpaceBetween", items: [oLabel, oBadge] });
+            oHead.addStyleClass("tsCustomFieldHead");
+
+            oHead.placeAt(taskSpan);
+            oInput.placeAt(taskSpan);
+            oCounter.placeAt(taskSpan);
+
+            this._customInputs[rowIdx] = [oHead, oInput, oCounter];
+            this._injectedControls.push(oHead, oInput, oCounter);
+        },
+
+        // True if any custom row has hours but no description — used to block save.
+        _validateCustomTasks: function () {
+            for (let i = 0; i < this._rows.length; i++) {
+                const row = this._rows[i];
+                if (!row.isCustom) continue;
+                const hasHours = Object.values(row.entries || {}).some(function (h) { return h > 0; });
+                if (hasHours && !(row.customTaskText && row.customTaskText.trim())) {
+                    return false;
+                }
+            }
+            return true;
         },
 
         _refreshTaskDropdowns: function (weekDays, canEdit) {
@@ -211,9 +310,12 @@ sap.ui.define([
                 this._getAvailableTasks(rowIdx).forEach(function (t) {
                     sapCtrl.addItem(new Item({ key: t.taskId, text: t.taskName }));
                 });
+                sapCtrl.addItem(new Item({ key: "__OTHERS__", text: "Others" }));
 
                 // Re-select the current value (it may have been destroyed)
-                if (row.taskId) {
+                if (row.isCustom) {
+                    sapCtrl.setSelectedKey("__OTHERS__");
+                } else if (row.taskId) {
                     sapCtrl.setSelectedKey(row.taskId);
                 }
             }.bind(this));
@@ -316,25 +418,31 @@ sap.ui.define([
         _buildRowsFromEntries: function (entries) {
             const rowMap = {};
             entries.forEach(function (e) {
-                if (!rowMap[e.task_taskId]) {
-                    const task = this._tasks.find(function (t) {
+                const isCustom = !!e.isCustomTask;
+                // Custom ("Others") entries are grouped by their free text; normal
+                // entries are grouped by taskId.
+                const key = isCustom ? ("__custom__" + (e.customTaskText || "")) : e.task_taskId;
+                if (!rowMap[key]) {
+                    const task = isCustom ? null : this._tasks.find(function (t) {
                         return t.taskId === e.task_taskId;
                     });
-                    rowMap[e.task_taskId] = {
-                        taskId: e.task_taskId,
-                        taskName: task ? task.taskName : e.task_taskId,
+                    rowMap[key] = {
+                        taskId: isCustom ? null : e.task_taskId,
+                        taskName: isCustom ? "Others" : (task ? task.taskName : e.task_taskId),
+                        isCustom: isCustom,
+                        customTaskText: isCustom ? (e.customTaskText || "") : "",
                         entries: {},
                         locked: {}
                     };
                 }
-                rowMap[e.task_taskId].entries[e.workDate] = e.hoursWorked;
-                rowMap[e.task_taskId].locked[e.workDate] = !!e.isLocked;
+                rowMap[key].entries[e.workDate] = e.hoursWorked;
+                rowMap[key].locked[e.workDate] = !!e.isLocked;
             }.bind(this));
 
             this._rows = Object.values(rowMap);
             // Always have at least one empty row
             if (this._rows.length === 0) {
-                this._rows.push({ taskId: null, taskName: null, entries: {}, locked: {} });
+                this._rows.push({ taskId: null, taskName: null, isCustom: false, customTaskText: "", entries: {}, locked: {} });
             }
         },
 
@@ -426,6 +534,7 @@ sap.ui.define([
                 });
             }
             this._injectedControls = [];
+            this._customInputs = {};   // custom-task field controls, rebuilt per render
         },
 
         // ══════════════════════════════════════════════════════════════════════
@@ -597,22 +706,20 @@ sap.ui.define([
                 if (taskSpan) {
                     const sel = new Select({
                         width: "100%",
-                        selectedKey: row.taskId || "",
+                        selectedKey: row.isCustom ? "__OTHERS__" : (row.taskId || ""),
                         enabled: !!canEdit,
-                        change: function (evt) {
-                            this._rows[rowIdx].taskId = evt.getParameter("selectedItem").getKey();
-                            this._rows[rowIdx].taskName = evt.getParameter("selectedItem").getText();
-                            this._recalcTotals(weekDays);
-                            // Refresh all other dropdowns to remove/restore this task
-                            this._refreshTaskDropdowns(weekDays, canEdit);
-                        }.bind(this)
+                        change: this._onTaskSelectChange(rowIdx, weekDays, canEdit)
                     });
                     sel.addItem(new Item({ key: "", text: "-- Select Task --" }));
                     this._getAvailableTasks(rowIdx).forEach(function (t) {
                         sel.addItem(new Item({ key: t.taskId, text: t.taskName }));
                     });
+                    // Permanent "Others" option — always available regardless of tasks.
+                    sel.addItem(new Item({ key: "__OTHERS__", text: "Others" }));
                     sel.placeAt(taskSpan);
                     this._injectedControls.push(sel);
+                    // Render the custom-task field for rows already marked custom.
+                    this._renderRowCustomInput(rowIdx, canEdit);
                 }
 
                 // ── Hour Inputs ───────────────────────────────────────────
@@ -820,7 +927,7 @@ sap.ui.define([
             const vid = this.getView().getId();
 
             // Add empty row to data model
-            this._rows.push({ taskId: null, taskName: null, entries: {}, locked: {} });
+            this._rows.push({ taskId: null, taskName: null, isCustom: false, customTaskText: "", entries: {}, locked: {} });
 
             // Find tbody of existing table
             const rowsContainerDom = this.byId("timesheetRowsContainer").getDomRef();
@@ -886,18 +993,13 @@ sap.ui.define([
                     width: "100%",
                     selectedKey: "",
                     enabled: !!canEdit,
-                    change: function (evt) {
-                        this._rows[rowIdx].taskId = evt.getParameter("selectedItem").getKey();
-                        this._rows[rowIdx].taskName = evt.getParameter("selectedItem").getText();
-                        this._recalcTotals(weekDays);
-                        this._refreshTaskDropdowns(weekDays, canEdit);
-                    }.bind(this)
-
+                    change: this._onTaskSelectChange(rowIdx, weekDays, canEdit)
                 });
                 sel.addItem(new Item({ key: "", text: "-- Select Task --" }));
                 this._getAvailableTasks(rowIdx).forEach(function (t) {
                     sel.addItem(new Item({ key: t.taskId, text: t.taskName }));
                 }.bind(this));
+                sel.addItem(new Item({ key: "__OTHERS__", text: "Others" }));
                 sel.placeAt(taskSpanEl);
                 this._injectedControls.push(sel);
             }
@@ -1340,6 +1442,11 @@ sap.ui.define([
                 return;
             }
 
+            if (!this._validateCustomTasks()) {
+                MessageBox.error("Please enter task details (maximum 30 characters).");
+                return;
+            }
+
             const validEntries = this._collectValidEntries();
             if (!validEntries.length) {
                 MessageBox.warning(
@@ -1392,6 +1499,11 @@ sap.ui.define([
                     );
                     return;
                 }
+            }
+
+            if (!this._validateCustomTasks()) {
+                MessageBox.error("Please enter task details (maximum 30 characters).");
+                return;
             }
 
             const validEntries = this._collectValidEntries();
@@ -1474,17 +1586,23 @@ sap.ui.define([
         _collectValidEntries: function () {
             const entries = [];
             this._rows.forEach(function (row) {
-                if (!row.taskId) return;
+                const isCustom = !!row.isCustom;
+                const customText = (row.customTaskText || "").trim();
+                if (isCustom) { if (!customText) return; }
+                else if (!row.taskId) return;
+
                 Object.entries(row.entries).forEach(function (pair) {
                     const dateStr = pair[0];
                     const hours = pair[1];
                     if (hours > 0) {
-                        entries.push({
-                            taskId: row.taskId,
-                            workDate: dateStr,
-                            hoursWorked: hours,
-                            description: ""
-                        });
+                        const entry = { workDate: dateStr, hoursWorked: hours, description: "" };
+                        if (isCustom) {
+                            entry.isCustomTask = true;
+                            entry.customTaskText = customText;
+                        } else {
+                            entry.taskId = row.taskId;
+                        }
+                        entries.push(entry);
                     }
                 });
             });

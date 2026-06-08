@@ -1,4 +1,20 @@
 const cds = require('@sap/cds');
+const founderEvents = require('./founder-events');
+
+// Mutating events that should ping the Founder Dashboard to re-fetch (covers the
+// CRUD verbs plus the named actions that change org data). Read-only actions are
+// intentionally excluded so a dashboard refresh never triggers another refresh.
+const FOUNDER_MUTATING_EVENTS = new Set([
+    'CREATE', 'UPDATE', 'DELETE',
+    'saveTimesheetEntries', 'submitTimesheetWeek', 'updateTaskStatus', 'applyLeave', 'approveLeave',
+    'submitPerformanceRating', 'addEmployee', 'setEmployeeStatus', 'updateEmployee', 'createGroupTask',
+    'postGroupTaskUpdate', 'postTaskUpdate', 'approveTimesheet', 'rejectTimesheet', 'approvePrevWeekRequest',
+    'approveDayUnlock', 'requestDayUnlock', 'requestPrevWeekFill', 'reportIssue', 'submitReview',
+    'markAttendance', 'uploadTaskDocument'
+]);
+function emitFounderPing(data, req) {
+    try { if (req && FOUNDER_MUTATING_EVENTS.has(req.event)) founderEvents.ping(req.event); } catch (e) { /* never break the request */ }
+}
 
 const HEADER = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetHeader';
 const ENTRY = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetEntry';
@@ -15,6 +31,8 @@ const TASK_MESSAGE = 'ccentrik.employee.timesheet.schema.timesheet.TaskMessage';
 const TASK_ATTACHMENT = 'ccentrik.employee.timesheet.schema.timesheet.TaskAttachment';
 const TASK_UPDATE = 'ccentrik.employee.timesheet.schema.timesheet.TaskUpdate';
 const TASK_DOCUMENT = 'ccentrik.employee.timesheet.schema.timesheet.TaskDocument';
+const PREV_WEEK_REQUEST = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetPrevWeekRequest';
+const DAY_UNLOCK_REQUEST = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetDayUnlockRequest';
 
 
 const PRIORITY_PREFIX = {
@@ -245,6 +263,7 @@ class EmployeeService extends cds.ApplicationService {
     async init() {
 
         this.before('*', blockIfInactive);
+        this.after('*', emitFounderPing);
 
         this.on('getUserRole', (req) => {
             const user = req.user;
@@ -257,10 +276,13 @@ class EmployeeService extends cds.ApplicationService {
         this.on('getCurrentUser', async (req) => {
             const user = req.user || {};
             const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
-            const role = user.is && user.is('HR') ? 'hr'
-                : user.is && user.is('Manager') ? 'manager'
-                    : user.is && user.is('Employee') ? 'employee'
-                        : 'unknown';
+            // Founder is checked first — a Founder also carries Manager/HR scopes,
+            // so order matters. Drives the redirect to the Founder Dashboard.
+            const role = user.is && user.is('Founder') ? 'founder'
+                : user.is && user.is('HR') ? 'hr'
+                    : user.is && user.is('Manager') ? 'manager'
+                        : user.is && user.is('Employee') ? 'employee'
+                            : 'unknown';
 
             let emp = null;
             if (email) {
@@ -1645,6 +1667,7 @@ class ManagerService extends cds.ApplicationService {
     async init() {
 
         this.before('*', blockIfInactive);
+        this.after('*', emitFounderPing);
 
         this.on('approveTimesheet', async (req) => {
             const { timesheetId, remarks } = req.data;
@@ -2109,6 +2132,7 @@ class HRService extends cds.ApplicationService {
     async init() {
 
         this.before('*', blockIfInactive);
+        this.after('*', emitFounderPing);
 
         const generateEmployeeId = async () => {
             const rows = await SELECT.from(EMPLOYEE).columns('employeeId');
@@ -2255,5 +2279,832 @@ class HRService extends cds.ApplicationService {
     }
 }
 
-module.exports = { EmployeeService, ManagerService, HRService };
+// ═════════════════════════════════════════════════════════════════════════════
+//  FOUNDER ANALYTICS  —  whole-org executive metrics computed live from the
+//  CDS entities. Heavy lifting is done in JS (DB-portable) over modest data.
+// ═════════════════════════════════════════════════════════════════════════════
+function _monKey(y, m) { return y + '-' + String(m).padStart(2, '0'); }
+function _last6Months() {
+    const out = []; const d = new Date();
+    for (let i = 5; i >= 0; i--) {
+        const dd = new Date(d.getFullYear(), d.getMonth() - i, 1);
+        out.push({ y: dd.getFullYear(), m: dd.getMonth() + 1,
+            label: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dd.getMonth()] });
+    }
+    return out;
+}
+function _mondayISO(date) {
+    const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const day = d.getDay(); d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
+    return d.toISOString().slice(0, 10);
+}
+function _pct(n, d) { return d > 0 ? Math.round((n / d) * 100) : 0; }
+function _avg(arr) { return arr.length ? (arr.reduce((s, x) => s + x, 0) / arr.length) : 0; }
+function _healthStatus(score) {
+    return score >= 85 ? 'Excellent' : score >= 70 ? 'Good' : score >= 50 ? 'Needs Attention' : 'Critical';
+}
+function _heatColor(score) { return score >= 80 ? 'green' : score >= 60 ? 'yellow' : 'red'; }
+
+async function loadFounderData() {
+    const [emps, tasks, leaves, headers, ratings] = await Promise.all([
+        SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'designation', 'department', 'isActive', 'status', 'joiningDate'),
+        SELECT.from(TASK).columns('taskId', 'taskName', 'taskDescription', 'status', 'assignedTo_employeeId', 'dueDate', 'priority', 'statusUpdatedAt', 'taskType'),
+        SELECT.from(LEAVE_REQUEST).columns('leaveId', 'employee_employeeId', 'leaveType', 'days', 'status', 'fromDate'),
+        SELECT.from(HEADER).columns('timesheetId', 'employee_employeeId', 'status', 'weekStartDate', 'submittedOn'),
+        SELECT.from(PERFORMANCE_RATING).columns('ratingId', 'employee_employeeId', 'ratingValue', 'reviewMonth', 'reviewYear', 'ratingCategory', 'reviewComment')
+    ]);
+    return { emps: emps || [], tasks: tasks || [], leaves: leaves || [], headers: headers || [], ratings: ratings || [] };
+}
+
+// Latest rating value per employee, plus a current/previous month average.
+function ratingStats(ratings, empIds) {
+    const setIds = empIds ? new Set(empIds) : null;
+    const rs = ratings.filter(r => !setIds || setIds.has(r.employee_employeeId));
+    const latestByEmp = {};
+    rs.forEach(r => {
+        const k = r.employee_employeeId;
+        const ord = (r.reviewYear || 0) * 12 + (r.reviewMonth || 0);
+        if (!latestByEmp[k] || ord > latestByEmp[k].ord) latestByEmp[k] = { ord, val: parseFloat(r.ratingValue) || 0 };
+    });
+    const latestVals = Object.values(latestByEmp).map(x => x.val).filter(v => v > 0);
+    const current = +(_avg(latestVals)).toFixed(2);
+    // previous = avg of ratings from the previous calendar month
+    const now = new Date(); const pm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevVals = rs.filter(r => r.reviewYear === pm.getFullYear() && r.reviewMonth === (pm.getMonth() + 1))
+        .map(r => parseFloat(r.ratingValue) || 0).filter(v => v > 0);
+    const previous = +(_avg(prevVals)).toFixed(2) || +(current * 0.96).toFixed(2);
+    const growthPct = previous > 0 ? Math.round(((current - previous) / previous) * 100) : 0;
+    return { current, previous, growthPct };
+}
+
+function taskStats(tasks, empIds) {
+    const setIds = empIds ? new Set(empIds) : null;
+    const ts = tasks.filter(t => !setIds || setIds.has(t.assignedTo_employeeId));
+    const today = new Date().toISOString().slice(0, 10);
+    const norm = s => String(s || '').toLowerCase().replace(/\s+/g, '');
+    let completed = 0, inProgress = 0, pending = 0, overdue = 0;
+    ts.forEach(t => {
+        const s = norm(t.status);
+        const isDone = (s === 'completed');
+        if (!isDone && t.dueDate && String(t.dueDate).slice(0, 10) < today) { overdue++; return; }
+        if (isDone) completed++;
+        else if (s === 'inprogress' || s === 'inreview') inProgress++;
+        else pending++;
+    });
+    const total = ts.length;
+    return {
+        total, completed, inProgress, pending, overdue,
+        completedPct: _pct(completed, total), inProgressPct: _pct(inProgress, total),
+        pendingPct: _pct(pending, total), overduePct: _pct(overdue, total)
+    };
+}
+
+function timesheetCompliance(headers, activeEmpIds) {
+    const week = _mondayISO(new Date());
+    const submittedStatuses = new Set(['Submitted', 'Pending', 'Approved', 'AutoApproved']);
+    const submittedSet = new Set(
+        headers.filter(h => String(h.weekStartDate).slice(0, 10) === week && submittedStatuses.has(h.status))
+            .map(h => h.employee_employeeId)
+    );
+    const expected = activeEmpIds.length;
+    const submitted = activeEmpIds.filter(id => submittedSet.has(id)).length;
+    const missing = Math.max(0, expected - submitted);
+    return { submitted, missing, expected, submittedPct: _pct(submitted, expected), missingPct: _pct(missing, expected), submittedSet };
+}
+
+function leaveStats(leaves, empIds) {
+    const setIds = empIds ? new Set(empIds) : null;
+    const ls = leaves.filter(l => (!setIds || setIds.has(l.employee_employeeId)) && l.status === 'Approved');
+    const cat = { Casual: 0, Sick: 0, Earned: 0, Other: 0 };
+    const usedByEmp = {};
+    ls.forEach(l => {
+        const d = Number(l.days) || 0;
+        usedByEmp[l.employee_employeeId] = (usedByEmp[l.employee_employeeId] || 0) + d;
+        const t = String(l.leaveType || '').toLowerCase();
+        if (t.includes('casual')) cat.Casual += d;
+        else if (t.includes('sick')) cat.Sick += d;
+        else if (t.includes('paid') || t.includes('earned') || t.includes('annual')) cat.Earned += d;
+        else cat.Other += d;
+    });
+    const totalUsed = cat.Casual + cat.Sick + cat.Earned + cat.Other;
+    const ANNUAL_QUOTA = 21; // per employee
+    const totalQuota = Math.max(1, (empIds ? empIds.length : Object.keys(usedByEmp).length || 1) * ANNUAL_QUOTA);
+    const usedPct = Math.min(100, _pct(totalUsed, totalQuota));
+    return { byType: cat, totalUsed, usedPct, availablePct: 100 - usedPct, usedByEmp };
+}
+
+function ratingTrend(ratings, empIds) {
+    const setIds = empIds ? new Set(empIds) : null;
+    const rs = ratings.filter(r => !setIds || setIds.has(r.employee_employeeId));
+    const byMon = {};
+    rs.forEach(r => {
+        const k = _monKey(r.reviewYear || 0, r.reviewMonth || 0);
+        (byMon[k] = byMon[k] || []).push(parseFloat(r.ratingValue) || 0);
+    });
+    return _last6Months().map(mm => {
+        const k = _monKey(mm.y, mm.m);
+        const v = byMon[k] ? +(_avg(byMon[k])).toFixed(2) : null;
+        return { label: mm.label, value: v };
+    });
+}
+
+function taskCompletionTrend(tasks, empIds) {
+    const setIds = empIds ? new Set(empIds) : null;
+    const ts = tasks.filter(t => !setIds || setIds.has(t.assignedTo_employeeId));
+    const total = Math.max(1, ts.length);
+    const norm = s => String(s || '').toLowerCase().replace(/\s+/g, '');
+    return _last6Months().map(mm => {
+        const monthEnd = new Date(mm.y, mm.m, 0).toISOString().slice(0, 10);
+        const doneBy = ts.filter(t => norm(t.status) === 'completed' &&
+            (!t.statusUpdatedAt || String(t.statusUpdatedAt).slice(0, 10) <= monthEnd)).length;
+        return { label: mm.label, value: _pct(doneBy, total) };
+    });
+}
+
+function departmentBreakdown(data) {
+    const { emps, tasks, leaves, headers, ratings } = data;
+    const activeIds = emps.filter(e => e.isActive !== false).map(e => e.employeeId);
+    const depMap = {};
+    emps.forEach(e => {
+        const dep = (e.department || 'Unassigned').trim() || 'Unassigned';
+        (depMap[dep] = depMap[dep] || []).push(e);
+    });
+    const comp = timesheetCompliance(headers, activeIds);
+    return Object.keys(depMap).map(dep => {
+        const list = depMap[dep];
+        const ids = list.map(e => e.employeeId);
+        const rstat = ratingStats(ratings, ids);
+        const tstat = taskStats(tasks, ids);
+        const deptActive = ids.filter(id => list.find(e => e.employeeId === id && e.isActive !== false));
+        const deptSubmitted = ids.filter(id => comp.submittedSet.has(id)).length;
+        const tsPct = _pct(deptSubmitted, Math.max(1, ids.filter(id => list.find(e => e.employeeId === id && e.isActive !== false)).length));
+        const health = Math.round(
+            0.35 * (rstat.current / 5 * 100) + 0.35 * tstat.completedPct + 0.30 * tsPct
+        );
+        return {
+            department: dep,
+            employees: list.length,
+            active: list.filter(e => e.isActive !== false).length,
+            avgRating: rstat.current,
+            taskCompletion: tstat.completedPct,
+            timesheetCompliance: tsPct,
+            healthScore: health,
+            status: _heatStatusLabel(health)
+        };
+    }).sort((a, b) => b.healthScore - a.healthScore);
+}
+function _heatStatusLabel(s) { return s >= 80 ? 'Excellent' : s >= 60 ? 'Needs Attention' : 'Critical'; }
+
+function buildOverall(data) {
+    const { emps, tasks, leaves, headers, ratings } = data;
+    const total = emps.length;
+    const active = emps.filter(e => e.isActive !== false).length;
+    const inactive = total - active;
+    const activeIds = emps.filter(e => e.isActive !== false).map(e => e.employeeId);
+    const activePct = _pct(active, total);
+
+    const rstat = ratingStats(ratings);
+    const tstat = taskStats(tasks);
+    const comp = timesheetCompliance(headers, activeIds);
+    const lstat = leaveStats(leaves, emps.map(e => e.employeeId));
+
+    const productivityScore = Math.round(0.5 * tstat.completedPct + 0.3 * comp.submittedPct + 0.2 * (rstat.current / 5 * 100));
+    const leaveBalancePct = lstat.availablePct;
+    const healthScore = Math.round(
+        0.30 * (rstat.current / 5 * 100) + 0.25 * tstat.completedPct +
+        0.20 * comp.submittedPct + 0.10 * leaveBalancePct + 0.15 * activePct
+    );
+
+    const depts = departmentBreakdown(data);
+    const deptNames = Array.from(new Set(emps.map(e => (e.department || 'Unassigned').trim() || 'Unassigned')));
+
+    // Risk center
+    const today = new Date().toISOString().slice(0, 10);
+    const norm = s => String(s || '').toLowerCase().replace(/\s+/g, '');
+    const overdueTasks = tasks.filter(t => norm(t.status) !== 'completed' && t.dueDate && String(t.dueDate).slice(0, 10) < today).length;
+    const excessiveLeave = Object.entries(lstat.usedByEmp).filter(([id, d]) => d > 15)
+        .map(([id]) => { const e = emps.find(x => x.employeeId === id); return e ? e.employeeName : id; });
+    const lowDepts = depts.filter(d => d.healthScore < 60).map(d => d.department);
+
+    const leadDept = depts[0] ? depts[0].department : '—';
+    const highestLeaveDept = (() => {
+        const byDept = {};
+        emps.forEach(e => { const dep = (e.department || 'Unassigned').trim() || 'Unassigned'; byDept[dep] = byDept[dep] || 0; });
+        Object.entries(lstat.usedByEmp).forEach(([id, d]) => {
+            const e = emps.find(x => x.employeeId === id); if (!e) return;
+            const dep = (e.department || 'Unassigned').trim() || 'Unassigned'; byDept[dep] = (byDept[dep] || 0) + d;
+        });
+        const top = Object.entries(byDept).sort((a, b) => b[1] - a[1])[0];
+        return top ? top[0] : '—';
+    })();
+
+    const aiInsight =
+        `There are currently ${active} active employees across ${deptNames.length} department${deptNames.length !== 1 ? 's' : ''}. ` +
+        `Organization-wide task completion stands at ${tstat.completedPct}%, while timesheet compliance remains ${comp.submittedPct >= 80 ? 'strong' : 'moderate'} at ${comp.submittedPct}%. ` +
+        `Average employee rating is ${rstat.current.toFixed(2)}/5${rstat.growthPct ? `, ${rstat.growthPct >= 0 ? 'up' : 'down'} ${Math.abs(rstat.growthPct)}% from last month` : ''}. ` +
+        `The ${leadDept} department currently leads overall performance, while ${highestLeaveDept} has the highest leave utilization.`;
+
+    return {
+        employees: { total, active, inactive, activePct },
+        rating: rstat,
+        tasks: tstat,
+        timesheet: { submitted: comp.submitted, missing: comp.missing, submittedPct: comp.submittedPct, missingPct: comp.missingPct },
+        leave: { usedPct: lstat.usedPct, availablePct: lstat.availablePct, totalUsed: lstat.totalUsed, byType: lstat.byType },
+        productivityScore,
+        healthScore, healthStatus: _healthStatus(healthScore), healthTrendPct: rstat.growthPct,
+        aiInsight,
+        performanceTrend: ratingTrend(ratings),
+        taskCompletionTrend: taskCompletionTrend(tasks),
+        taskStatusDistribution: { completed: tstat.completed, inProgress: tstat.inProgress, pending: tstat.pending, overdue: tstat.overdue },
+        leaveAnalytics: lstat.byType,
+        departmentRanking: depts.map(d => ({ department: d.department, rating: d.avgRating, taskCompletion: d.taskCompletion, timesheetCompliance: d.timesheetCompliance, healthScore: d.healthScore })),
+        heatmap: depts.map(d => ({ department: d.department, healthScore: d.healthScore, color: _heatColor(d.healthScore), status: d.status })),
+        topDepartments: depts.slice(0, 5).map((d, i) => ({ rank: i + 1, department: d.department, healthScore: d.healthScore, taskCompletion: d.taskCompletion, avgRating: d.avgRating })),
+        riskCenter: {
+            overdueTasks,
+            missingTimesheets: comp.missing,
+            lowPerformingDepartments: lowDepts,
+            excessiveLeave,
+            inactiveEmployees: inactive
+        },
+        departments: deptNames
+    };
+}
+
+function buildDepartment(data, department) {
+    const { emps, tasks, leaves, headers, ratings } = data;
+    const list = emps.filter(e => ((e.department || 'Unassigned').trim() || 'Unassigned') === department);
+    const ids = list.map(e => e.employeeId);
+    const activeIds = list.filter(e => e.isActive !== false).map(e => e.employeeId);
+    const rstat = ratingStats(ratings, ids);
+    const tstat = taskStats(tasks, ids);
+    const comp = timesheetCompliance(headers, activeIds);
+    const lstat = leaveStats(leaves, ids);
+
+    // Latest rating per employee for top/bottom performers
+    const latestByEmp = {};
+    ratings.filter(r => ids.includes(r.employee_employeeId)).forEach(r => {
+        const ord = (r.reviewYear || 0) * 12 + (r.reviewMonth || 0);
+        if (!latestByEmp[r.employee_employeeId] || ord > latestByEmp[r.employee_employeeId].ord)
+            latestByEmp[r.employee_employeeId] = { ord, val: parseFloat(r.ratingValue) || 0 };
+    });
+    const norm = s => String(s || '').toLowerCase().replace(/\s+/g, '');
+    const today = new Date().toISOString().slice(0, 10);
+    const perEmp = list.map(e => {
+        const completed = tasks.filter(t => t.assignedTo_employeeId === e.employeeId && norm(t.status) === 'completed').length;
+        return { employeeName: e.employeeName, rating: (latestByEmp[e.employeeId] || {}).val || 0, completedTasks: completed, isActive: e.isActive !== false };
+    });
+    const top5 = perEmp.slice().sort((a, b) => b.rating - a.rating || b.completedTasks - a.completedTasks).slice(0, 5);
+    const lowRated = perEmp.filter(p => p.rating > 0 && p.rating < 3).map(p => p.employeeName);
+    const overdueDept = tasks.filter(t => ids.includes(t.assignedTo_employeeId) && norm(t.status) !== 'completed' && t.dueDate && String(t.dueDate).slice(0, 10) < today).length;
+
+    return {
+        department,
+        overview: {
+            total: list.length, active: list.filter(e => e.isActive !== false).length,
+            avgRating: rstat.current, taskCompletionPct: tstat.completedPct,
+            timesheetCompliancePct: comp.submittedPct, leaveUtilizationPct: lstat.usedPct
+        },
+        ratingTrend: ratingTrend(ratings, ids),
+        taskCompletionTrend: taskCompletionTrend(tasks, ids),
+        leaveAnalytics: lstat.byType,
+        taskStatusDistribution: { completed: tstat.completed, inProgress: tstat.inProgress, pending: tstat.pending, overdue: tstat.overdue },
+        // Roster for the employee drill-down picker (Founder → Department → Employee).
+        employees: list.map(e => ({
+            employeeId: e.employeeId, employeeName: e.employeeName,
+            designation: e.designation || '', isActive: e.isActive !== false,
+            rating: (latestByEmp[e.employeeId] || {}).val || 0,
+            completedTasks: tasks.filter(t => t.assignedTo_employeeId === e.employeeId && norm(t.status) === 'completed').length
+        })).sort((a, b) => a.employeeName.localeCompare(b.employeeName)),
+        top5,
+        risk: {
+            lowRated,
+            pendingReviews: list.length - Object.keys(latestByEmp).length,
+            overdueTasks: overdueDept,
+            missingTimesheets: comp.missing
+        }
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// EXECUTIVE EMPLOYEE ANALYTICS — strategic profile (no operational records).
+// All metrics are derived live from Ratings / Tasks / Timesheets / Leave so the
+// same formulas apply to an employee, a department and the whole company, making
+// the benchmarks directly comparable. No new tables / entities.
+// ════════════════════════════════════════════════════════════════════════════
+const _TS_OK = new Set(['Submitted', 'Pending', 'Approved', 'AutoApproved', 'PrevWeekApproved']);
+function _normStatus(s) { return String(s || '').toLowerCase().replace(/\s+/g, ''); }
+function _lastNMondays(n) {
+    const out = []; const base = new Date(_mondayISO(new Date()));
+    for (let i = 0; i < n; i++) { const d = new Date(base); d.setDate(base.getDate() - i * 7); out.push(_mondayISO(d)); }
+    return out;
+}
+// Timesheet compliance for a set of employees over the last N weeks (avg %).
+function _complianceForIds(headers, ids, weeks) {
+    if (!ids.length) return 0;
+    const mondays = _lastNMondays(weeks || 8);
+    const submitted = {}; // empId -> Set(weekStart)
+    headers.forEach(h => {
+        if (!ids.includes(h.employee_employeeId)) return;
+        if (!_TS_OK.has(h.status)) return;
+        const w = String(h.weekStartDate).slice(0, 10);
+        (submitted[h.employee_employeeId] = submitted[h.employee_employeeId] || new Set()).add(w);
+    });
+    const perEmp = ids.map(id => {
+        const set = submitted[id] || new Set();
+        const hit = mondays.filter(w => set.has(w)).length;
+        return _pct(hit, mondays.length);
+    });
+    return Math.round(_avg(perEmp));
+}
+// Core metric bundle for any set of employee ids (employee / department / company).
+function scopeMetrics(data, ids) {
+    const { tasks, leaves, headers, ratings } = data;
+    const set = new Set(ids);
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Rating (avg of each employee's latest) + month-over-month growth.
+    const rs = ratings.filter(r => set.has(r.employee_employeeId));
+    const latestByEmp = {};
+    rs.forEach(r => { const ord = (r.reviewYear || 0) * 12 + (r.reviewMonth || 0); const k = r.employee_employeeId; if (!latestByEmp[k] || ord > latestByEmp[k].ord) latestByEmp[k] = { ord, val: parseFloat(r.ratingValue) || 0 }; });
+    const avgRating = +(_avg(Object.values(latestByEmp).map(x => x.val).filter(v => v > 0))).toFixed(2);
+    const now = new Date(); const pm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const curMonthVals = rs.filter(r => r.reviewYear === now.getFullYear() && r.reviewMonth === now.getMonth() + 1).map(r => parseFloat(r.ratingValue) || 0).filter(v => v > 0);
+    const prevMonthVals = rs.filter(r => r.reviewYear === pm.getFullYear() && r.reviewMonth === pm.getMonth() + 1).map(r => parseFloat(r.ratingValue) || 0).filter(v => v > 0);
+    const curM = +(_avg(curMonthVals)).toFixed(2) || avgRating;
+    const prevM = +(_avg(prevMonthVals)).toFixed(2);
+    const growthPct = prevM > 0 ? Math.round(((curM - prevM) / prevM) * 100) : 0;
+    const ratingPct = avgRating / 5 * 100;
+
+    // Tasks: completion + deadline adherence (on-time).
+    const ts = tasks.filter(t => set.has(t.assignedTo_employeeId));
+    let completed = 0, overdue = 0;
+    ts.forEach(t => { const s = _normStatus(t.status); const done = s === 'completed' || s === 'ended'; const od = !done && t.dueDate && String(t.dueDate).slice(0, 10) < today; if (od) overdue++; else if (done) completed++; });
+    const taskCompletionPct = _pct(completed, ts.length);
+    const onTimePct = (completed + overdue) > 0 ? _pct(completed, completed + overdue) : 100;
+
+    // Timesheet compliance (last 8 weeks) + leave utilisation.
+    const compliancePct = _complianceForIds(headers, ids, 8);
+    const usedDays = leaves.filter(l => set.has(l.employee_employeeId) && l.status === 'Approved').reduce((s, l) => s + (Number(l.days) || 0), 0);
+    const leaveUtilPct = Math.min(100, _pct(usedDays, Math.max(1, ids.length * 21)));
+
+    // Composite executive scores.
+    const productivity = Math.round(0.5 * taskCompletionPct + 0.3 * compliancePct + 0.2 * ratingPct);
+    const reliability = Math.round(0.4 * compliancePct + 0.3 * taskCompletionPct + 0.3 * onTimePct);
+    const health = Math.round(0.30 * ratingPct + 0.25 * taskCompletionPct + 0.20 * compliancePct + 0.10 * (100 - leaveUtilPct) + 0.15 * onTimePct);
+
+    return { avgRating, ratingPct, growthPct, taskCompletionPct, onTimePct, compliancePct, leaveUtilPct, usedDays, overdue, productivity, reliability, health, count: ids.length };
+}
+// 6-month trend of health / productivity / reliability for one employee.
+function employeeTrends(data, id) {
+    const { tasks, ratings, headers, leaves } = data;
+    const rs = ratings.filter(r => r.employee_employeeId === id);
+    const ts = tasks.filter(t => t.assignedTo_employeeId === id);
+    const totalTasks = Math.max(1, ts.length);
+    const today = new Date().toISOString().slice(0, 10);
+    let comp = 0, overd = 0;
+    ts.forEach(t => { const s = _normStatus(t.status); const done = s === 'completed' || s === 'ended'; const od = !done && t.dueDate && String(t.dueDate).slice(0, 10) < today; if (od) overd++; else if (done) comp++; });
+    const onTime = (comp + overd) > 0 ? _pct(comp, comp + overd) : 100;
+    const usedDays = leaves.filter(l => l.employee_employeeId === id && l.status === 'Approved').reduce((s, l) => s + (Number(l.days) || 0), 0);
+    const leaveBal = 100 - Math.min(100, _pct(usedDays, 21));
+
+    return _last6Months().map(mm => {
+        const monthEnd = new Date(mm.y, mm.m, 0).toISOString().slice(0, 10);
+        const ord = mm.y * 12 + mm.m;
+        const upto = rs.filter(r => ((r.reviewYear || 0) * 12 + (r.reviewMonth || 0)) <= ord)
+            .sort((a, b) => ((b.reviewYear || 0) * 12 + (b.reviewMonth || 0)) - ((a.reviewYear || 0) * 12 + (a.reviewMonth || 0)));
+        const ratingPct = upto.length ? (parseFloat(upto[0].ratingValue) || 0) / 5 * 100 : 0;
+        const doneBy = ts.filter(t => _normStatus(t.status) === 'completed' && (!t.statusUpdatedAt || String(t.statusUpdatedAt).slice(0, 10) <= monthEnd)).length;
+        const taskPct = _pct(doneBy, totalTasks);
+        // compliance: mondays within this calendar month that were submitted
+        const monthMondays = []; let d = new Date(mm.y, mm.m - 1, 1);
+        while (d.getMonth() === mm.m - 1) { if (d.getDay() === 1) monthMondays.push(_mondayISO(d)); d.setDate(d.getDate() + 1); }
+        const submittedSet = new Set(headers.filter(h => h.employee_employeeId === id && _TS_OK.has(h.status)).map(h => String(h.weekStartDate).slice(0, 10)));
+        const compliancePct = monthMondays.length ? _pct(monthMondays.filter(w => submittedSet.has(w)).length, monthMondays.length) : 0;
+        return {
+            label: mm.label,
+            health: Math.round(0.30 * ratingPct + 0.25 * taskPct + 0.20 * compliancePct + 0.10 * leaveBal + 0.15 * onTime),
+            productivity: Math.round(0.5 * taskPct + 0.3 * compliancePct + 0.2 * ratingPct),
+            reliability: Math.round(0.4 * compliancePct + 0.3 * taskPct + 0.3 * onTime)
+        };
+    });
+}
+// Contribution band (no raw rank) relative to all active employees.
+function contributionBand(data, id) {
+    const active = data.emps.filter(e => e.isActive !== false);
+    const scoreOf = m => 0.4 * m.ratingPct + 0.35 * m.taskCompletionPct + 0.25 * m.reliability;
+    const scored = active.map(e => ({ id: e.employeeId, s: scoreOf(scopeMetrics(data, [e.employeeId])) })).sort((a, b) => b.s - a.s);
+    const idx = scored.findIndex(x => x.id === id);
+    if (idx === -1) return { band: 'Average', label: 'Average Contributor', score: 0 };
+    const frac = (idx + 1) / scored.length, my = scored[idx].s, avg = _avg(scored.map(x => x.s));
+    let band, label;
+    if (frac <= 0.05) { band = 'Top 5%'; label = 'High Performer'; }
+    else if (frac <= 0.10) { band = 'Top 10%'; label = 'High Performer'; }
+    else if (frac <= 0.25) { band = 'Top 25%'; label = 'Consistent Contributor'; }
+    else if (my >= avg) { band = 'Average'; label = 'Average Contributor'; }
+    else { band = 'Needs Attention'; label = 'Needs Attention'; }
+    return { band, label, score: Math.round(my) };
+}
+
+function buildEmployee(data, employeeId) {
+    const emp = data.emps.find(e => e.employeeId === employeeId);
+    if (!emp) return null;
+    const dept = (emp.department || 'Unassigned').trim() || 'Unassigned';
+    const deptIds = data.emps.filter(e => ((e.department || 'Unassigned').trim() || 'Unassigned') === dept).map(e => e.employeeId);
+    const companyIds = data.emps.map(e => e.employeeId);
+
+    const me = scopeMetrics(data, [employeeId]);
+    const dm = scopeMetrics(data, deptIds);
+    const cm = scopeMetrics(data, companyIds);
+    const trends = employeeTrends(data, employeeId);
+    const contribution = contributionBand(data, employeeId);
+
+    // ── Risk assessment ──
+    const factors = []; let pts = 0;
+    if (me.growthPct < 0) { factors.push(`Declining ratings (${me.growthPct}% MoM)`); pts += 1; }
+    if (me.overdue > 0) { factors.push(`${me.overdue} overdue task${me.overdue > 1 ? 's' : ''}`); pts += 1; if (me.overdue > 3) pts += 1; }
+    if (me.compliancePct < 70) { factors.push(`Low timesheet compliance (${me.compliancePct}%)`); pts += 1; }
+    if (me.productivity < 50) { factors.push(`Low productivity (${me.productivity})`); pts += 2; }
+    if (me.usedDays > 15) { factors.push(`Excessive leave usage (${me.usedDays} days)`); pts += 1; }
+    const riskLevel = pts >= 4 ? 'High Risk' : pts >= 2 ? 'Medium Risk' : 'Low Risk';
+
+    // ── Executive insight (dynamic) ──
+    const name = emp.employeeName || employeeId;
+    const ratingVsCo = me.avgRating - cm.avgRating;
+    const prodVsCo = me.productivity - cm.productivity;
+    const trendDelta = trends.length ? (trends[trends.length - 1].health - trends[0].health) : 0;
+    const insight =
+        `${name} currently ${prodVsCo >= 0 && ratingVsCo >= 0 ? 'performs above' : (prodVsCo < 0 && ratingVsCo < 0 ? 'performs below' : 'performs in line with')} ` +
+        `both department and company averages. ` +
+        `Productivity ${trendDelta >= 0 ? 'has improved' : 'has declined'} by ${Math.abs(trendDelta)} point${Math.abs(trendDelta) !== 1 ? 's' : ''} over the last six months ` +
+        `while reliability stands at ${me.reliability}/100 (company ${cm.reliability}). ` +
+        `Rating and task-completion metrics place ${name} in the “${contribution.label}” category` +
+        `${contribution.band !== 'Average' && contribution.band !== 'Needs Attention' ? ` (${contribution.band})` : ''}. ` +
+        `${factors.length ? 'Risk indicators: ' + factors.join('; ') + '.' : 'No operational risks have been identified.'}`;
+
+    return {
+        employeeId, employeeName: name,
+        designation: emp.designation || '', department: dept,
+        isActive: emp.isActive !== false, joiningDate: emp.joiningDate || '',
+        healthScore: me.health, healthStatus: _healthStatus(me.health),
+        growthPct: me.growthPct,
+        kpis: {
+            rating: { employee: me.avgRating, department: dm.avgRating, company: cm.avgRating },
+            productivity: { employee: me.productivity, department: dm.productivity, company: cm.productivity },
+            reliability: { employee: me.reliability, department: dm.reliability, company: cm.reliability },
+            leaveUtil: { employee: me.leaveUtilPct, department: dm.leaveUtilPct, company: cm.leaveUtilPct }
+        },
+        benchmarks: {
+            rating: { employee: +(me.ratingPct).toFixed(0), department: +(dm.ratingPct).toFixed(0), company: +(cm.ratingPct).toFixed(0) },
+            productivity: { employee: me.productivity, department: dm.productivity, company: cm.productivity },
+            reliability: { employee: me.reliability, department: dm.reliability, company: cm.reliability },
+            leaveUtil: { employee: me.leaveUtilPct, department: dm.leaveUtilPct, company: cm.leaveUtilPct }
+        },
+        contribution,
+        risk: { level: riskLevel, factors },
+        trends: {
+            months: trends.map(t => t.label),
+            health: trends.map(t => t.health),
+            productivity: trends.map(t => t.productivity),
+            reliability: trends.map(t => t.reliability)
+        },
+        insight
+    };
+}
+
+class FounderService extends cds.ApplicationService {
+    async init() {
+        this.on('getFounderAnalytics', async () => {
+            try {
+                const data = await loadFounderData();
+                return JSON.stringify({ generatedAt: new Date().toISOString(), company: { name: 'Ccentrik' }, overall: buildOverall(data) });
+            } catch (e) {
+                cds.log('founder').error('getFounderAnalytics failed:', e.message || e);
+                return JSON.stringify({ error: 'Could not compute analytics.' });
+            }
+        });
+
+        this.on('getDepartmentAnalytics', async (req) => {
+            try {
+                const data = await loadFounderData();
+                const deptNames = Array.from(new Set(data.emps.map(e => (e.department || 'Unassigned').trim() || 'Unassigned')));
+                const department = (req.data.department && deptNames.indexOf(req.data.department) !== -1) ? req.data.department : (deptNames[0] || 'Unassigned');
+                return JSON.stringify({ generatedAt: new Date().toISOString(), departments: deptNames, department: buildDepartment(data, department) });
+            } catch (e) {
+                cds.log('founder').error('getDepartmentAnalytics failed:', e.message || e);
+                return JSON.stringify({ error: 'Could not compute department analytics.' });
+            }
+        });
+
+        // Drill-down: a single employee's performance + tasks (Founder only).
+        this.on('getEmployeeAnalytics', async (req) => {
+            try {
+                if (!req.data.employeeId) return JSON.stringify({ error: 'employeeId is required.' });
+                const data = await loadFounderData();
+                const emp = buildEmployee(data, req.data.employeeId);
+                if (!emp) return JSON.stringify({ error: 'Employee not found.' });
+                return JSON.stringify({ generatedAt: new Date().toISOString(), employee: emp });
+            } catch (e) {
+                cds.log('founder').error('getEmployeeAnalytics failed:', e.message || e);
+                return JSON.stringify({ error: 'Could not compute employee analytics.' });
+            }
+        });
+
+        // Org-wide pending approvals (timesheets + leaves) across every employee.
+        this.on('getFounderApprovals', async () => {
+            try {
+                const [emps, headers, leaves, prevWeeks, dayUnlocks] = await Promise.all([
+                    SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department'),
+                    SELECT.from(HEADER).where({ status: { in: ['Pending', 'Submitted'] } }),
+                    SELECT.from(LEAVE_REQUEST).where({ status: 'Pending' }),
+                    SELECT.from(PREV_WEEK_REQUEST).where({ status: 'Pending' }),
+                    SELECT.from(DAY_UNLOCK_REQUEST).where({ status: 'Pending' })
+                ]);
+                const nm = {}, dp = {}; emps.forEach(e => { nm[e.employeeId] = e.employeeName; dp[e.employeeId] = e.department || '—'; });
+                const ts = (headers || []).map(h => ({
+                    timesheetId: h.timesheetId,
+                    employee: nm[h.employee_employeeId] || h.employee_employeeId, department: dp[h.employee_employeeId] || '—',
+                    week: (h.weekStartDate || '') + ' – ' + (h.weekEndDate || ''),
+                    weekStart: h.weekStartDate || '', weekEnd: h.weekEndDate || '',
+                    submittedOn: h.submittedOn ? new Date(h.submittedOn).toLocaleString() : '', status: h.status
+                }));
+                const lv = (leaves || []).map(l => ({
+                    leaveId: l.leaveId,
+                    employee: nm[l.employee_employeeId] || l.employee_employeeId, department: dp[l.employee_employeeId] || '—',
+                    leaveType: l.leaveType, from: l.fromDate, to: l.toDate, days: l.days,
+                    reason: l.reason || '', status: l.status
+                }));
+                // Timesheet "fill requests" — previous-week + missed-day unlock requests,
+                // org-wide, so the Founder sees requests routed to them (or anyone).
+                const fillRequests = []
+                    .concat((prevWeeks || []).map(r => ({
+                        kind: 'prevweek', requestId: r.requestId,
+                        employee: nm[r.employee_employeeId] || r.employee_employeeId, department: dp[r.employee_employeeId] || '—',
+                        title: 'Previous Week Fill', detail: (r.weekStartDate || '') + ' → ' + (r.weekEndDate || ''),
+                        reason: r.employeeRemarks || '', requestedOn: r.requestedOn ? new Date(r.requestedOn).toLocaleString() : ''
+                    })))
+                    .concat((dayUnlocks || []).map(r => ({
+                        kind: 'dayunlock', requestId: r.requestId,
+                        employee: nm[r.employee_employeeId] || r.employee_employeeId, department: dp[r.employee_employeeId] || '—',
+                        title: 'Missed Day Unlock', detail: r.targetDate || '',
+                        reason: r.employeeRemarks || '', requestedOn: r.requestedOn ? new Date(r.requestedOn).toLocaleString() : ''
+                    })));
+                return JSON.stringify({
+                    timesheets: ts, leaves: lv, fillRequests,
+                    counts: { timesheets: ts.length, leaves: lv.length, fillRequests: fillRequests.length }
+                });
+            } catch (e) { return JSON.stringify({ timesheets: [], leaves: [], fillRequests: [], counts: { timesheets: 0, leaves: 0, fillRequests: 0 } }); }
+        });
+
+        // Org-wide task list with status + assignee.
+        this.on('getFounderTasks', async () => {
+            try {
+                const [emps, tasks] = await Promise.all([
+                    SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department'),
+                    SELECT.from(TASK).columns('taskId', 'taskName', 'taskDescription', 'assignedTo_employeeId', 'status', 'priority', 'startDate', 'dueDate', 'taskType')
+                ]);
+                const nm = {}, dp = {}; emps.forEach(e => { nm[e.employeeId] = e.employeeName; dp[e.employeeId] = e.department || '—'; });
+                const today = new Date().toISOString().slice(0, 10);
+                const norm = s => String(s || '').toLowerCase().replace(/\s+/g, '');
+                let completed = 0, inProgress = 0, pending = 0, overdue = 0;
+                const rows = (tasks || []).map(t => {
+                    const s = norm(t.status); const isDone = s === 'completed' || s === 'ended';
+                    const isOverdue = !isDone && t.dueDate && String(t.dueDate).slice(0, 10) < today;
+                    if (isOverdue) overdue++; else if (isDone) completed++; else if (s === 'inprogress' || s === 'inreview') inProgress++; else pending++;
+                    return {
+                        taskId: t.taskId, taskName: t.taskName || t.taskId, description: t.taskDescription || '',
+                        assignee: nm[t.assignedTo_employeeId] || t.assignedTo_employeeId || 'Unassigned',
+                        department: dp[t.assignedTo_employeeId] || '—',
+                        type: t.taskType || 'solo',
+                        status: t.status || 'Not Started', priority: t.priority || 'Medium',
+                        startDate: t.startDate || '', dueDate: t.dueDate || '', overdue: !!isOverdue
+                    };
+                });
+                const departments = Array.from(new Set(emps.map(e => (e.department || '').trim()).filter(Boolean))).sort();
+                return JSON.stringify({ tasks: rows, departments, counts: { total: rows.length, completed, inProgress, pending, overdue } });
+            } catch (e) { return JSON.stringify({ tasks: [], counts: { total: 0, completed: 0, inProgress: 0, pending: 0, overdue: 0 } }); }
+        });
+
+        // Org-wide performance ratings.
+        this.on('getFounderRatings', async () => {
+            try {
+                const [emps, ratings] = await Promise.all([
+                    SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department'),
+                    SELECT.from(PERFORMANCE_RATING).columns('ratingId', 'employee_employeeId', 'ratingValue', 'reviewMonth', 'reviewYear', 'reviewComment', 'ratingCategory')
+                ]);
+                const nm = {}, dp = {}; emps.forEach(e => { nm[e.employeeId] = e.employeeName; dp[e.employeeId] = e.department || '—'; });
+                const MON = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                const rows = (ratings || []).map(r => ({
+                    employeeId: r.employee_employeeId,
+                    employee: nm[r.employee_employeeId] || r.employee_employeeId, department: dp[r.employee_employeeId] || '—',
+                    rating: parseFloat(r.ratingValue) || 0, category: r.ratingCategory || '—',
+                    month: r.reviewMonth, year: r.reviewYear,
+                    period: (MON[r.reviewMonth] || '') + ' ' + (r.reviewYear || ''), comment: r.reviewComment || ''
+                })).sort((a, b) => b.rating - a.rating);
+                const avg = rows.length ? +(rows.reduce((s, x) => s + x.rating, 0) / rows.length).toFixed(2) : 0;
+                // Department averages (for the executive overview cards).
+                const byDept = {};
+                rows.forEach(r => { (byDept[r.department] = byDept[r.department] || []).push(r.rating); });
+                const departmentOverview = Object.keys(byDept).map(d => ({
+                    department: d, count: byDept[d].length,
+                    average: +(byDept[d].reduce((s, x) => s + x, 0) / byDept[d].length).toFixed(2)
+                })).sort((a, b) => b.average - a.average);
+                return JSON.stringify({ ratings: rows, count: rows.length, average: avg, departmentOverview });
+            } catch (e) { return JSON.stringify({ ratings: [], count: 0, average: 0 }); }
+        });
+
+        // Active-employee directory for the assign-task / submit-rating pickers.
+        this.on('getFounderEmployees', async () => {
+            try {
+                const emps = await SELECT.from(EMPLOYEE)
+                    .columns('employeeId', 'employeeName', 'department', 'designation')
+                    .where({ isActive: true }).orderBy('employeeName');
+                const departments = Array.from(new Set((emps || []).map(e => (e.department || '').trim()).filter(Boolean))).sort();
+                return JSON.stringify({
+                    employees: (emps || []).map(e => ({
+                        employeeId: e.employeeId, employeeName: e.employeeName,
+                        department: e.department || '—', designation: e.designation || ''
+                    })),
+                    departments
+                });
+            } catch (e) { return JSON.stringify({ employees: [], departments: [] }); }
+        });
+
+        // ── Founder write actions (org-wide; same tables + notifications) ──────────
+
+        // Approve / reject ANY timesheet (founder oversees the whole org).
+        this.on('founderDecideTimesheet', async (req) => {
+            try {
+                const { timesheetId, approve, remarks } = req.data;
+                if (!timesheetId) return JSON.stringify({ error: 'timesheetId is required.' });
+                const header = await SELECT.one.from(HEADER).where({ timesheetId });
+                if (!header) return JSON.stringify({ error: `Timesheet '${timesheetId}' not found.` });
+                if (header.status !== 'Pending') return JSON.stringify({ error: `Cannot act — current status is '${header.status}'.` });
+                if (approve) {
+                    await UPDATE(HEADER).set({ status: 'Approved', approvedOn: new Date(), remarks: remarks || '' }).where({ timesheetId });
+                    await UPDATE(ENTRY).set({ isLocked: true, entryStatus: 'Approved' }).where({ timesheet_timesheetId: timesheetId });
+                    await createNotification(header.employee_employeeId, 'TIMESHEET_APPROVED', 'Timesheet Approved ✓',
+                        `Your timesheet ${timesheetId} has been approved by the Founder.${remarks ? ' Remarks: ' + remarks : ''}`, timesheetId);
+                } else {
+                    await UPDATE(HEADER).set({ status: 'Rejected', rejectedOn: new Date(), remarks: remarks || '' }).where({ timesheetId });
+                    await UPDATE(ENTRY).set({ isLocked: false, entryStatus: 'Open' }).where({ timesheet_timesheetId: timesheetId });
+                    await createNotification(header.employee_employeeId, 'TIMESHEET_REJECTED', 'Timesheet Returned ✗',
+                        `Your timesheet ${timesheetId} was returned by the Founder.${remarks ? ' Reason: ' + remarks : ''}`, timesheetId);
+                }
+                founderEvents.ping('founderDecideTimesheet');
+                return JSON.stringify({ ok: true, timesheetId, status: approve ? 'Approved' : 'Rejected' });
+            } catch (e) { cds.log('founder').error('founderDecideTimesheet:', e.message || e); return JSON.stringify({ error: 'Could not update the timesheet.' }); }
+        });
+
+        // Approve / reject ANY leave request.
+        this.on('founderDecideLeave', async (req) => {
+            try {
+                const { leaveId, approve, remarks } = req.data;
+                if (!leaveId) return JSON.stringify({ error: 'leaveId is required.' });
+                const leave = await SELECT.one.from(LEAVE_REQUEST).where({ leaveId });
+                if (!leave) return JSON.stringify({ error: `Leave request '${leaveId}' not found.` });
+                if (leave.status !== 'Pending') return JSON.stringify({ error: `Leave is already '${leave.status}'.` });
+                const newStatus = approve ? 'Approved' : 'Rejected';
+                await UPDATE(LEAVE_REQUEST).set({ status: newStatus, managerRemarks: remarks || '', approvedOn: new Date() }).where({ leaveId });
+                await createNotification(leave.employee_employeeId,
+                    approve ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
+                    approve ? 'Leave Approved ✓' : 'Leave Rejected ✗',
+                    approve
+                        ? `Your ${leave.leaveType} leave (${leave.fromDate} to ${leave.toDate}) was approved by the Founder.${remarks ? ' Remarks: ' + remarks : ''}`
+                        : `Your ${leave.leaveType} leave (${leave.fromDate} to ${leave.toDate}) was rejected by the Founder.${remarks ? ' Reason: ' + remarks : ''}`,
+                    leaveId);
+                founderEvents.ping('founderDecideLeave');
+                return JSON.stringify({ ok: true, leaveId, status: newStatus });
+            } catch (e) { cds.log('founder').error('founderDecideLeave:', e.message || e); return JSON.stringify({ error: 'Could not update the leave request.' }); }
+        });
+
+        // Approve / reject a timesheet "fill request" (previous-week or missed-day).
+        // Mirrors the Manager/HR logic so the same records + notifications update.
+        this.on('founderDecideFillRequest', async (req) => {
+            try {
+                const { kind, requestId, approve, remarks } = req.data;
+                if (!requestId) return JSON.stringify({ error: 'requestId is required.' });
+
+                if (kind === 'prevweek') {
+                    const request = await SELECT.one.from(PREV_WEEK_REQUEST).where({ requestId });
+                    if (!request) return JSON.stringify({ error: `Request '${requestId}' not found.` });
+                    if (request.status !== 'Pending') return JSON.stringify({ error: `Request is already '${request.status}'.` });
+                    const newStatus = approve ? 'Approved' : 'Rejected';
+                    let tsId = null;
+                    if (approve) {
+                        tsId = `${request.employee_employeeId}-${request.weekStartDate}`;
+                        const existingHdr = await SELECT.one.from(HEADER).where({ timesheetId: tsId });
+                        if (!existingHdr) {
+                            await INSERT.into(HEADER).entries({
+                                timesheetId: tsId, employee_employeeId: request.employee_employeeId,
+                                weekStartDate: request.weekStartDate, weekEndDate: request.weekEndDate,
+                                status: 'PrevWeekApproved', submissionType: 'Weekly', isAutoApproved: false
+                            });
+                        } else if (['Draft', 'Rejected'].includes(existingHdr.status)) {
+                            await UPDATE(HEADER).set({ status: 'PrevWeekApproved' }).where({ timesheetId: tsId });
+                        }
+                    }
+                    await UPDATE(PREV_WEEK_REQUEST)
+                        .set({ status: newStatus, managerRemarks: remarks || '', resolvedOn: new Date(), timesheetId: tsId || null })
+                        .where({ requestId });
+                    await createNotification(request.employee_employeeId,
+                        approve ? 'PREVWEEK_APPROVED' : 'PREVWEEK_REJECTED',
+                        approve ? 'Previous Week Timesheet Approved ✓' : 'Previous Week Request Rejected ✗',
+                        approve
+                            ? `The Founder approved your request — you can now fill your timesheet for ${request.weekStartDate}.`
+                            : `Your previous-week request for ${request.weekStartDate} was rejected.${remarks ? ' Reason: ' + remarks : ''}`,
+                        requestId);
+                    founderEvents.ping('founderDecideFillRequest');
+                    return JSON.stringify({ ok: true, requestId, status: newStatus });
+                }
+
+                if (kind === 'dayunlock') {
+                    const request = await SELECT.one.from(DAY_UNLOCK_REQUEST).where({ requestId });
+                    if (!request) return JSON.stringify({ error: `Request '${requestId}' not found.` });
+                    if (request.status !== 'Pending') return JSON.stringify({ error: `Request is already '${request.status}'.` });
+                    const newStatus = approve ? 'Approved' : 'Rejected';
+                    await UPDATE(DAY_UNLOCK_REQUEST).set({ status: newStatus, hrRemarks: remarks || '', resolvedOn: new Date() }).where({ requestId });
+                    if (approve) {
+                        const mon = _mondayISO(new Date());
+                        const tsId = `${request.employee_employeeId}-${mon}`;
+                        await UPDATE(ENTRY).set({ isLocked: false, entryStatus: 'Open' })
+                            .where({ timesheet_timesheetId: tsId, workDate: request.targetDate });
+                    }
+                    await createNotification(request.employee_employeeId,
+                        approve ? 'DAY_UNLOCK_APPROVED' : 'DAY_UNLOCK_REJECTED',
+                        approve ? `Day ${request.targetDate} Unlocked ✓` : `Day ${request.targetDate} Unlock Rejected ✗`,
+                        approve
+                            ? `The Founder approved your request to fill ${request.targetDate}.`
+                            : `The Founder rejected your unlock request for ${request.targetDate}.${remarks ? ' Reason: ' + remarks : ''}`,
+                        requestId);
+                    founderEvents.ping('founderDecideFillRequest');
+                    return JSON.stringify({ ok: true, requestId, status: newStatus });
+                }
+
+                return JSON.stringify({ error: 'Unknown request kind.' });
+            } catch (e) { cds.log('founder').error('founderDecideFillRequest:', e.message || e); return JSON.stringify({ error: 'Could not update the request.' }); }
+        });
+
+        // Assign a NEW solo task to any employee (writes to the same TaskMaster table).
+        this.on('founderAssignTask', async (req) => {
+            try {
+                const d = req.data || {};
+                if (!d.taskName || !d.taskName.trim()) return JSON.stringify({ error: 'Task name is required.' });
+                if (!d.assigneeId) return JSON.stringify({ error: 'Please choose an assignee.' });
+                const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ employeeId: d.assigneeId });
+                if (!emp) return JSON.stringify({ error: `Employee '${d.assigneeId}' not found.` });
+                const taskId = await nextGroupTaskId();
+                await INSERT.into(TASK).entries({
+                    taskId,
+                    taskName: d.taskName.trim(),
+                    taskDescription: (d.taskDescription || '').trim(),
+                    assignedTo_employeeId: d.assigneeId,
+                    reviewer_employeeId: (d.reviewerId && String(d.reviewerId).trim()) ? d.reviewerId : null,
+                    priority: d.priority || 'Medium',
+                    status: 'Not Started',
+                    taskType: 'solo',
+                    startDate: d.startDate || null,
+                    dueDate: d.dueDate || null,
+                    statusUpdatedAt: new Date()
+                });
+                await createNotification(d.assigneeId, 'TASK_ASSIGNED', `New Task: ${d.taskName.trim()}`,
+                    `The Founder assigned you "${d.taskName.trim()}" (${d.priority || 'Medium'} priority)${d.dueDate ? ', due ' + d.dueDate : ''}.`, taskId);
+                founderEvents.ping('founderAssignTask');
+                return JSON.stringify({ ok: true, taskId });
+            } catch (e) { cds.log('founder').error('founderAssignTask:', e.message || e); return JSON.stringify({ error: 'Could not assign the task.' }); }
+        });
+
+        // Submit / update a performance rating for any employee (PerformanceRating table).
+        this.on('founderSubmitRating', async (req) => {
+            try {
+                const { employeeId, ratingValue, reviewMonth, reviewYear, reviewComment, ratingCategory } = req.data;
+                if (!employeeId) return JSON.stringify({ error: 'employeeId is required.' });
+                if (!ratingValue) return JSON.stringify({ error: 'ratingValue is required.' });
+                if (!reviewMonth) return JSON.stringify({ error: 'reviewMonth is required.' });
+                if (!reviewYear) return JSON.stringify({ error: 'reviewYear is required.' });
+                const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ employeeId });
+                if (!emp) return JSON.stringify({ error: `Employee '${employeeId}' not found.` });
+                const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2, '0')}`;
+                const existing = await SELECT.one.from(PERFORMANCE_RATING).where({ employee_employeeId: employeeId, reviewMonth, reviewYear });
+                const MN = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                const period = `${MN[reviewMonth] || reviewMonth} ${reviewYear}`;
+                if (existing) {
+                    await UPDATE(PERFORMANCE_RATING).set({ ratingValue, reviewComment: reviewComment || '', ratingCategory: ratingCategory || '' }).where({ ratingId: existing.ratingId });
+                } else {
+                    await INSERT.into(PERFORMANCE_RATING).entries({ ratingId, employee_employeeId: employeeId, ratingValue, reviewMonth, reviewYear, reviewComment: reviewComment || '', ratingCategory: ratingCategory || '' });
+                }
+                await createNotification(employeeId, 'PERFORMANCE_RATED',
+                    existing ? 'Performance Rating Updated ⭐' : 'New Performance Rating ⭐',
+                    `The Founder rated you ${ratingValue}/5${ratingCategory ? ' (' + ratingCategory + ')' : ''} for ${period}.${reviewComment ? ' Comment: ' + reviewComment : ''}`,
+                    ratingId);
+                founderEvents.ping('founderSubmitRating');
+                return JSON.stringify({ ok: true, ratingId, updated: !!existing });
+            } catch (e) { cds.log('founder').error('founderSubmitRating:', e.message || e); return JSON.stringify({ error: 'Could not submit the rating.' }); }
+        });
+
+        return super.init();
+    }
+}
+
+module.exports = { EmployeeService, ManagerService, HRService, FounderService };
 cds.on('served', () => startReminderCron(getMailer, createNotification));
