@@ -928,9 +928,14 @@ sap.ui.define([
 
             const useEmp = (emp) => {
                 if (!emp) return;
+                // Login gate (mirrors the backend getCurrentUser check): block the
+                // session and show an error when the email is not registered, the
+                // account is inactive, or the master role does not match the
+                // XSUAA/JWT scope.
+                if (emp.accessDenied) { this._blockAccess(emp.accessDenied); return; }
                 // Issue 3: a deactivated account may authenticate via the IdP but
                 // must not be allowed to use the app — block it and show a message.
-                if (emp.isActive === false) { this._blockInactiveAccount(); return; }
+                if (emp.isActive === false) { this._blockAccess('inactive'); return; }
                 this._oAppModel.setProperty("/userName", emp.employeeName || "");
                 this._oAppModel.setProperty("/userInitials", buildInitials(emp.employeeName));
                 this._oAppModel.setProperty("/userProfile", {
@@ -960,14 +965,29 @@ sap.ui.define([
             }
         },
 
-        // Issue 3: deactivated account — show the message once and sign out so
-        // the user cannot reach any screen. Backend before('*') guards enforce
-        // the same rule server-side for direct API calls.
-        _blockInactiveAccount() {
-            if (this._bInactiveBlocked) return;
-            this._bInactiveBlocked = true;
-            MessageBox.error("Your account is inactive. Please contact the administrator.", {
-                title: "Account Inactive",
+        // Login gate — show the message once and sign out so the user cannot
+        // reach any screen. Backend getCurrentUser / before('*') guards enforce
+        // the same rules server-side for direct API calls.
+        _blockAccess(sReason) {
+            if (this._bAccessBlocked) return;
+            this._bAccessBlocked = true;
+            const MAP = {
+                "not-registered": {
+                    title: "Access Denied",
+                    text: "Your email is not registered in Employee Master. Please contact the administrator."
+                },
+                "role-mismatch": {
+                    title: "Access Denied",
+                    text: "Your assigned role does not match your Employee Master record. Please contact the administrator."
+                },
+                "inactive": {
+                    title: "Account Inactive",
+                    text: "Your account is inactive. Please contact the administrator."
+                }
+            };
+            const cfg = MAP[sReason] || MAP["role-mismatch"];
+            MessageBox.error(cfg.text, {
+                title: cfg.title,
                 actions: [MessageBox.Action.OK],
                 emphasizedAction: MessageBox.Action.OK,
                 onClose: () => this._performLogout()

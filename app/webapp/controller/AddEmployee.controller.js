@@ -40,6 +40,7 @@ sap.ui.define([
     const EMPTY_FORM = () => ({
         employeeName:      "",
         designation:       "",
+        role:              "",
         email:             "",
         address:           "",
         mobileNumber:      "",
@@ -81,6 +82,7 @@ sap.ui.define([
         marriageDate:      "inpMarriageDate",
         hasKids:           "selKids",
         designation:       "inpDesig",
+        role:              "selRole",
         department:        "inpDept",
         workLocation:      "selLocation",
         joiningDate:       "inpJoining",
@@ -206,6 +208,7 @@ sap.ui.define([
 
             // ── Employment ──
             check("designation",   "Designation",       !f.designation || !f.designation.trim(), "Required");
+            check("role",          "Role",               !f.role,          "Required · please select a role");
             check("department",    "Department",         !f.department  || !f.department.trim(),  "Required");
             check("workLocation",  "Work Location",      !f.workLocation,  "Required · please select a location");
             check("joiningDate",   "Joining Date",       !f.joiningDate,   "Required");
@@ -354,7 +357,7 @@ sap.ui.define([
             const oCtx = oModel.bindContext("/addEmployee(...)");
 
             [
-                "employeeName","designation","email","address","mobileNumber",
+                "employeeName","designation","role","email","address","mobileNumber",
                 "managerEmployeeId","dateOfBirth","gender","department",
                 "joiningDate","employmentType","workLocation",
                 "aadhaarNumber","panNumber","emergencyContact","bloodGroup",

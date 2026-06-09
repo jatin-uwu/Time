@@ -8,6 +8,11 @@ entity EmployeeMaster : managed {
     key employeeId      : String(10);
     employeeName        : String(100);
     designation         : String(50);
+    // Authoritative application role, independent of the free-text job title in
+    // `designation`. Used by the backend to cross-check the XSUAA/JWT scope so a
+    // user cannot gain elevated access purely via an XSUAA role-collection
+    // assignment. Allowed values: employee | manager | hr | founder.
+    role                : String(20) default 'employee';
     email               : String(100);
     address             : String(255);
     mobileNumber        : String(15);

@@ -119,6 +119,20 @@
                             <f:FormElement label="Designation *">
                                 <f:fields><Input id="inpDesig" value="{form>/designation}" required="true" maxLength="50" placeholder="e.g. Software Developer" /></f:fields>
                             </f:FormElement>
+                            <!-- Application role (authoritative). Stored as a canonical
+                                 lowercase value (employee/manager/hr/founder) so it always
+                                 matches the login/authorization check — never 'HR' vs 'hr'. -->
+                            <f:FormElement label="Role *">
+                                <f:fields>
+                                    <Select id="selRole" selectedKey="{form>/role}">
+                                        <core:Item key="" text="— Select Role —" />
+                                        <core:Item key="employee" text="Employee" />
+                                        <core:Item key="manager"  text="Manager" />
+                                        <core:Item key="hr"       text="HR" />
+                                        <core:Item key="founder"  text="Founder" />
+                                    </Select>
+                                </f:fields>
+                            </f:FormElement>
                             <f:FormElement label="Department *">
                                 <f:fields><Input id="inpDept" value="{form>/department}" maxLength="50" placeholder="e.g. Engineering" /></f:fields>
                             </f:FormElement>

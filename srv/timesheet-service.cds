@@ -650,6 +650,7 @@ service HRService @(path: '/hr')@(requires: 'HR') {
 
     action addEmployee(employeeName: String(100),
                        designation: String(50),
+                       role: String(20),
                        email: String(100),
                        address: String(255),
                        mobileNumber: String(15),
@@ -696,6 +697,7 @@ service HRService @(path: '/hr')@(requires: 'HR') {
     action updateEmployee(employeeId: String(10),
                           employeeName: String(100),
                           designation: String(50),
+                          role: String(20),
                           email: String(100),
                           address: String(255),
                           mobileNumber: String(15),

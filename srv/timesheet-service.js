@@ -278,9 +278,88 @@ async function blockIfInactive(req) {
     const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
     if (!email) return;
     const emp = await SELECT.one.from(EMPLOYEE).columns('isActive').where('lower(email) =', email);
-    if (emp && emp.isActive === false) {
+    if (!emp) {
+        return req.reject(403, 'Access denied: your email is not registered in Employee Master.');
+    }
+    if (emp.isActive === false) {
         return req.reject(403, 'Your account is inactive. Please contact the administrator.');
     }
+}
+
+// Resolve the caller's email from the JWT (email/mail attribute, falling back to
+// the technical user id). Centralised so every guard resolves identity the same
+// way.
+function callerEmail(user) {
+    user = user || {};
+    return (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+}
+
+// Does the JWT carry the XSUAA scope that corresponds to this application role?
+function hasScopeFor(user, role) {
+    if (!user || !user.is) return false;
+    switch (role) {
+        case 'founder':  return user.is('Founder');
+        case 'hr':       return user.is('HR');
+        case 'manager':  return user.is('Manager');
+        case 'employee': return user.is('Employee');
+        default:         return false;
+    }
+}
+
+// ── Two-factor authorization guard ──────────────────────────────────────────
+// Returns a before-handler that grants access ONLY when BOTH are true:
+//   (1) the JWT/XSUAA scope for `requiredRole` is present, AND
+//   (2) the caller's authoritative role in EmployeeMaster.role === requiredRole.
+// This closes the privilege-escalation gap where assigning an extra XSUAA role
+// collection (e.g. Manager) to a user whose master role is HR would otherwise
+// grant Manager access. The master table is the source of truth; XSUAA is a
+// necessary-but-not-sufficient first factor.
+// The caller's EFFECTIVE role = the authoritative EmployeeMaster.role, but only
+// when the JWT also carries the matching XSUAA scope. A user whose master role
+// is elevated but who lacks the scope (or vice-versa) is downgraded to the base
+// 'employee' role when they at least hold the Employee scope, else 'unknown'.
+// Used to drive UI routing so the frontend never sends a user to a dashboard the
+// backend will deny.
+function effectiveRole(user, emp) {
+    const dbRole = (emp && emp.role || '').trim().toLowerCase();
+    if (dbRole && hasScopeFor(user, dbRole)) return dbRole;
+    if (user && user.is && user.is('Employee')) return 'employee';
+    return 'unknown';
+}
+
+// The canonical application roles stored in EmployeeMaster.role. Authorization
+// compares against these exact lowercase values, so anything written to the
+// column must be normalised to one of them — 'HR' vs 'hr' must never diverge.
+const VALID_ROLES = ['employee', 'manager', 'hr', 'founder'];
+function normalizeRole(value) {
+    const r = (value == null ? '' : String(value)).trim().toLowerCase();
+    return VALID_ROLES.includes(r) ? r : null;
+}
+
+function requireMatchingRole(requiredRole) {
+    return async function (req) {
+        const user = req.user || {};
+        const email = callerEmail(user);
+        if (!email) return req.reject(403, 'Access denied: unable to resolve your identity.');
+
+        const emp = await SELECT.one.from(EMPLOYEE).columns('role', 'isActive').where('lower(email) =', email);
+        if (!emp) return req.reject(403, 'Access denied: no employee record is linked to your account.');
+        if (emp.isActive === false) return req.reject(403, 'Your account is inactive. Please contact the administrator.');
+
+        const dbRole = (emp.role || '').trim().toLowerCase();
+
+        // Factor 1 — XSUAA scope (also enforced by @requires, re-checked defensively).
+        if (!hasScopeFor(user, requiredRole)) {
+            return req.reject(403, 'Access denied: missing the required authorization scope.');
+        }
+        // Factor 2 — authoritative role from EmployeeMaster must match exactly.
+        if (dbRole !== requiredRole) {
+            cds.log('auth').warn(
+                `Blocked role mismatch for ${email}: JWT carries '${requiredRole}' scope but EmployeeMaster.role='${dbRole || 'none'}'.`
+            );
+            return req.reject(403, 'Access denied: your assigned role does not permit this operation.');
+        }
+    };
 }
 
 class EmployeeService extends cds.ApplicationService {
@@ -289,40 +368,55 @@ class EmployeeService extends cds.ApplicationService {
         this.before('*', blockIfInactive);
         this.after('*', emitFounderPing);
 
-        this.on('getUserRole', (req) => {
-            const user = req.user;
-            if (user.is('HR')) return { role: 'hr' };
-            if (user.is('Manager')) return { role: 'manager' };
-            if (user.is('Employee')) return { role: 'employee' };
-            return { role: 'unknown' };
+        this.on('getUserRole', async (req) => {
+            const user = req.user || {};
+            const email = callerEmail(user);
+            const emp = email
+                ? await SELECT.one.from(EMPLOYEE).columns('role').where('lower(email) =', email)
+                : null;
+            // Effective role cross-checks the master table against the JWT scope,
+            // so an XSUAA-only role assignment can no longer report elevated access.
+            return { role: effectiveRole(user, emp) };
         });
 
         this.on('getCurrentUser', async (req) => {
             const user = req.user || {};
             const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
-            // Founder is checked first — a Founder also carries Manager/HR scopes,
-            // so order matters. Drives the redirect to the Founder Dashboard.
-            const role = user.is && user.is('Founder') ? 'founder'
-                : user.is && user.is('HR') ? 'hr'
-                    : user.is && user.is('Manager') ? 'manager'
-                        : user.is && user.is('Employee') ? 'employee'
-                            : 'unknown';
 
             let emp = null;
             if (email) {
                 emp = await SELECT.one.from(EMPLOYEE).where('lower(email) =', email);
             }
 
+            // ── Login gate ────────────────────────────────────────────────────
+            // A user may sign in only when ALL of the following hold:
+            //   (1) the email exists in EmployeeMaster,
+            //   (2) the account is active, and
+            //   (3) the master role is backed by the matching XSUAA/JWT scope.
+            // Otherwise we return accessDenied + a reason so the UI can show an
+            // error and sign the user out. (getCurrentUser itself stays reachable
+            // so the UI can render that message; every other service is blocked
+            // server-side by blockIfInactive / requireMatchingRole.)
+            const dbRole = (emp && emp.role || '').trim().toLowerCase();
+            let accessDenied = null;
+            if (!emp)                          accessDenied = 'not-registered';
+            else if (emp.isActive === false)   accessDenied = 'inactive';
+            else if (!hasScopeFor(user, dbRole)) accessDenied = 'role-mismatch';
+
+            // Only report an elevated role when the login is valid; otherwise
+            // 'unknown' so nothing in the UI treats the session as privileged.
+            const role = accessDenied ? 'unknown' : dbRole;
+
             if (!emp) {
                 return {
-                    email, role, employeeId: '',
+                    email, role, accessDenied, employeeId: '',
                     employeeName: (user.attr && user.attr.given_name) || (email && email.split('@')[0]) || 'User',
                     designation: '', address: '', mobileNumber: '', managerId: '', isActive: true
                 };
             }
 
             return {
-                email: emp.email || email, role,
+                email: emp.email || email, role, accessDenied,
                 employeeId: emp.employeeId,
                 employeeName: emp.employeeName || '',
                 designation: emp.designation || '',
@@ -1690,6 +1784,8 @@ class EmployeeService extends cds.ApplicationService {
 class ManagerService extends cds.ApplicationService {
     async init() {
 
+        // Two-factor authorization: XSUAA 'Manager' scope AND EmployeeMaster.role === 'manager'.
+        this.before('*', requireMatchingRole('manager'));
         this.before('*', blockIfInactive);
         this.after('*', emitFounderPing);
 
@@ -2155,6 +2251,8 @@ const DOCUMENT = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeDocument'
 class HRService extends cds.ApplicationService {
     async init() {
 
+        // Two-factor authorization: XSUAA 'HR' scope AND EmployeeMaster.role === 'hr'.
+        this.before('*', requireMatchingRole('hr'));
         this.before('*', blockIfInactive);
         this.after('*', emitFounderPing);
 
@@ -2177,9 +2275,13 @@ class HRService extends cds.ApplicationService {
             const normEmail = String(d.email).trim().toLowerCase();
             const dup = await SELECT.one.from(EMPLOYEE).where('lower(email) =', normEmail);
             if (dup) return req.error(409, `An employee with email '${normEmail}' already exists.`);
+            // Authoritative role — normalised to a canonical lowercase value so the
+            // login/authorization checks match (e.g. 'HR' → 'hr'). Defaults to
+            // 'employee' when omitted or invalid, never an elevated role.
+            const role = normalizeRole(d.role) || 'employee';
             const newId = await generateEmployeeId();
             await INSERT.into(EMPLOYEE).entries({
-                employeeId: newId, employeeName: d.employeeName, designation: d.designation || null,
+                employeeId: newId, employeeName: d.employeeName, designation: d.designation || null, role,
                 email: normEmail, address: d.address || null, mobileNumber: d.mobileNumber || null,
                 manager_employeeId: d.managerEmployeeId || null, isActive: true,
                 dateOfBirth: d.dateOfBirth || null, gender: d.gender || null, department: d.department || null,
@@ -2277,6 +2379,13 @@ class HRService extends cds.ApplicationService {
             Object.keys(map).forEach(k => {
                 if (d[k] !== undefined && d[k] !== null) patch[map[k]] = d[k];
             });
+            // Role is normalised to a canonical value; an invalid value is ignored
+            // (left unchanged) rather than silently downgrading the employee.
+            if (d.role !== undefined && d.role !== null && d.role !== '') {
+                const nr = normalizeRole(d.role);
+                if (!nr) return req.error(400, `Invalid role '${d.role}'. Allowed: ${VALID_ROLES.join(', ')}.`);
+                patch.role = nr;
+            }
             if (!Object.keys(patch).length) return { employeeId: d.employeeId, message: 'Nothing to update.' };
 
             await UPDATE(EMPLOYEE).set(patch).where({ employeeId: d.employeeId });
@@ -2798,6 +2907,11 @@ function buildEmployee(data, employeeId) {
 
 class FounderService extends cds.ApplicationService {
     async init() {
+
+        // Two-factor authorization: XSUAA 'Founder' scope AND EmployeeMaster.role === 'founder'.
+        this.before('*', requireMatchingRole('founder'));
+        this.before('*', blockIfInactive);
+
         this.on('getFounderAnalytics', async () => {
             try {
                 const data = await loadFounderData();
