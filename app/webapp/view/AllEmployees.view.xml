@@ -42,7 +42,7 @@
                          selectionMode="Single"
                          selectionBehavior="RowOnly"
                          alternateRowColors="true"
-                         visibleRowCountMode="Auto"
+                         visibleRowCount="12"
                          rowSelectionChange=".onRowSelect"
                          class="tsEmpTable">
                     <t:columns>

@@ -92,6 +92,30 @@ async function resolveCaller(req) {
     return { email, uid, emp, employeeId: emp && emp.employeeId };
 }
 
+// ── Founder access-control helper ────────────────────────────────────────────
+// A Founder may only view / manage employees who report DIRECTLY to them, i.e.
+// EmployeeMaster.manager_employeeId === <the founder's own employeeId>. This is
+// the single source of truth reused by every founder employee-selection action
+// (assign task, submit rating, any future picker) so the same rule is enforced
+// at the data layer — never relying on the UI to hide rows.
+//
+// Returns { founderId, ids:Set<employeeId>, employees:[…] }. ids is empty when
+// the founder has no direct reports.
+async function founderDirectReports(req) {
+    const caller = await resolveCaller(req);
+    const founderId = caller.employeeId || null;
+    if (!founderId) return { founderId: null, ids: new Set(), employees: [] };
+    const rows = await SELECT.from(EMPLOYEE)
+        .columns('employeeId', 'employeeName', 'department', 'designation')
+        .where({ manager_employeeId: founderId, isActive: true })
+        .orderBy('employeeName');
+    return {
+        founderId,
+        ids: new Set((rows || []).map(r => r.employeeId)),
+        employees: rows || []
+    };
+}
+
 // Load a group task plus its assignee rows and decide whether the caller is a
 // member (an assignee OR the manager who created it). Solo tasks return null.
 async function loadGroupContext(taskId, caller) {
@@ -2914,11 +2938,12 @@ class FounderService extends cds.ApplicationService {
         });
 
         // Active-employee directory for the assign-task / submit-rating pickers.
-        this.on('getFounderEmployees', async () => {
+        // Scoped to the founder's DIRECT reports only (manager = this founder) —
+        // see founderDirectReports(). The dropdown therefore never exposes
+        // employees from other reporting hierarchies.
+        this.on('getFounderEmployees', async (req) => {
             try {
-                const emps = await SELECT.from(EMPLOYEE)
-                    .columns('employeeId', 'employeeName', 'department', 'designation')
-                    .where({ isActive: true }).orderBy('employeeName');
+                const { employees: emps } = await founderDirectReports(req);
                 const departments = Array.from(new Set((emps || []).map(e => (e.department || '').trim()).filter(Boolean))).sort();
                 return JSON.stringify({
                     employees: (emps || []).map(e => ({
@@ -3053,6 +3078,13 @@ class FounderService extends cds.ApplicationService {
                 if (!d.assigneeId) return JSON.stringify({ error: 'Please choose an assignee.' });
                 const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ employeeId: d.assigneeId });
                 if (!emp) return JSON.stringify({ error: `Employee '${d.assigneeId}' not found.` });
+                // Access control: the assignee must report directly to this founder.
+                const { ids: reportIds } = await founderDirectReports(req);
+                if (!reportIds.has(d.assigneeId)) return JSON.stringify({ error: 'You can only assign tasks to employees who report to you.' });
+                // (Optional) reviewer, when supplied, must also be a direct report.
+                if (d.reviewerId && String(d.reviewerId).trim() && !reportIds.has(String(d.reviewerId).trim())) {
+                    return JSON.stringify({ error: 'The reviewer must be an employee who reports to you.' });
+                }
                 const taskId = await nextGroupTaskId();
                 await INSERT.into(TASK).entries({
                     taskId,
@@ -3084,6 +3116,9 @@ class FounderService extends cds.ApplicationService {
                 if (!reviewYear) return JSON.stringify({ error: 'reviewYear is required.' });
                 const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ employeeId });
                 if (!emp) return JSON.stringify({ error: `Employee '${employeeId}' not found.` });
+                // Access control: founders may only rate their direct reports.
+                const { ids: rateableIds } = await founderDirectReports(req);
+                if (!rateableIds.has(employeeId)) return JSON.stringify({ error: 'You can only rate employees who report to you.' });
                 const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2, '0')}`;
                 const existing = await SELECT.one.from(PERFORMANCE_RATING).where({ employee_employeeId: employeeId, reviewMonth, reviewYear });
                 const MN = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

@@ -2711,7 +2711,11 @@ html .sapUiBlockLayer {
 /* ══════════════════════════════════════════════════════════════════════════
    HR EMPLOYEE DIRECTORY  —  full-width table + slide-in profile drawer
    ══════════════════════════════════════════════════════════════════════════ */
-.tsEmpDirBody { position: relative; height: calc(100vh - 180px); overflow: hidden; }
+.tsEmpDirBody { position: relative; height: calc(100vh - 180px); min-height: 360px; overflow: hidden; display: flex; flex-direction: column; }
+/* sap.m.VBox wraps each child in a .sapMFlexItem (auto height); make the table's
+   wrapper fill the container so the sap.ui.table (visibleRowCountMode="Auto")
+   computes rows for the FULL height instead of falling back to its 5-row minimum. */
+.tsEmpDirBody > .sapMFlexItem:first-child { flex: 1 1 auto; min-height: 0; height: 100%; }
 .tsEmpTable { height: 100% !important; width: 100% !important; }
 
 /* ── Beautify the directory table ───────────────────────────────────── */

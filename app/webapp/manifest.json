@@ -49,7 +49,8 @@
             "css": [
                 { "uri": "css/style.css?v=47" },
                 { "uri": "css/FounderDashboard.css?v=1" },
-                { "uri": "css/FounderSidebar.css?v=1" }
+                { "uri": "css/FounderSidebar.css?v=1" },
+                { "uri": "css/sidebar-rail.css?v=1" }
             ]
         },
         "models": {

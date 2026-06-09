@@ -28,6 +28,7 @@
         icon="sap-icon://menu2"
         type="Transparent"
         press=".onMenuToggle"
+        visible="false"
         style="color:#ffffff; margin-right:8px;" />
 
     <!-- Logo -->

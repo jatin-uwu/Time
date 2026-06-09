@@ -71,8 +71,11 @@ sap.ui.define([
 
         openSubmit: function () {
             var that = this;
-            FP.post("getFounderEmployees", {}).then(function (d) { that._showSubmit(d || {}); })
-                .catch(function () { FP.toast("Could not load employees.", false); });
+            FP.post("getFounderEmployees", {}).then(function (d) {
+                d = d || {};
+                if (!(d.employees || []).length) { FP.toast("No employees assigned to you.", false); return; }
+                that._showSubmit(d);
+            }).catch(function () { FP.toast("Could not load employees.", false); });
         },
         _showSubmit: function (d) {
             var now = new Date();

@@ -9,9 +9,10 @@ sap.ui.define([
     "sap/m/Button",
     "sap/m/Input",
     "sap/m/Label",
-    "sap/m/VBox"
+    "sap/m/VBox",
+    "sap/ui/core/ResizeHandler"
 ], (Controller, JSONModel, Filter, FilterOperator, MessageBox, MessageToast,
-    CustomDialog, Button, Input, Label, VBox) => {
+    CustomDialog, Button, Input, Label, VBox, ResizeHandler) => {
     "use strict";
 
     // Plain fetch caller for /hr actions (CSRF + JSON, NO $batch). A document's
@@ -73,9 +74,53 @@ sap.ui.define([
                 .attachPatternMatched(this._onRouteMatched, this);
         },
 
+        // ── Make the table fill the available vertical space ──────────────────
+        // sap.ui.table inside sap.m.Page does not reliably inherit a CSS height,
+        // so we measure the real viewport space and set visibleRowCount directly.
+        onAfterRendering() {
+            const fn = this._sizeTable.bind(this);
+            setTimeout(fn, 0);
+            setTimeout(fn, 200);   // after layout/animation settles
+            if (!this._resizeReg) {
+                const oTable = this.byId("empTable");
+                if (oTable && oTable.getDomRef && oTable.getDomRef()) {
+                    this._resizeReg = ResizeHandler.register(oTable.getDomRef().parentNode || oTable, fn);
+                }
+                this._winResize = () => fn();
+                window.addEventListener("resize", this._winResize);
+            }
+        },
+
+        onExit() {
+            if (this._resizeReg) { ResizeHandler.deregister(this._resizeReg); this._resizeReg = null; }
+            if (this._winResize) { window.removeEventListener("resize", this._winResize); this._winResize = null; }
+        },
+
+        _sizeTable() {
+            const oTable = this.byId("empTable");
+            if (!oTable || !oTable.getDomRef) return;
+            const oDom = oTable.getDomRef();
+            if (!oDom) return;
+            const oBody = oDom.closest(".tsEmpDirBody") || oDom.parentNode;
+            if (!oBody) return;
+
+            const top = oBody.getBoundingClientRect().top;
+            const avail = Math.max(260, window.innerHeight - top - 16);   // fill to near the bottom
+            oBody.style.height = avail + "px";
+
+            // Measure the real row + header heights, then fit as many rows as possible.
+            const rowEl = oDom.querySelector(".sapUiTableTr, .sapUiTableRow");
+            const rowH = (rowEl && rowEl.getBoundingClientRect().height) || 33;
+            const hdrEl = oDom.querySelector(".sapUiTableColHdrCnt");
+            const hdrH = (hdrEl && hdrEl.getBoundingClientRect().height) || 48;
+            const n = Math.max(5, Math.floor((avail - hdrH) / rowH));
+            if (oTable.getVisibleRowCount() !== n) oTable.setVisibleRowCount(n);
+        },
+
         _onRouteMatched() {
             this._bInitialized = true;
             this._loadEmployees();
+            setTimeout(this._sizeTable.bind(this), 150);
         },
 
         _loadEmployees() {
@@ -87,6 +132,7 @@ sap.ui.define([
                     items.sort((a, b) => String(a.employeeId).localeCompare(String(b.employeeId)));
                     this._oEmpModel.setProperty("/items", items);
                     this._applyFilters();
+                    setTimeout(this._sizeTable.bind(this), 60);
                 })
                 .catch(err => {
                     MessageToast.show("Could not load employees.");

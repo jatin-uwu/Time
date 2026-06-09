@@ -15,8 +15,9 @@ sap.ui.define([
     "sap/ui/core/Icon",
     "timesheet/app/util/CustomDialog",
     "sap/ui/unified/FileUploader",
-    "sap/ui/core/HTML"
-], (Controller, JSONModel, MessageToast, MessageBox, ResponsivePopover, Bar, Button, VBox, HBox, Label, Text, Title, Avatar, Icon, CustomDialog, FileUploader, HTML) => {
+    "sap/ui/core/HTML",
+    "timesheet/app/util/AppSidebar"
+], (Controller, JSONModel, MessageToast, MessageBox, ResponsivePopover, Bar, Button, VBox, HBox, Label, Text, Title, Avatar, Icon, CustomDialog, FileUploader, HTML, AppSidebar) => {
     "use strict";
 
     // Routes under the manager "Management" menu — only a logged-in manager
@@ -181,6 +182,8 @@ sap.ui.define([
                 if (sRole && !bExplicit) {
                     this._oAppModel.setProperty("/userRole", sRole.toLowerCase());
                 }
+                // Bring up the collapsible rail for the resolved (non-Founder) role.
+                this._ensureRail();
             };
             const markResolved = () => {
                 if (this._bRoleResolved) return;
@@ -245,15 +248,13 @@ sap.ui.define([
                 }, 500);
             }, 300);
 
-            const _handleResize = () => {
+            // Register once: when the drawer opens/closes, flip the top-bar icon
+            // between hamburger (menu2) and close (decline) so the user has a
+            // consistent affordance to close the sidebar from any page.
+            AppSidebar.onStateChange((bOpen) => {
                 const oMenuBtn = this.byId("menuToggleBtn");
-                const oApp = this.byId("app");
-                const isMobile = window.innerWidth <= 550;
-                if (oMenuBtn) oMenuBtn.setVisible(isMobile);
-                if (oApp) { if (isMobile) oApp.hideMaster(); else oApp.showMaster(); }
-            };
-            _handleResize();
-            window.addEventListener("resize", _handleResize);
+                if (oMenuBtn) oMenuBtn.setIcon(bOpen ? "sap-icon://decline" : "sap-icon://menu2");
+            });
         },
 
         // ── Upload Profile Picture ────────────────────────────────────────────
@@ -319,6 +320,7 @@ sap.ui.define([
                 const full = {};
                 this._BADGE_ROUTES.forEach((rt) => { full[rt] = counts[rt] || 0; });
                 this._oAppModel.setProperty("/sidebarBadges", full);
+                AppSidebar.setBadges();   // mirror counts onto the DOM rail
             }).catch(() => { /* leave as-is on failure */ });
         },
 
@@ -329,6 +331,7 @@ sap.ui.define([
             const current = this._oAppModel.getProperty("/sidebarBadges/" + sRoute) || 0;
             if (!current) { this._refreshSidebarBadges(); return; }
             this._oAppModel.setProperty("/sidebarBadges/" + sRoute, 0);
+            AppSidebar.setBadges();
             callAction("markRouteNotificationsRead", { route: sRoute })
                 .then(() => this._refreshSidebarBadges())
                 .catch(() => this._refreshSidebarBadges());
@@ -860,17 +863,35 @@ sap.ui.define([
             this._oAppModel.setProperty("/unreadCount", mine.filter(n => !n.read).length);
         },
 
+        // Bring up / refresh the collapsible DOM rail for the resolved role.
+        // Founders keep their dedicated FounderSidebar (the rail is detached).
+        _ensureRail() {
+            const sRole = this._oAppModel.getProperty("/userRole");
+            const oMenuBtn = this.byId("menuToggleBtn");
+            if (!sRole || sRole === "founder") {
+                AppSidebar.detach();
+                if (oMenuBtn) oMenuBtn.setVisible(false);
+                return;
+            }
+            // Non-Founder: the top-bar hamburger is always visible on every page.
+            if (oMenuBtn) {
+                oMenuBtn.setVisible(true);
+                const bOpen = document.body.classList.contains("tsRailOpen");
+                oMenuBtn.setIcon(bOpen ? "sap-icon://decline" : "sap-icon://menu2");
+            }
+            let sLogo = "";
+            try { sLogo = sap.ui.require.toUrl("timesheet/app/images/companylogo.jpg"); } catch (e) { /* */ }
+            AppSidebar.attach(this, sRole, sLogo);
+        },
+
+        // The top-bar menu button pins / unpins the rail (icon-rail ⇄ full menu).
         onMenuToggle() {
-            const oApp = this.byId("app");
-            if (oApp.isMasterShown()) oApp.hideMaster(); else oApp.showMaster();
+            AppSidebar.toggle();
         },
 
         onNavSelect(oEvent) {
             const sTarget = oEvent.getSource().data("target");
-            console.log("Navigating to :", sTarget);
             if (sTarget) this.getOwnerComponent().getRouter().navTo(sTarget);
-            const oApp = this.byId("app");
-            if (oApp && oApp.isMasterShown()) oApp.hideMaster();
         },
 
         onLogout() {
