@@ -1136,15 +1136,33 @@ html, body { margin: 0; height: 100%; }
 .tsTaskOpenBtn .sapMBtnIcon { color: #3b82f6 !important; }
 
 /* ── Task Detail page ───────────────────────────────────────────── */
-.tsTaskDetailWrap { max-width: 1100px; margin: 0 auto; }
+.tsTaskDetailWrap { width: 100%; max-width: 100%; padding: 12px 16px; box-sizing: border-box; }
 
+/* Every card spans the full width of the centred content column. */
 .tsTaskDetailHeaderCard,
 .tsTaskDetailFormCard,
 .tsTaskUpdatesCard {
+    width: 100%;
+    box-sizing: border-box;
     background: #ffffff;
     border-radius: 12px;
     box-shadow: 0 2px 12px rgba(0,0,0,0.05);
 }
+
+/* The Panel's inner content area must also fill the card (some themes leave
+   it at auto width, which makes inner blocks look constrained). */
+.tsTaskDetailHeaderCard .sapMPanelContent,
+.tsTaskDetailFormCard .sapMPanelContent,
+.tsTaskUpdatesCard .sapMPanelContent { width: 100%; box-sizing: border-box; }
+
+/* Header row: left column claims the free space so the title + description
+   use the full width and the status chip sits flush to the right edge. */
+.tsTaskDetailHeaderCard .sapMPanelContent > .sapMFlexBox { width: 100%; box-sizing: border-box; }
+.tsTaskDetailLeft { flex: 1 1 auto; min-width: 0; }
+
+/* The description / attachment blocks span the whole card. */
+.tsTaskDescBlock { width: 100%; box-sizing: border-box; }
+.tsTaskDescText  { width: 100%; display: block; }
 
 .tsAttachmentName {
     font-size: 0.82rem;
@@ -1153,6 +1171,8 @@ html, body { margin: 0; height: 100%; }
 }
 
 .tsTaskAttachmentRow {
+    width: 100%;
+    box-sizing: border-box;
     background: #eff6ff;
     border: 1px solid #bfdbfe;
     border-radius: 8px;

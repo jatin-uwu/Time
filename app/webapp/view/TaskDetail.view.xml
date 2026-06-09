@@ -60,13 +60,13 @@
                     </HBox>
 
                     <!-- Full description block -->
-                    <VBox class="tsTaskDescBlock sapUiSmallMarginTop">
+                    <VBox width="100%" class="tsTaskDescBlock sapUiSmallMarginTop">
                         <Label text="Full description" class="tsTaskDescLabel" />
                         <Text text="{tdView>/task/taskDescription}" class="tsTaskDescText" />
                     </VBox>
 
                     <!-- Manager-attached reference documents (multiple) -->
-                    <VBox class="tsTaskAttachmentRow sapUiSmallMarginTop"
+                    <VBox width="100%" class="tsTaskAttachmentRow sapUiSmallMarginTop"
                           visible="{= ${tdView>/documents}.length > 0 }">
                         <Text text="Reference documents:" class="tsTaskAttachmentLabel" />
                         <VBox items="{tdView>/documents}">
