@@ -41,3 +41,9 @@
 [reminder] - Reminder cron scheduled (timezone: Asia/Kolkata)
 [cds] - server listening on { url: 'http://localhost:4004' }
 [cds] - server v9.9.0 launched in 860 ms
+[odata] - POST /employee/getNotifications 
+[odata] - POST /employee/getThoughtOfTheDay 
+[thought] - ZenQuotes fetch failed, using fallback: fetch failed
+[odata] - POST /employee/getThoughtOfTheDay 
+[odata] - POST /employee/getNotifications 
+[odata] - POST /employee/getNotifications 
