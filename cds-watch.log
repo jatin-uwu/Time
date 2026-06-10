@@ -40,10 +40,87 @@
 }
 [reminder] - Reminder cron scheduled (timezone: Asia/Kolkata)
 [cds] - server listening on { url: 'http://localhost:4004' }
-[cds] - server v9.9.0 launched in 860 ms
-[odata] - POST /employee/getNotifications 
+[cds] - server v9.9.0 launched in 868 ms
 [odata] - POST /employee/getThoughtOfTheDay 
-[thought] - ZenQuotes fetch failed, using fallback: fetch failed
-[odata] - POST /employee/getThoughtOfTheDay 
-[odata] - POST /employee/getNotifications 
-[odata] - POST /employee/getNotifications 
+[33m
+[1m        ___________________________
+ [0m
+[cds] - bootstrapping from { file: 'srv\\server.js' }
+[33m
+[1m        ___________________________
+ [0m
+[cds] - loaded model from 4 file(s):
+ 
+  srv\annotations.cds
+  srv\timesheet-service.cds
+  db\data-model.cds
+  node_modules\@sap\cds\common.cds
+
+[cds] - bootstrapping from { file: 'srv\\server.js' }
+[cds] - using bindings from: { registry: '~/.cds-services.json' }
+[cds] - connect to db > sqlite { url: 'db.sqlite', database: 'db.sqlite' }
+[cds] - using auth strategy {
+  kind: 'mocked',
+  impl: 'node_modules\\@sap\\cds\\lib\\srv\\middlewares\\auth\\basic-auth.js'
+}
+[cds] - serving EmployeeService {
+  at: [ '/employee' ],
+  decl: 'srv\\timesheet-service.cds:4',
+  impl: 'srv\\timesheet-service.js'
+}
+[cds] - serving ManagerService {
+  at: [ '/manager' ],
+  decl: 'srv\\timesheet-service.cds:530',
+  impl: 'srv\\timesheet-service.js'
+}
+[cds] - serving HRService {
+  at: [ '/hr' ],
+  decl: 'srv\\timesheet-service.cds:644',
+  impl: 'srv\\timesheet-service.js'
+}
+[cds] - serving FounderService {
+  at: [ '/founder' ],
+  decl: 'srv\\timesheet-service.cds:740',
+  impl: 'srv\\timesheet-service.js'
+}
+[cds] - loaded model from 4 file(s):
+ 
+  srv\annotations.cds
+  srv\timesheet-service.cds
+  db\data-model.cds
+  node_modules\@sap\cds\common.cds
+
+[reminder] - Reminder cron scheduled (timezone: Asia/Kolkata)
+[cds] - server listening on { url: 'http://localhost:4004' }
+[cds] - server v9.9.0 launched in 2098 ms
+[cds] - using bindings from: { registry: '~/.cds-services.json' }
+[cds] - connect to db > sqlite { url: 'db.sqlite', database: 'db.sqlite' }
+[cds] - using auth strategy {
+  kind: 'mocked',
+  impl: 'node_modules\\@sap\\cds\\lib\\srv\\middlewares\\auth\\basic-auth.js'
+}
+[cds] - serving EmployeeService {
+  at: [ '/employee' ],
+  decl: 'srv\\timesheet-service.cds:4',
+  impl: 'srv\\timesheet-service.js'
+}
+[cds] - serving ManagerService {
+  at: [ '/manager' ],
+  decl: 'srv\\timesheet-service.cds:530',
+  impl: 'srv\\timesheet-service.js'
+}
+[cds] - serving HRService {
+  at: [ '/hr' ],
+  decl: 'srv\\timesheet-service.cds:644',
+  impl: 'srv\\timesheet-service.js'
+}
+[cds] - serving FounderService {
+  at: [ '/founder' ],
+  decl: 'srv\\timesheet-service.cds:740',
+  impl: 'srv\\timesheet-service.js'
+}
+[reminder] - Reminder cron scheduled (timezone: Asia/Kolkata)
+
+  [91m[1m[EADDRINUSE][0m - port 4004 is already in use by another server process.
+  > Press Return to restart with an arbitrary port.
+

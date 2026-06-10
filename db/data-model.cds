@@ -4,6 +4,16 @@ using { managed } from '@sap/cds/common';
 
 context timesheet{
 
+// Thought for the Day — a single cached daily quote shared by all employees.
+// Only the current day's row is ever kept (the previous one is deleted when a new
+// quote is fetched), so this table holds at most one row. Populated lazily on the
+// first dashboard request of the day; see loadThoughtOfTheDay in the service.
+entity ThoughtOfTheDay {
+    key quoteDate : String(10);   // 'YYYY-MM-DD'
+        quote     : String(1000);
+        author    : String(200);
+}
+
 entity EmployeeMaster : managed {
     key employeeId      : String(10);
     employeeName        : String(100);

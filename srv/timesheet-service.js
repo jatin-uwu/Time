@@ -17,12 +17,18 @@ function emitFounderPing(data, req) {
 }
 
 // ── Thought for the Day ─────────────────────────────────────────────────────
-// A daily motivational quote shown on the employee dashboard. Fetched at most
-// once per calendar day from ZenQuotes (free, no API key) and cached in memory,
-// so dashboard loads never trigger an external call and every user sees the same
-// quote for the day. On API failure we serve the last good quote; if none exists
-// yet, a deterministic static fallback (same for everyone that day). The dashboard
-// therefore never breaks on a quote-API outage.
+// A fresh daily motivational quote from ZenQuotes (free, no API key), cached in
+// the database so every employee and every app instance sees the SAME quote for
+// the day and the external API is hit only ONCE per day for the whole system.
+//
+// Flow (lazy, on first request of the day):
+//   1. In-memory short-circuit (per instance) to skip the DB read on repeat loads.
+//   2. Read today's row from ThoughtOfTheDay → if present, serve it.
+//   3. Not present → fetch from ZenQuotes, DELETE the previous day's row, UPSERT
+//      today's row (so the table only ever holds the current day), serve it.
+//   4. External API down → serve whatever row exists (last good), else a static
+//      fallback. The dashboard therefore never breaks on an outage.
+const THOUGHT_TABLE = 'ccentrik.employee.timesheet.schema.timesheet.ThoughtOfTheDay';
 const THOUGHT_FALLBACKS = [
     { quote: 'The secret of getting ahead is getting started.', author: 'Mark Twain' },
     { quote: 'Quality is not an act, it is a habit.', author: 'Aristotle' },
@@ -32,38 +38,60 @@ const THOUGHT_FALLBACKS = [
     { quote: 'It always seems impossible until it is done.', author: 'Nelson Mandela' },
     { quote: 'Well done is better than well said.', author: 'Benjamin Franklin' }
 ];
-let _thoughtCache = { date: null, quote: null, author: null };
+let _thoughtMem = { date: null, quote: null, author: null };
 
 function _todayKey() { return new Date().toISOString().slice(0, 10); }
 function _dayHash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
 
+async function _fetchExternalQuote() {
+    if (typeof fetch !== 'function') return null;
+    try {
+        const res = await fetch('https://zenquotes.io/api/today', { method: 'GET' });
+        if (res.ok) {
+            const arr = await res.json();
+            const q = Array.isArray(arr) ? arr[0] : null;
+            if (q && q.q) return { quote: String(q.q).trim(), author: q.a ? String(q.a).trim() : 'Unknown' };
+        }
+    } catch (e) {
+        cds.log('thought').warn('ZenQuotes fetch failed:', e.message || e);
+    }
+    return null;
+}
+
 async function loadThoughtOfTheDay() {
     const today = _todayKey();
-    // Same day + already cached → no external call.
-    if (_thoughtCache.date === today && _thoughtCache.quote) return { ..._thoughtCache };
 
-    if (typeof fetch === 'function') {
-        try {
-            const res = await fetch('https://zenquotes.io/api/today', { method: 'GET' });
-            if (res.ok) {
-                const arr = await res.json();
-                const q = Array.isArray(arr) ? arr[0] : null;
-                if (q && q.q) {
-                    _thoughtCache = { date: today, quote: String(q.q).trim(), author: q.a ? String(q.a).trim() : 'Unknown' };
-                    return { ..._thoughtCache };
-                }
-            }
-        } catch (e) {
-            cds.log('thought').warn('ZenQuotes fetch failed, using fallback:', e.message || e);
-        }
+    // 1. Per-instance in-memory short-circuit.
+    if (_thoughtMem.date === today && _thoughtMem.quote) {
+        return { date: today, quote: _thoughtMem.quote, author: _thoughtMem.author || '' };
     }
 
-    // API failed/unavailable — reuse the last good quote if we have one…
-    if (_thoughtCache.quote) return { ..._thoughtCache, date: today };
-    // …otherwise a deterministic static fallback (stable for the whole day).
+    // 2. Today's quote already cached in the DB (stored by whichever request/instance
+    //    was first today) → serve it; no external call.
+    let row = await SELECT.one.from(THOUGHT_TABLE).where({ quoteDate: today });
+    if (row && row.quote) {
+        _thoughtMem = { date: today, quote: row.quote, author: row.author };
+        return { date: today, quote: row.quote, author: row.author || '' };
+    }
+
+    // 3. First request of the day → fetch fresh, keep only today's row.
+    const fresh = await _fetchExternalQuote();
+    if (fresh) {
+        try {
+            await DELETE.from(THOUGHT_TABLE).where('quoteDate <>', today);   // drop yesterday's
+            await UPSERT.into(THOUGHT_TABLE).entries({ quoteDate: today, quote: fresh.quote, author: fresh.author });
+        } catch (e) {
+            cds.log('thought').warn('store thought failed:', e.message || e);   // serving still works
+        }
+        _thoughtMem = { date: today, quote: fresh.quote, author: fresh.author };
+        return { date: today, quote: fresh.quote, author: fresh.author };
+    }
+
+    // 4. External API unavailable → last good row if any, else a static fallback.
+    row = await SELECT.one.from(THOUGHT_TABLE);
+    if (row && row.quote) return { date: today, quote: row.quote, author: row.author || '' };
     const f = THOUGHT_FALLBACKS[Math.abs(_dayHash(today)) % THOUGHT_FALLBACKS.length];
-    _thoughtCache = { date: today, quote: f.quote, author: f.author };
-    return { ..._thoughtCache };
+    return { date: today, quote: f.quote, author: f.author };
 }
 
 const HEADER = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetHeader';
@@ -477,7 +505,7 @@ class EmployeeService extends cds.ApplicationService {
             };
         });
 
-        // ── Thought for the Day (cached daily quote, shared by all users) ─────
+        // ── Thought for the Day (fresh daily quote from ZenQuotes, cached/day) ─
         this.on('getThoughtOfTheDay', async () => {
             return JSON.stringify(await loadThoughtOfTheDay());
         });
