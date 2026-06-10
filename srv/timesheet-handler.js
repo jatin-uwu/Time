@@ -9,6 +9,7 @@ const HEADER     = `${NS}.TimesheetHeader`;
 const ENTRY      = `${NS}.TimesheetEntry`;
 const EMPLOYEE   = `${NS}.EmployeeMaster`;
 const TASK       = `${NS}.TaskMaster`;
+const TASK_ASSIGNEE = `${NS}.TaskAssignee`;
 const DAY_UNLOCK = `${NS}.TimesheetDayUnlockRequest`;
 const PREV_WEEK  = `${NS}.TimesheetPrevWeekRequest`;
 
@@ -162,9 +163,31 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
         const prevWeekReq       = prevWeekReqs.length ? prevWeekReqs[0] : null;
         const isPrevWeekApproved = prevWeekReq && prevWeekReq.status === 'Approved';
 
-        const tasks = await SELECT.from(TASK)
+        // Tasks available in the timesheet dropdown = the employee's own SOLO tasks
+        // PLUS every GROUP task they are a member of (membership lives in the
+        // TaskAssignee table, and a group task's assignedTo_employeeId is null — so
+        // a plain assignedTo filter alone silently drops all group tasks).
+        const soloTasks = await SELECT.from(TASK)
             .where({ assignedTo_employeeId: emp.employeeId })
             .columns('taskId', 'taskName', 'status');
+
+        const memberRows = await SELECT.from(TASK_ASSIGNEE)
+            .where({ assignee_employeeId: emp.employeeId })
+            .columns('task_taskId');
+        const groupTaskIds = (memberRows || []).map(r => r.task_taskId).filter(Boolean);
+        const groupTasks = groupTaskIds.length
+            ? await SELECT.from(TASK)
+                .where({ taskId: { in: groupTaskIds }, taskType: 'group' })
+                .columns('taskId', 'taskName', 'status')
+            : [];
+
+        // Merge + de-duplicate by taskId (an employee can't be in both lists for the
+        // same task, but the guard keeps the result clean regardless).
+        const seenTaskIds = new Set();
+        const tasks = [];
+        [...soloTasks, ...groupTasks].forEach(t => {
+            if (t && t.taskId && !seenTaskIds.has(t.taskId)) { seenTaskIds.add(t.taskId); tasks.push(t); }
+        });
 
         return {
             timesheetId:      id,

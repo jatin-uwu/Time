@@ -56,7 +56,12 @@ sap.ui.define([
         LEAVE_APPROVED:      "leave-history",
         LEAVE_REJECTED:      "leave-history",
         TASK_ASSIGNED:       "task-description",
-        PERFORMANCE_RATED:   "rating-history"
+        PERFORMANCE_RATED:   "rating-history",
+        // Group-task notifications deep-link to the specific group task detail page
+        // (the taskId is carried in the notification's referenceId — see onNotifClick).
+        GROUP_TASK_ASSIGNED:  "group-task-detail",
+        GROUP_TASK_UPDATE:    "group-task-detail",
+        GROUP_TASK_COMPLETED: "group-task-detail"
     };
 
     function getNavRoute(type, role) {
@@ -225,6 +230,7 @@ sap.ui.define([
                         type:      n.type    || "DEFAULT",
                         title:     n.title   || n.weekRange || "Notification",
                         message:   n.message || "",
+                        referenceId: n.referenceId || "",
                         notifiedAt: n.timestamp || null,
                         isRead:    !!(n.read || n.isRead),
                         _source:   "local"
@@ -337,7 +343,19 @@ sap.ui.define([
             var sRoute = getNavRoute(target.type, this._currentRole());
             if (sRoute) {
                 try {
-                    this.getOwnerComponent().getRouter().navTo(sRoute);
+                    var oRouter = this.getOwnerComponent().getRouter();
+                    if (sRoute === "group-task-detail") {
+                        // The group task detail route needs the taskId, carried in the
+                        // notification's referenceId. Without it, fall back to the
+                        // group-tasks list rather than failing the navigation.
+                        if (target.referenceId) {
+                            oRouter.navTo("group-task-detail", { taskId: target.referenceId });
+                        } else {
+                            oRouter.navTo("group-tasks");
+                        }
+                    } else {
+                        oRouter.navTo(sRoute);
+                    }
                 } catch (e) {
                     MessageToast.show("Could not open the related page.");
                 }

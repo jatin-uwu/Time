@@ -3032,15 +3032,26 @@ class FounderService extends cds.ApplicationService {
         });
 
         // Org-wide pending approvals (timesheets + leaves) across every employee.
-        this.on('getFounderApprovals', async () => {
+        this.on('getFounderApprovals', async (req) => {
             try {
-                const [emps, headers, leaves, prevWeeks, dayUnlocks] = await Promise.all([
+                // Authority scope: only requests from employees whose DIRECT
+                // reporting manager is this founder are visible. Requests from anyone
+                // else (incl. indirect reports under another manager) are filtered out.
+                const { ids: scopeIds } = await founderDirectReports(req);
+                const inScope = (empId) => scopeIds.has(empId);
+
+                const [emps, headersAll, leavesAll, prevWeeksAll, dayUnlocksAll] = await Promise.all([
                     SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department'),
                     SELECT.from(HEADER).where({ status: { in: ['Pending', 'Submitted'] } }),
                     SELECT.from(LEAVE_REQUEST).where({ status: 'Pending' }),
                     SELECT.from(PREV_WEEK_REQUEST).where({ status: 'Pending' }),
                     SELECT.from(DAY_UNLOCK_REQUEST).where({ status: 'Pending' })
                 ]);
+                const headers = (headersAll || []).filter(h => inScope(h.employee_employeeId));
+                const leaves = (leavesAll || []).filter(l => inScope(l.employee_employeeId));
+                const prevWeeks = (prevWeeksAll || []).filter(r => inScope(r.employee_employeeId));
+                const dayUnlocks = (dayUnlocksAll || []).filter(r => inScope(r.employee_employeeId));
+
                 const nm = {}, dp = {}; emps.forEach(e => { nm[e.employeeId] = e.employeeName; dp[e.employeeId] = e.department || '—'; });
                 const ts = (headers || []).map(h => ({
                     timesheetId: h.timesheetId,
@@ -3161,6 +3172,8 @@ class FounderService extends cds.ApplicationService {
                 if (!timesheetId) return JSON.stringify({ error: 'timesheetId is required.' });
                 const header = await SELECT.one.from(HEADER).where({ timesheetId });
                 if (!header) return JSON.stringify({ error: `Timesheet '${timesheetId}' not found.` });
+                const { ids: scopeIds } = await founderDirectReports(req);
+                if (!scopeIds.has(header.employee_employeeId)) return JSON.stringify({ error: 'This timesheet is not within your reporting hierarchy.' });
                 if (header.status !== 'Pending') return JSON.stringify({ error: `Cannot act — current status is '${header.status}'.` });
                 if (approve) {
                     await UPDATE(HEADER).set({ status: 'Approved', approvedOn: new Date(), remarks: remarks || '' }).where({ timesheetId });
@@ -3185,6 +3198,8 @@ class FounderService extends cds.ApplicationService {
                 if (!leaveId) return JSON.stringify({ error: 'leaveId is required.' });
                 const leave = await SELECT.one.from(LEAVE_REQUEST).where({ leaveId });
                 if (!leave) return JSON.stringify({ error: `Leave request '${leaveId}' not found.` });
+                const { ids: scopeIds } = await founderDirectReports(req);
+                if (!scopeIds.has(leave.employee_employeeId)) return JSON.stringify({ error: 'This leave request is not within your reporting hierarchy.' });
                 if (leave.status !== 'Pending') return JSON.stringify({ error: `Leave is already '${leave.status}'.` });
                 const newStatus = approve ? 'Approved' : 'Rejected';
                 await UPDATE(LEAVE_REQUEST).set({ status: newStatus, managerRemarks: remarks || '', approvedOn: new Date() }).where({ leaveId });
@@ -3207,9 +3222,12 @@ class FounderService extends cds.ApplicationService {
                 const { kind, requestId, approve, remarks } = req.data;
                 if (!requestId) return JSON.stringify({ error: 'requestId is required.' });
 
+                const { ids: scopeIds } = await founderDirectReports(req);
+
                 if (kind === 'prevweek') {
                     const request = await SELECT.one.from(PREV_WEEK_REQUEST).where({ requestId });
                     if (!request) return JSON.stringify({ error: `Request '${requestId}' not found.` });
+                    if (!scopeIds.has(request.employee_employeeId)) return JSON.stringify({ error: 'This request is not within your reporting hierarchy.' });
                     if (request.status !== 'Pending') return JSON.stringify({ error: `Request is already '${request.status}'.` });
                     const newStatus = approve ? 'Approved' : 'Rejected';
                     let tsId = null;
@@ -3243,6 +3261,7 @@ class FounderService extends cds.ApplicationService {
                 if (kind === 'dayunlock') {
                     const request = await SELECT.one.from(DAY_UNLOCK_REQUEST).where({ requestId });
                     if (!request) return JSON.stringify({ error: `Request '${requestId}' not found.` });
+                    if (!scopeIds.has(request.employee_employeeId)) return JSON.stringify({ error: 'This request is not within your reporting hierarchy.' });
                     if (request.status !== 'Pending') return JSON.stringify({ error: `Request is already '${request.status}'.` });
                     const newStatus = approve ? 'Approved' : 'Rejected';
                     await UPDATE(DAY_UNLOCK_REQUEST).set({ status: newStatus, hrRemarks: remarks || '', resolvedOn: new Date() }).where({ requestId });

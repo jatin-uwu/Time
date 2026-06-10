@@ -46,6 +46,43 @@ function table(headers, rows, widths) {
     });
 }
 
+// ── Visual helpers: native Word figures & bar "graphs" (no images required) ────
+const NO_BORDER = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+const noBorders = { top: NO_BORDER, bottom: NO_BORDER, left: NO_BORDER, right: NO_BORDER, insideHorizontal: NO_BORDER, insideVertical: NO_BORDER };
+const figCaption = t => new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 40, after: 180 }, children: [new TextRun({ text: t, italics: true, size: 18, color: GREY })] });
+const arrowDown = () => new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 24, after: 24 }, children: [new TextRun({ text: '▼', size: 22, color: GREY })] });
+
+// Horizontal bar graph rendered as a borderless Word table (prints/exports cleanly).
+function barChart(items) {
+    const max = Math.max(...items.map(i => i.value), 1);
+    const rows = items.map((it, idx) => {
+        const fill = idx % 2 === 0 ? LIGHT : null;
+        const blocks = Math.max(1, Math.round((it.value / max) * 26));
+        return new TableRow({ children: [
+            cell(it.label, { width: 32, fill }),
+            new TableCell({ width: { size: 54, type: WidthType.PERCENTAGE }, shading: fill ? { fill } : undefined, margins: { top: 50, bottom: 50, left: 120, right: 60 }, children: [new Paragraph({ children: [new TextRun({ text: '█'.repeat(blocks), size: 18, color: it.color || BLUE })] })] }),
+            cell(it.value + (it.unit || '%'), { width: 14, bold: true, fill })
+        ] });
+    });
+    return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows });
+}
+
+// A single full-width labelled box (diagram building block).
+function boxRow(text, fill, color = 'FFFFFF', sub = null) {
+    const kids = [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text, bold: true, color, size: 20 })] })];
+    if (sub) kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: sub, color, size: 16 })] }));
+    return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [new TableCell({ shading: { fill }, margins: { top: 120, bottom: 120, left: 120, right: 120 }, children: kids })] })] });
+}
+
+// A row of side-by-side labelled boxes.
+function boxCols(items) {
+    const w = Math.floor(100 / items.length);
+    return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({
+        children: items.map(it => new TableCell({ width: { size: w, type: WidthType.PERCENTAGE }, shading: { fill: it.fill }, margins: { top: 100, bottom: 100, left: 80, right: 80 },
+            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: it.text, bold: true, color: it.color || 'FFFFFF', size: 18 })] })]
+                .concat(it.sub ? [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: it.sub, color: it.color || 'FFFFFF', size: 14 })] })] : []) })) })] });
+}
+
 // ── COVER ─────────────────────────────────────────────────────────────────────
 const cl = (t, s, c, b, before = 0, after = 0) => new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before, after }, children: [new TextRun({ text: t, size: s, color: c, bold: b })] });
 push(
@@ -107,6 +144,28 @@ push(
     spacer()
 );
 
+push(
+    h3('Figure 1 — Layered Solution Architecture'),
+    boxRow('USERS   —   Employee  ·  Manager  ·  HR  ·  Founder', GREY),
+    arrowDown(),
+    boxRow('SAPUI5 Frontend', BLUE, 'FFFFFF', 'Role-based responsive screens & dashboards'),
+    arrowDown(),
+    boxRow('SAP Approuter + XSUAA', '7C3AED', 'FFFFFF', 'Authentication · roles · scopes'),
+    arrowDown(),
+    boxCols([
+        { text: 'EmployeeService', sub: '/employee', fill: NAVY },
+        { text: 'ManagerService', sub: '/manager', fill: NAVY },
+        { text: 'HRService', sub: '/hr', fill: NAVY },
+        { text: 'FounderService', sub: '/founder', fill: NAVY }
+    ]),
+    arrowDown(),
+    boxRow('SAP CAP Business Logic', '0F766E', 'FFFFFF', 'CDS data models · OData V4 · server-side validations'),
+    arrowDown(),
+    boxRow('SAP HANA Cloud', SLATE, 'FFFFFF', 'Secure, high-performance transactional database'),
+    figCaption('Figure 1: Presentation, security, services, business logic and data are cleanly separated — each layer only talks to the one beneath it.'),
+    spacer()
+);
+
 // ── 3. USER ROLES & ACCESS ────────────────────────────────────────────────────
 push(
     h1('3. User Roles & Access Control'),
@@ -120,12 +179,49 @@ push(
     spacer()
 );
 
+push(
+    h2('Two-Factor Role Authorization'),
+    p('Access is never based on the login token alone. For every protected operation the system requires BOTH of the following to agree:'),
+    ...bullets([
+        'The correct XSUAA role/scope is present in the sign-in token (the identity provider).',
+        'A matching role is recorded against the same user in the Employee Master table (the company’s own source of truth).'
+    ]),
+    p('Access is granted only when both match. This prevents "privilege escalation": even if an extra role collection is accidentally or maliciously assigned in the identity provider, the user still cannot act in that role unless the Employee Master agrees. Every employee record carries an explicit role (Employee, Manager, HR or Founder).'),
+    h3('Figure 2 — Login & Authorization Gate'),
+    boxRow('User signs in via SAP XSUAA', BLUE),
+    arrowDown(),
+    boxRow('Check 1 — Is the email registered in Employee Master?', SLATE),
+    arrowDown(),
+    boxRow('Check 2 — Is the account Active (not deactivated)?', SLATE),
+    arrowDown(),
+    boxRow('Check 3 — Does the XSUAA role match the Employee Master role?', SLATE),
+    arrowDown(),
+    boxCols([
+        { text: 'ALL THREE PASS', sub: 'Access granted for the matched role', fill: '15803D' },
+        { text: 'ANY CHECK FAILS', sub: 'Signed out with a clear reason', fill: 'B91C1C' }
+    ]),
+    figCaption('Figure 2: A user must clear all three checks. Failures return a specific message — not registered, account inactive, or role mismatch.'),
+    spacer(),
+    h3('Figure 3 — Role Hierarchy (capabilities are additive)'),
+    boxRow('FOUNDER — full executive oversight of the whole organization', '1F3864'),
+    arrowDown(),
+    boxCols([
+        { text: 'MANAGER', sub: 'Team approvals, tasks, ratings', fill: BLUE },
+        { text: 'HR', sub: 'Workforce administration', fill: '0F766E' }
+    ]),
+    arrowDown(),
+    boxRow('EMPLOYEE — self-service foundation (everyone has this)', GREY),
+    figCaption('Figure 3: Higher roles include the abilities of the roles beneath them; the backend still re-validates the exact role on every request.'),
+    spacer()
+);
+
 // ── 4. DATA MODEL ─────────────────────────────────────────────────────────────
 push(
     h1('4. Data Model'),
     p('The system persists all data through CDS entities (no duplicate or analytics-only tables). The principal entities are:'),
     table(['Entity', 'Purpose'], [
-        ['EmployeeMaster', 'Core employee record — identity, department, designation, manager, status, personal & bank details, profile photo'],
+        ['EmployeeMaster', 'Core employee record — identity, department, designation, authoritative role (Employee/Manager/HR/Founder), manager, status, personal & bank details, profile photo'],
+        ['ThoughtOfTheDay', 'Single cached daily quote shared by all employees (refreshed once per day)'],
         ['EmployeeDocument', 'Employee documents and the company newsletter'],
         ['TaskMaster', 'Individual & group tasks — assignee, reviewer, priority, status, dates, attachments'],
         ['TaskAssignee / TaskMessage / TaskUpdate / TaskDocument / TaskAttachment', 'Group-task membership, chat, progress updates and attachments'],
@@ -148,6 +244,8 @@ push(h1('5. Functional Modules & Features'));
 push(h2('5.1 Authentication & Identity'), ...bullets([
     'Login / logout with role-based navigation',
     'Email-based identity resolution (case-insensitive) linking the login to the employee record',
+    'Two-factor role authorization — the XSUAA token role AND the Employee Master role must match before access is granted (see Figure 2)',
+    'Login gate — a user can sign in only when their email exists in Employee Master, the account is Active, and the role matches; otherwise they are signed out with a clear message',
     'Automatic role detection with Founder → Executive Command Center redirect',
     'Inactive accounts are blocked at the service layer on every request',
     'Profile popover with personal details and profile-picture upload'
@@ -209,12 +307,19 @@ push(h2('5.8 Notifications'), ...bullets([
 ]));
 
 push(h2('5.9 Dashboards'), ...bullets([
-    'Employee Dashboard — tasks, leave balance, timesheet summary, ratings, work anniversary, attendance',
+    'Employee Dashboard — tasks, leave balance, timesheet summary, ratings, work anniversary, attendance, daily hours, week completion and a "Thought for the Day"',
     'Manager Dashboard — team performance, pending approvals, team attendance, department metrics',
     'HR Dashboard — employee statistics and workforce overview'
 ]));
 
-push(h2('5.10 Founder Executive Command Center'),
+push(h2('5.10 Thought for the Day'), ...bullets([
+    'A fresh motivational quote shown to every employee on the dashboard each day',
+    'Fetched once per day from a trusted external quote service and cached in the database',
+    'Every employee sees the same quote for the whole day; it changes automatically the next day',
+    'Resilient by design — if the external service is unavailable, the last saved quote (or a built-in quote) is shown so the dashboard never breaks'
+]));
+
+push(h2('5.11 Founder Executive Command Center'),
     ...bullets([
         'Overall, Department and Employee analytics views with a collapsible founder sidebar',
         'Company Health Score, Productivity Score and Executive Insights',
@@ -231,6 +336,9 @@ push(h1('6. Business Rules & Validations'),
     p('Validations are enforced server-side on every request (and mirrored in the UI), guaranteeing data integrity regardless of entry point. The rules below are drawn directly from the implemented services.'));
 
 push(h2('6.1 Authentication & Access'), table(['Rule', 'Behaviour'], [
+    ['Two-factor role match', 'A protected action runs only when the XSUAA token role AND the Employee Master role both match — otherwise access is denied (403)'],
+    ['Email must be registered', 'A login whose email is not present in Employee Master is denied ("not registered")'],
+    ['Role mismatch denial', 'If the token role does not equal the Employee Master role, the session is denied ("role mismatch")'],
     ['Inactive login block', 'Inactive employees are blocked on every service call ("before *" guard) and signed out'],
     ['Identity required', 'A user that cannot be identified from the token is rejected (401)'],
     ['Role re-validation', 'Each module re-checks the caller’s role and scope'],
@@ -366,7 +474,17 @@ push(spacer());
 // ── 8. FOUNDER CALCULATIONS ───────────────────────────────────────────────────
 push(h1('8. Founder Dashboard Calculations'),
     p('Executive metrics are computed live from Tasks, Ratings, Leave, Timesheets and Employee records using consistent weighted formulas, applied at organization, department and employee scope so benchmarks are directly comparable.'));
-push(h2('Company Health Score'), table(['Component', 'Weight'], [['Task Completion', '30%'], ['Average Rating', '25%'], ['Timesheet Compliance', '20%'], ['Active Workforce', '15%'], ['Leave Utilization', '10%']], [70, 30]), spacer(80));
+push(h2('Company Health Score'),
+    p('The Company Health Score blends five signals into a single 0–100 number. The graph below shows how much each one contributes:'),
+    barChart([
+        { label: 'Task Completion', value: 30, color: '2563EB' },
+        { label: 'Average Rating', value: 25, color: '0F766E' },
+        { label: 'Timesheet Compliance', value: 20, color: '7C3AED' },
+        { label: 'Active Workforce', value: 15, color: 'F59E0B' },
+        { label: 'Leave Utilization', value: 10, color: '64748B' }
+    ]),
+    figCaption('Figure 4: Company Health Score — contribution of each component (totals 100%).'),
+    spacer(80));
 push(h2('Productivity Score'), table(['Component', 'Weight'], [['Task Completion', '50%'], ['Timesheet Compliance', '30%'], ['Rating Score', '20%']], [70, 30]), spacer(80));
 push(h2('Department Health Score'), table(['Component', 'Weight'], [['Rating', '40%'], ['Task Completion', '30%'], ['Timesheet Compliance', '20%'], ['Leave Balance', '10%']], [70, 30]), spacer(80));
 push(h2('Employee Executive Metrics'),
