@@ -25,77 +25,19 @@
 }
 [cds] - serving ManagerService {
   at: [ '/manager' ],
-  decl: 'srv\\timesheet-service.cds:526',
+  decl: 'srv\\timesheet-service.cds:530',
   impl: 'srv\\timesheet-service.js'
 }
 [cds] - serving HRService {
   at: [ '/hr' ],
-  decl: 'srv\\timesheet-service.cds:640',
+  decl: 'srv\\timesheet-service.cds:644',
   impl: 'srv\\timesheet-service.js'
 }
 [cds] - serving FounderService {
   at: [ '/founder' ],
-  decl: 'srv\\timesheet-service.cds:736',
+  decl: 'srv\\timesheet-service.cds:740',
   impl: 'srv\\timesheet-service.js'
 }
 [reminder] - Reminder cron scheduled (timezone: Asia/Kolkata)
 [cds] - server listening on { url: 'http://localhost:4004' }
-[cds] - server v9.9.0 launched in 971 ms
-[odata] - POST /employee/getNotifications 
-[odata] - POST /employee/getCurrentUser 
-[odata] - POST /employee/getCurrentUser 
-[odata] - POST /employee/getNotifications 
-[odata] - GET /employee/$metadata { 'sap-language': '6N' }
-[odata] - GET /employee/ 
-[odata] - GET /employee/ 
-[odata] - POST /employee/$batch 
-[odata] - > POST /getCurrentUser 
-[odata] - POST /employee/getGroupTasksUnread 
-[odata] - POST /employee/getSidebarBadges 
-[odata] - POST /employee/getTimesheetWeekData 
-[odata] - GET /employee/ 
-[odata] - POST /employee/getWorkAnniversary 
-[odata] - POST /employee/getMyTasks 
-[odata] - POST /employee/getPerformanceRating 
-[odata] - POST /employee/getPerformanceTrend 
-[odata] - POST /employee/getTaskSummary 
-[odata] - POST /employee/getUpcomingCalendar 
-[gcal] - Fetching Google Meet events for: neha.kapoor@ccentrik.com
-[gcal] - getUpcomingCalendar failed: Google service account credentials not configured.
-[odata] - POST /employee/getTodayAttendance 
-[odata] - POST /employee/getAttendance 
-[odata] - GET /employee/ 
-[odata] - POST /employee/$batch 
-[odata] - > GET /MyTimesheets {
-  '$filter': "employee_employeeId eq 'EMP1003'",
-  '$skip': '0',
-  '$top': '500'
-}
-[error] - 403 - Error: User 'neha' is lacking required roles: [Manager]
-    at requires (C:\Users\mis\Desktop\Timesheet\Time\node_modules\@sap\cds\lib\srv\protocols\http.js:63:16)
-    at Layer.handleRequest (C:\Users\mis\Desktop\Timesheet\Time\node_modules\router\lib\layer.js:152:17)
-    at trimPrefix (C:\Users\mis\Desktop\Timesheet\Time\node_modules\router\index.js:342:13)
-    at C:\Users\mis\Desktop\Timesheet\Time\node_modules\router\index.js:297:9
-    at processParams (C:\Users\mis\Desktop\Timesheet\Time\node_modules\router\index.js:582:12)
-    at next (C:\Users\mis\Desktop\Timesheet\Time\node_modules\router\index.js:291:5)
-    at router.handle (C:\Users\mis\Desktop\Timesheet\Time\node_modules\router\index.js:186:3)
-    at router (C:\Users\mis\Desktop\Timesheet\Time\node_modules\router\index.js:60:12)
-    at Layer.handleRequest (C:\Users\mis\Desktop\Timesheet\Time\node_modules\router\lib\layer.js:152:17)
-    at trimPrefix (C:\Users\mis\Desktop\Timesheet\Time\node_modules\router\index.js:342:13) {
-  code: '403'
-}
-[odata] - GET /employee/LeaveRequests {
-  '$filter': "employee_employeeId eq 'EMP1003'",
-  '$skip': '0',
-  '$top': '200'
-}
-[odata] - POST /employee/getProfilePhoto 
-[profile] - getProfilePhoto: emp=EMP1003 | hasPhoto=false | mime=null
-[odata] - POST /employee/getNewsletterMeta 
-[odata] - GET /employee/ 
-[odata] - GET /employee/ 
-[odata] - GET /employee/ 
-[odata] - POST /employee/getRecentNotifications 
-[odata] - POST /employee/getGroupTasksUnread 
-[odata] - POST /employee/getSidebarBadges 
-[odata] - POST /employee/getNewsletterMeta 
+[cds] - server v9.9.0 launched in 860 ms

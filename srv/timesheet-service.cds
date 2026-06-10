@@ -308,6 +308,10 @@ service EmployeeService @(path: '/employee') {
     // pattern as getTeamAttendance. Membership (assignee OR the manager who
     // created the task) is enforced inside every handler, so an employee can
     // only ever see/act on group tasks they belong to.
+    // Thought for the Day — daily motivational quote, fetched once per day on the
+    // backend and cached/shared across all users (see loadThoughtOfTheDay).
+    action getThoughtOfTheDay()                                            returns LargeString;
+
     @(requires: ['Employee', 'Manager'])
     action getGroupTasks()                                                 returns LargeString;
 

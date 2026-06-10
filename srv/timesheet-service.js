@@ -16,6 +16,56 @@ function emitFounderPing(data, req) {
     try { if (req && FOUNDER_MUTATING_EVENTS.has(req.event)) founderEvents.ping(req.event); } catch (e) { /* never break the request */ }
 }
 
+// ── Thought for the Day ─────────────────────────────────────────────────────
+// A daily motivational quote shown on the employee dashboard. Fetched at most
+// once per calendar day from ZenQuotes (free, no API key) and cached in memory,
+// so dashboard loads never trigger an external call and every user sees the same
+// quote for the day. On API failure we serve the last good quote; if none exists
+// yet, a deterministic static fallback (same for everyone that day). The dashboard
+// therefore never breaks on a quote-API outage.
+const THOUGHT_FALLBACKS = [
+    { quote: 'The secret of getting ahead is getting started.', author: 'Mark Twain' },
+    { quote: 'Quality is not an act, it is a habit.', author: 'Aristotle' },
+    { quote: 'Success is the sum of small efforts, repeated day in and day out.', author: 'Robert Collier' },
+    { quote: 'Done is better than perfect.', author: 'Sheryl Sandberg' },
+    { quote: 'Great things are done by a series of small things brought together.', author: 'Vincent van Gogh' },
+    { quote: 'It always seems impossible until it is done.', author: 'Nelson Mandela' },
+    { quote: 'Well done is better than well said.', author: 'Benjamin Franklin' }
+];
+let _thoughtCache = { date: null, quote: null, author: null };
+
+function _todayKey() { return new Date().toISOString().slice(0, 10); }
+function _dayHash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
+
+async function loadThoughtOfTheDay() {
+    const today = _todayKey();
+    // Same day + already cached → no external call.
+    if (_thoughtCache.date === today && _thoughtCache.quote) return { ..._thoughtCache };
+
+    if (typeof fetch === 'function') {
+        try {
+            const res = await fetch('https://zenquotes.io/api/today', { method: 'GET' });
+            if (res.ok) {
+                const arr = await res.json();
+                const q = Array.isArray(arr) ? arr[0] : null;
+                if (q && q.q) {
+                    _thoughtCache = { date: today, quote: String(q.q).trim(), author: q.a ? String(q.a).trim() : 'Unknown' };
+                    return { ..._thoughtCache };
+                }
+            }
+        } catch (e) {
+            cds.log('thought').warn('ZenQuotes fetch failed, using fallback:', e.message || e);
+        }
+    }
+
+    // API failed/unavailable — reuse the last good quote if we have one…
+    if (_thoughtCache.quote) return { ..._thoughtCache, date: today };
+    // …otherwise a deterministic static fallback (stable for the whole day).
+    const f = THOUGHT_FALLBACKS[Math.abs(_dayHash(today)) % THOUGHT_FALLBACKS.length];
+    _thoughtCache = { date: today, quote: f.quote, author: f.author };
+    return { ..._thoughtCache };
+}
+
 const HEADER = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetHeader';
 const ENTRY = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetEntry';
 const EMPLOYEE = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeMaster';
@@ -425,6 +475,11 @@ class EmployeeService extends cds.ApplicationService {
                 managerId: emp.manager_employeeId || '',
                 isActive: emp.isActive !== false
             };
+        });
+
+        // ── Thought for the Day (cached daily quote, shared by all users) ─────
+        this.on('getThoughtOfTheDay', async () => {
+            return JSON.stringify(await loadThoughtOfTheDay());
         });
 
         // ── Company Newsletter (latest, visible to everyone) ──────────────────

@@ -64,6 +64,7 @@ sap.ui.define([
                 dashGridHTML: "",
                 weekTotalLabel: "0:00 hrs this week",
                 isNextDisabled: false,
+                thought: { quote: "", author: "" },
                 completion: {
                     pct: 0, label: "0 of 5 days filled",
                     state: "None", hint: "Fill Mon–Fri to complete your timesheet"
@@ -266,6 +267,7 @@ sap.ui.define([
             this._loadPerformanceRating();
             this._loadPerformanceTrend();
             this._loadTaskSummary();
+            this._loadThoughtOfTheDay();
 
             this._loadLeaveOverview();
             this._loadUpcomingCalendar();
@@ -1000,6 +1002,22 @@ sap.ui.define([
                 })
                 .finally(() => this._refreshDash());
         },
+
+        // Thought for the Day — backend returns a JSON string {quote, author}.
+        // Cached server-side per day; the dashboard never blocks on it and renders
+        // its own fallback if the call fails.
+        _loadThoughtOfTheDay() {
+            this._callAction("getThoughtOfTheDay")
+                .then(oData => {
+                    let t = oData;
+                    if (typeof oData === "string") { try { t = JSON.parse(oData); } catch (e) { t = null; } }
+                    if (t && t.quote) {
+                        this._oDashModel.setProperty("/thought", { quote: t.quote, author: t.author || "" });
+                    }
+                })
+                .catch(() => { /* keep default/empty — tile shows its own fallback */ })
+                .finally(() => this._refreshDash());
+        },
         // Performance Rating
 
         _loadPerformanceRating() {
@@ -1389,6 +1407,7 @@ sap.ui.define([
                 leaveOv: m.getProperty("/leaveOverview") || {},
                 calendar: m.getProperty("/upcomingCalendar/events") || [],
                 notifs: m.getProperty("/recentNotifications/items") || [],
+                thought: m.getProperty("/thought") || {},
             }));
         },
 
@@ -1638,7 +1657,10 @@ sap.ui.define([
             const trendMonths = Array.isArray(trend.months) ? trend.months : Array(12).fill(null);
             const trendYear = trend.selectedYear || String(new Date().getFullYear());
 
-            const W = 440, H = 155, PL = 32, PR = 10, PT = 14, PB = 20;
+            // Compact dashboard proportion (~2.1:1). The SVG fills its card body, so
+            // height is governed by the (now compact) right column — keeping the whole
+            // Performance Trend row short instead of full-page analytics height.
+            const W = 440, H = 210, PL = 32, PR = 10, PT = 14, PB = 24;
             const CW = W - PL - PR, CH = H - PT - PB;
             const xOf = (i) => PL + (i / 11) * CW;
             const yOf = (v) => PT + CH - ((v - 1) / 4) * CH;   // scale 1-5
@@ -1675,7 +1697,7 @@ sap.ui.define([
                     `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="#fff" stroke="#3b82f6" stroke-width="2"/>`
                 ).join("");
             } else {
-                tPath = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#d1d5db" font-family="sans-serif">No data for ${trendYear}</text>`;
+                tPath = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="11" fill="#9ca3af" font-family="sans-serif">No performance data available for the selected period.</text>`;
             }
 
             // Year pill options
@@ -1691,13 +1713,15 @@ sap.ui.define([
 
             const sTrend = `
                 <div class="tsDashTile" style="flex:1.4;min-width:0;background:#fff;border-radius:12px;
-                            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+                            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;
+                            display:flex;flex-direction:column;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex:0 0 auto;">
                         <span style="font-size:0.95rem;font-weight:600;color:#111827;">My Performance Trend</span>
                         <div style="display:flex;gap:6px;">${yearPills}</div>
                     </div>
-                    <div style="width:100%;overflow-x:auto;">
-                        <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible;">
+                    <div style="flex:1;min-height:0;display:flex;">
+                        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
+                             style="width:100%;height:100%;display:block;overflow:visible;">
                             ${tGrid}${tArea}${tPath}${tDots}${tXLabels}
                         </svg>
                     </div>
@@ -1773,11 +1797,11 @@ sap.ui.define([
     <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1rem;">
 
         <!-- Task Summary donut -->
-        <div class="tsDashTile" style="background:#fff;border-radius:12px;
-                    box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
-            <div style="font-size:0.95rem;font-weight:600;color:#111827;margin-bottom:14px;">Task Summary</div>
-            <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-                <svg width="120" height="120" viewBox="0 0 140 140" style="flex-shrink:0;">
+        <div class="tsDashTile" style="background:#fff;border-radius:12px;flex:1;
+                    box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:14px 16px;box-sizing:border-box;">
+            <div style="font-size:0.92rem;font-weight:600;color:#111827;margin-bottom:8px;">Task Summary</div>
+            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+                <svg width="96" height="96" viewBox="0 0 140 140" style="flex-shrink:0;">
                     <circle cx="70" cy="70" r="54" fill="none" stroke="#f3f4f6" stroke-width="14"/>
                     ${arcHTML}
                     <text x="70" y="65" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${sTotal}</text>
@@ -1794,23 +1818,23 @@ sap.ui.define([
 
         <!-- Total Timesheets pie -->
 <div class="tsDashTile" style="background:#fff;border-radius:12px;flex:1;
-            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;
+            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:14px 16px;
             box-sizing:border-box;display:flex;flex-direction:column;">
 
     <!-- Header -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
         <div>
-            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Total Timesheets</div>
-            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">All time submissions</div>
+            <div style="font-size:0.92rem;font-weight:600;color:#111827;">Total Timesheets</div>
+            <div style="font-size:0.76rem;color:#6b7280;margin-top:2px;">All time submissions</div>
         </div>
     </div>
 
     <!-- Donut + Legend -->
-    <div style="display:flex;align-items:center;gap:24px;flex:1;">
+    <div style="display:flex;align-items:center;gap:18px;flex:1;flex-wrap:wrap;">
 
         <!-- Donut -->
         <div style="display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-            <svg width="160" height="160" viewBox="0 0 140 140" style="display:block;">
+            <svg width="100" height="100" viewBox="0 0 140 140" style="display:block;">
                 <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f3f4f6" stroke-width="14"/>
                 ${segs}
                 <text x="${cx}" y="${cy - 8}" text-anchor="middle" font-size="22"
@@ -1821,33 +1845,33 @@ sap.ui.define([
         </div>
 
         <!-- Legend -->
-        <div style="flex:1;display:flex;flex-direction:column;justify-content:space-between;height:140px;">
+        <div style="flex:1;min-width:120px;display:flex;flex-direction:column;justify-content:center;gap:2px;">
             <div style="display:flex;align-items:center;justify-content:space-between;
-                        padding:8px 0;border-bottom:1px solid #f3f4f6;">
+                        padding:5px 0;border-bottom:1px solid #f3f4f6;">
                 <div style="display:flex;align-items:center;gap:10px;">
-                    <span style="width:11px;height:11px;border-radius:50%;
+                    <span style="width:10px;height:10px;border-radius:50%;
                                  background:#16a34a;flex-shrink:0;"></span>
-                    <span style="font-size:0.85rem;color:#374151;">Approved</span>
+                    <span style="font-size:0.82rem;color:#374151;">Approved</span>
                 </div>
-                <b style="font-size:0.85rem;color:#111827;">${o.approved}</b>
+                <b style="font-size:0.82rem;color:#111827;">${o.approved}</b>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;
-                        padding:8px 0;border-bottom:1px solid #f3f4f6;">
+                        padding:5px 0;border-bottom:1px solid #f3f4f6;">
                 <div style="display:flex;align-items:center;gap:10px;">
-                    <span style="width:11px;height:11px;border-radius:50%;
+                    <span style="width:10px;height:10px;border-radius:50%;
                                  background:#f59e0b;flex-shrink:0;"></span>
-                    <span style="font-size:0.85rem;color:#374151;">Pending</span>
+                    <span style="font-size:0.82rem;color:#374151;">Pending</span>
                 </div>
-                <b style="font-size:0.85rem;color:#111827;">${o.pending}</b>
+                <b style="font-size:0.82rem;color:#111827;">${o.pending}</b>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;
-                        padding:8px 0;">
+                        padding:5px 0;">
                 <div style="display:flex;align-items:center;gap:10px;">
-                    <span style="width:11px;height:11px;border-radius:50%;
+                    <span style="width:10px;height:10px;border-radius:50%;
                                  background:#dc2626;flex-shrink:0;"></span>
-                    <span style="font-size:0.85rem;color:#374151;">Rejected</span>
+                    <span style="font-size:0.82rem;color:#374151;">Rejected</span>
                 </div>
-                <b style="font-size:0.85rem;color:#111827;">${o.rejected}</b>
+                <b style="font-size:0.82rem;color:#111827;">${o.rejected}</b>
             </div>
         </div>
 
@@ -2091,25 +2115,57 @@ sap.ui.define([
                 ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
             const autoWeekLabel = `${_fmt(mon)} – ${_fmt(fri)}`;
+
+            // ── Col 4: Thought for the Day ────────────────────────────────────────
+            // Daily motivational quote served by the backend (cached once per day,
+            // same for everyone). The tile renders its own fallback quote until the
+            // async load resolves / if the API is unavailable, so it never looks empty.
+            const _th = o.thought || {};
+            const _quote = (_th.quote && String(_th.quote).trim())
+                || "The secret of getting ahead is getting started.";
+            const _author = (_th.author && String(_th.author).trim()) || "Mark Twain";
+            const _esc = (s) => String(s == null ? "" : s)
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+            const sEmpInsights = `
+                <div class="tsDashTile" style="flex:1;min-width:0;border-radius:12px;
+                            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:16px 18px;box-sizing:border-box;
+                            display:flex;flex-direction:column;overflow:hidden;position:relative;
+                            background:linear-gradient(135deg,#eef4ff 0%,#ffffff 60%);">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                        <span style="font-size:0.92rem;font-weight:600;color:#111827;">Thought for the Day</span>
+                        <span style="width:30px;height:30px;border-radius:8px;background:#dbeafe;color:#2563eb;
+                                     display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M7.17 6A5 5 0 0 0 4 10.6V18h7v-7H7.4A3.2 3.2 0 0 1 9 8.2L7.17 6zm9 0A5 5 0 0 0 13 10.6V18h7v-7h-3.6A3.2 3.2 0 0 1 18 8.2L16.17 6z"/>
+                            </svg>
+                        </span>
+                    </div>
+                    <div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-width:0;">
+                        <div style="font-size:1rem;font-weight:600;color:#1e293b;line-height:1.5;
+                                    overflow-wrap:anywhere;">&ldquo;${_esc(_quote)}&rdquo;</div>
+                        <div style="margin-top:10px;font-size:0.8rem;font-weight:600;color:#2563eb;
+                                    overflow-wrap:anywhere;">— ${_esc(_author)}</div>
+                    </div>
+                </div>`;
             const sRow2 = `
 <div style="display:flex;flex-direction:row;gap:1rem;width:100%;box-sizing:border-box;">
 
-    <!-- Left: Daily Hours Bar Chart -->
-    <div class="tsDashTile" style="flex:1.4;background:#fff;border-radius:12px;
-                box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
-        <div style="padding:14px 18px 10px;border-bottom:1px solid #f3f4f6;">
-            <div style="font-size:0.95rem;font-weight:600;color:#111827;">Daily Hours Breakdown</div>
-            <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">${autoWeekLabel}</div>
+    <!-- Col 1: Daily Hours Bar Chart (compact widget, ~37% width) -->
+    <div class="tsDashTile" style="flex:1.35;min-width:0;background:#fff;border-radius:12px;
+                box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;
+                display:flex;flex-direction:column;">
+        <div style="padding:12px 16px 8px;border-bottom:1px solid #f3f4f6;flex:0 0 auto;">
+            <div style="font-size:0.92rem;font-weight:600;color:#111827;">Daily Hours Breakdown</div>
+            <div style="font-size:0.76rem;color:#6b7280;margin-top:2px;">${autoWeekLabel}</div>
         </div>
-        <div style="padding:4px 0 0;overflow:hidden;">${o.barHTML}</div>
+        <div style="flex:1;display:flex;align-items:center;overflow:hidden;">${o.barHTML}</div>
     </div>
 
-    <!-- Right: Week Completion on top + My Leave Overview below -->
-    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1rem;">
-
-        <!-- Week Completion -->
-        <div class="tsDashTile" style="background:#fff;border-radius:12px;
-                    box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;">
+        <!-- Col 2: Week Completion (compact KPI) -->
+        <div class="tsDashTile" style="flex:1;min-width:0;background:#fff;border-radius:12px;
+                    box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;box-sizing:border-box;
+                    display:flex;flex-direction:column;">
             <div style="padding:14px 18px 6px;border-bottom:1px solid #f3f4f6;">
                 <div style="font-size:0.95rem;font-weight:600;color:#111827;">Week Completion</div>
                 <div style="font-size:0.78rem;color:#6b7280;margin-top:2px;">${o.label}</div>
@@ -2126,17 +2182,17 @@ sap.ui.define([
         </div>
 
         <!-- My Leave Overview -->
-<div class="tsDashTile" style="background:#fff;border-radius:12px;flex:1;
-            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;
+<div class="tsDashTile" style="background:#fff;border-radius:12px;flex:1.45;min-width:0;
+            box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:14px 16px;
             box-sizing:border-box;display:flex;flex-direction:column;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-        <span style="font-size:0.95rem;font-weight:600;color:#111827;">My Leave Overview</span>
-        <span style="font-size:0.75rem;color:#9ca3af;background:#f3f4f6;
-                     padding:3px 10px;border-radius:12px;">This Year</span>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <span style="font-size:0.92rem;font-weight:600;color:#111827;">My Leave Overview</span>
+        <span style="font-size:0.72rem;color:#9ca3af;background:#f3f4f6;
+                     padding:2px 8px;border-radius:12px;">This Year</span>
     </div>
 
-    <div style="display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-    <svg width="160" height="160" viewBox="0 0 140 140" style="display:block;">
+    <div style="display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:12px;flex-shrink:0;">
+    <svg width="116" height="116" viewBox="0 0 140 140" style="display:block;flex-shrink:0;">
         <circle cx="70" cy="70" r="54" fill="none" stroke="#f3f4f6" stroke-width="14"/>
 
         <!-- Casual Leave 5/23 -->
@@ -2171,38 +2227,38 @@ sap.ui.define([
 
         <!-- Legend -->
 <!-- Legend -->
-<div style="flex:1;min-width:120px;display:flex;flex-direction:column;justify-content:space-between;gap:0;">
+<div style="flex:1;min-width:100px;display:flex;flex-direction:column;justify-content:center;gap:0;">
     <div style="display:flex;align-items:center;justify-content:space-between;
-                padding:10px 0;border-bottom:1px solid #f3f4f6;">
+                padding:5px 0;border-bottom:1px solid #f3f4f6;">
         <div style="display:flex;align-items:center;gap:8px;">
-            <span style="width:10px;height:10px;border-radius:50%;
+            <span style="width:9px;height:9px;border-radius:50%;
                          background:#16a34a;flex-shrink:0;"></span>
             <span style="font-size:0.82rem;color:#374151;">Casual Leave</span>
         </div>
         <span style="font-size:0.82rem;font-weight:700;color:#111827;">5 Days</span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;
-                padding:10px 0;border-bottom:1px solid #f3f4f6;">
+                padding:5px 0;border-bottom:1px solid #f3f4f6;">
         <div style="display:flex;align-items:center;gap:8px;">
-            <span style="width:10px;height:10px;border-radius:50%;
+            <span style="width:9px;height:9px;border-radius:50%;
                          background:#3b82f6;flex-shrink:0;"></span>
             <span style="font-size:0.82rem;color:#374151;">Sick Leave</span>
         </div>
         <span style="font-size:0.82rem;font-weight:700;color:#111827;">5 Days</span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;
-                padding:10px 0;border-bottom:1px solid #f3f4f6;">
+                padding:5px 0;border-bottom:1px solid #f3f4f6;">
         <div style="display:flex;align-items:center;gap:8px;">
-            <span style="width:10px;height:10px;border-radius:50%;
+            <span style="width:9px;height:9px;border-radius:50%;
                          background:#f59e0b;flex-shrink:0;"></span>
             <span style="font-size:0.82rem;color:#374151;">Paid Leave</span>
         </div>
         <span style="font-size:0.82rem;font-weight:700;color:#111827;">11 Days</span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;
-                padding:10px 0;">
+                padding:5px 0;">
         <div style="display:flex;align-items:center;gap:8px;">
-            <span style="width:10px;height:10px;border-radius:50%;
+            <span style="width:9px;height:9px;border-radius:50%;
                          background:#8b5cf6;flex-shrink:0;"></span>
             <span style="font-size:0.82rem;color:#374151;">Paternity Leave</span>
         </div>
@@ -2213,23 +2269,24 @@ sap.ui.define([
     </div>
 
     <!-- Maternity info line -->
-    <div style="margin-top:14px;padding:10px 14px;background:#eff6ff;
+    <div style="margin-top:auto;padding:8px 12px;background:#eff6ff;
                 border-radius:8px;border-left:3px solid #4281e7;
-                display:flex;align-items:center;gap:10px;">
-        <svg width="50" height="50" viewBox="0 0 24 24" fill="none"
+                display:flex;align-items:center;gap:8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;"
              stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/>
             <line x1="12" y1="8" x2="12" y2="12"/>
             <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        <span style="font-size:0.95rem;color:#1d4ed8;line-height:1.4;">
-            <b>Maternity Leave:</b> 180 days 
+        <span style="font-size:0.8rem;color:#1d4ed8;line-height:1.35;">
+            <b>Maternity Leave:</b> 180 days
         </span>
     </div>
 
 </div>
 
-    </div>
+        <!-- Col 4: Employee Insights -->
+        ${sEmpInsights}
 
 </div>`;
 
@@ -2321,12 +2378,16 @@ sap.ui.define([
         // Bar chart for timesheet hours in the current week 
         // ─────────────────────────────────────────────────────────────────────
         _buildBarChart(weekDays) {
-            const X_STEP = 100, BAR_W = 60;
-            const CHART_W = X_STEP * 5;
-            const MAX_BAR = 180;
-            const TOP_PAD = 20;
-            const BASE_Y = MAX_BAR + TOP_PAD;
-            const VIEW_H = BASE_Y + 24;  // ← reduced bottom padding
+            // Compact dashboard widget: a fixed ~150px-tall chart with short,
+            // proportional bars and the hours label rendered inside each bar. Kept
+            // deliberately small so "Daily Hours" reads as a dense widget rather than
+            // a full analytics chart. width:100% keeps it fluid/responsive.
+            const X_STEP = 64, BAR_W = 34;
+            const CHART_W = X_STEP * 5;          // 320
+            const MAX_BAR = 116;
+            const TOP_PAD = 16;
+            const BASE_Y = MAX_BAR + TOP_PAD;    // 132
+            const VIEW_H = BASE_Y + 22;          // 154 — room for day labels
 
             const weekMax = Math.max(...weekDays.slice(0, 5).map(d => d.hours || 0), 1);
 
@@ -2334,14 +2395,14 @@ sap.ui.define([
             weekDays.slice(0, 5).forEach((day, i) => {
                 const x = i * X_STEP + (X_STEP - BAR_W) / 2;
                 const barH = day.hours > 0
-                    ? Math.max(12, (day.hours / weekMax) * MAX_BAR)
+                    ? Math.max(14, (day.hours / weekMax) * MAX_BAR)
                     : 6;  // ← tiny stub for empty days
                 const y = BASE_Y - barH;
                 const col = day.hours > 0 ? "#3b82f6" : "#e5e7eb";
                 const cxB = x + BAR_W / 2;
 
                 bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}"
-                       rx="8" fill="${col}"/>`;
+                       rx="6" fill="${col}"/>`;
 
                 bars += `<text x="${cxB}" y="${BASE_Y + 16}" text-anchor="middle"
                        font-size="11" fill="#6b7280"
@@ -2350,18 +2411,18 @@ sap.ui.define([
                 if (day.hours > 0) {
                     const lbl = (day.hoursLabel || "").replace(" hrs", "h");
                     const inside = barH >= 28;
-                    const lblY = inside ? y + barH / 2 + 5 : y - 6;
+                    const lblY = inside ? y + barH / 2 + 4 : y - 6;
                     const lblCol = inside ? "#fff" : "#374151";
                     bars += `<text x="${cxB}" y="${lblY}" text-anchor="middle"
-                           font-size="11" fill="${lblCol}" font-weight="700"
+                           font-size="10.5" fill="${lblCol}" font-weight="700"
                            font-family="sans-serif">${lbl}</text>`;
                 }
             });
 
             return `
-        <div style="padding:0 18px 8px;width:100%;box-sizing:border-box;margin-top:4px;">
-            <svg viewBox="0 0 ${CHART_W} ${VIEW_H}" width="100%"
-                 style="overflow:visible;display:block;">
+        <div style="padding:8px 14px 8px;box-sizing:border-box;">
+            <svg viewBox="0 0 ${CHART_W} ${VIEW_H}" width="100%" height="150"
+                 preserveAspectRatio="none" style="display:block;overflow:visible;">
                 ${bars}
             </svg>
         </div>`;
