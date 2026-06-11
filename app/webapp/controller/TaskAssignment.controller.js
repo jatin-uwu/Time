@@ -61,10 +61,16 @@ sap.ui.define([
                 this._oTaModel.setProperty("/employees", []);
                 return;
             }
+            // Issue 4: only show employees who report directly to THIS manager.
+            // The backend independently enforces the same rule on assignment, so
+            // this is purely to keep the dropdowns clean (no unrelated employees).
+            const sMgrId = this.getOwnerComponent().getCurrentEmployeeId
+                ? this.getOwnerComponent().getCurrentEmployeeId() : null;
             oModel.bindList("/Employees").requestContexts(0, 200)
                 .then(aCtx => {
                     const list = aCtx.map(c => c.getObject())
                         .filter(e => e.isActive !== false)
+                        .filter(e => !sMgrId || e.manager_employeeId === sMgrId)
                         .sort((a, b) => (a.employeeName || "").localeCompare(b.employeeName || ""));
                     this._oTaModel.setProperty("/employees", list);
                     this._oTaModel.setProperty("/employeeFilterList",

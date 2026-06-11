@@ -85,7 +85,8 @@ sap.ui.define([
         this._model = new JSONModel({
             taskId: "", taskName: "",
             messages: [], draft: "", pendingFiles: [],
-            page: 1, hasMore: false, sending: false, search: ""
+            page: 1, hasMore: false, sending: false, search: "",
+            pinned: null, editingId: null
         });
     };
 
@@ -96,7 +97,8 @@ sap.ui.define([
         this._model.setData({
             taskId: sTaskId, taskName: sTaskName || "Group Task",
             messages: [], draft: "", pendingFiles: [],
-            page: 1, hasMore: false, sending: false, search: ""
+            page: 1, hasMore: false, sending: false, search: "",
+            pinned: null, editingId: null
         });
 
         const showIt = (oPanel) => {
@@ -175,16 +177,38 @@ sap.ui.define([
     };
 
     GroupChat.prototype._build = function (m) {
+        const isMine = m.senderId === this._myId;
+        const isDeleted = !!m.isDeleted;
         return {
             messageId: m.messageId, senderId: m.senderId, senderName: m.senderName,
-            message: m.message || "", timeLabel: fmtDateTime(m.sentAt),
-            isMine: m.senderId === this._myId, initials: initialsOf(m.senderName),
-            attachments: (m.attachments || []).map((a) => ({
+            message: isDeleted ? "" : (m.message || ""),
+            isDeleted: isDeleted,
+            deletedText: "This message was deleted",
+            edited: !isDeleted && !!m.editedAt,           // drives the "Edited" indicator
+            timeLabel: fmtDateTime(m.sentAt),
+            isMine: isMine,
+            canManage: isMine && !isDeleted,              // edit / delete own, non-deleted
+            canPin: !isDeleted,                           // any member may pin a live message
+            initials: initialsOf(m.senderName),
+            attachments: isDeleted ? [] : (m.attachments || []).map((a) => ({
                 attachmentId: a.attachmentId, fileName: a.fileName, mimeType: a.mimeType,
                 fileSize: a.fileSize, sizeLabel: sizeLabel(a.fileSize),
                 isImage: /^image\//i.test(a.mimeType || ""), thumbUrl: this._attCache[a.attachmentId] || ""
             }))
         };
+    };
+
+    // Build the pinned-banner view-model from the server's pinned payload.
+    GroupChat.prototype._applyPinned = function (pinned) {
+        if (!pinned || !pinned.messageId) { this._model.setProperty("/pinned", null); return; }
+        const txt = String(pinned.message || "");
+        const preview = txt.length > 80 ? (txt.slice(0, 80) + "…") : (txt || "(attachment)");
+        this._model.setProperty("/pinned", {
+            messageId: pinned.messageId,
+            senderName: pinned.senderName || "",
+            pinnedByName: pinned.pinnedByName || "",
+            preview: preview
+        });
     };
 
     // Stores the full message list and renders the search-filtered subset.
@@ -211,6 +235,7 @@ sap.ui.define([
             const messages = (res.messages || []).map((m) => this._build(m));
             this._setMessages(messages);
             this._model.setProperty("/hasMore", !!res.hasMore);
+            this._applyPinned(res.pinned);
             this._loadThumbs(messages);
             if (reset) { this._scrollToBottom(); this._notifyBadge(); }
         }).catch(() => { /* leave empty */ });
@@ -240,14 +265,26 @@ sap.ui.define([
 
     GroupChat.prototype._poll = function () {
         this._fetch(1).then((res) => {
+            this._applyPinned(res.pinned);                 // keep the pin banner live
             const cur = this._all || [];
+            const byId = {}; (res.messages || []).forEach((m) => { byId[m.messageId] = m; });
+            // Reconcile edits/deletes made by other members on messages we already show.
+            let changed = false;
+            const merged = cur.map((existing) => {
+                const srv = byId[existing.messageId];
+                if (srv && ((!!srv.isDeleted) !== existing.isDeleted ||
+                            (srv.isDeleted ? "" : (srv.message || "")) !== existing.message ||
+                            (!!srv.editedAt) !== existing.edited)) {
+                    changed = true; return this._build(srv);
+                }
+                return existing;
+            });
             const ids = new Set(cur.map((m) => m.messageId));
             const fresh = (res.messages || []).filter((m) => !ids.has(m.messageId)).map((m) => this._build(m));
-            if (!fresh.length) return;
-            this._setMessages(cur.concat(fresh));
+            if (!fresh.length && !changed) return;
+            this._setMessages(merged.concat(fresh));
             this._loadThumbs(fresh);
-            this._scrollToBottom();
-            this._notifyBadge();
+            if (fresh.length) { this._scrollToBottom(); this._notifyBadge(); }
         }).catch(() => { /* ignore */ });
     };
 
@@ -352,9 +389,36 @@ sap.ui.define([
         }, 0);
     };
 
-    // ── Send ──────────────────────────────────────────────────────────────
+    // Parse the JSON-string result of an action; returns {} on failure.
+    function _parseResult(raw) {
+        if (raw && typeof raw === "object") return raw;
+        try { return JSON.parse(raw || "{}"); } catch (e) { return {}; }
+    }
+
+    // ── Send (or commit an in-progress edit) ──────────────────────────────────
     GroupChat.prototype.onSendMessage = function () {
         const draft = (this._model.getProperty("/draft") || "").trim();
+        const editingId = this._model.getProperty("/editingId");
+
+        // ── Edit mode: the composer is committing an edit, not a new message ──
+        if (editingId) {
+            if (!draft) { MessageToast.show("Message cannot be empty."); return; }
+            if (this._model.getProperty("/sending")) return;
+            this._model.setProperty("/sending", true);
+            callEmp("editTaskMessage", { messageId: editingId, message: draft }).then((raw) => {
+                const r = _parseResult(raw);
+                if (r.error) throw new Error(r.error);
+                this._model.setProperty("/sending", false);
+                this._model.setProperty("/draft", "");
+                this._model.setProperty("/editingId", null);
+                this._loadChat();                       // refresh so "Edited" appears
+            }).catch((err) => {
+                this._model.setProperty("/sending", false);
+                MessageBox.error((err && err.message) || "Could not edit the message.");
+            });
+            return;
+        }
+
         const pending = this._model.getProperty("/pendingFiles") || [];
         if (!draft && !pending.length) return;
         if (this._model.getProperty("/sending")) return;
@@ -374,6 +438,102 @@ sap.ui.define([
             this._model.setProperty("/sending", false);
             MessageBox.error((err && err.message) || "Could not send the message.");
         });
+    };
+
+    // ── Edit / Delete / Pin (Issue 3) ─────────────────────────────────────────
+    GroupChat.prototype._msgFromEvent = function (oEvent) {
+        const oCtx = oEvent.getSource().getBindingContext("chat");
+        return oCtx ? oCtx.getObject() : null;
+    };
+
+    // Enter edit mode: load the message text into the composer; Send commits it.
+    GroupChat.prototype.onEditMessage = function (oEvent) {
+        const m = this._msgFromEvent(oEvent);
+        if (!m || !m.messageId) return;
+        this._model.setProperty("/editingId", m.messageId);
+        this._model.setProperty("/draft", m.message || "");
+        const ta = Fragment.byId(this._fragId, "gchatInput");
+        if (ta && ta.focus) { try { ta.focus(); } catch (e) { /* */ } }
+    };
+
+    GroupChat.prototype.onCancelEdit = function () {
+        this._model.setProperty("/editingId", null);
+        this._model.setProperty("/draft", "");
+    };
+
+    GroupChat.prototype.onDeleteMessage = function (oEvent) {
+        const m = this._msgFromEvent(oEvent);
+        if (!m || !m.messageId) return;
+        MessageBox.confirm("Delete this message? It will show as “This message was deleted”.", {
+            title: "Delete message",
+            onClose: (sAction) => {
+                if (sAction !== MessageBox.Action.OK && sAction !== "OK") return;
+                callEmp("deleteTaskMessage", { messageId: m.messageId }).then((raw) => {
+                    const r = _parseResult(raw);
+                    if (r.error) throw new Error(r.error);
+                    if (this._model.getProperty("/editingId") === m.messageId) this.onCancelEdit();
+                    this._loadChat();
+                }).catch((err) => MessageBox.error((err && err.message) || "Could not delete the message."));
+            }
+        });
+    };
+
+    GroupChat.prototype.onPinMessage = function (oEvent) {
+        const m = this._msgFromEvent(oEvent);
+        if (!m || !m.messageId) return;
+        callEmp("pinTaskMessage", { taskId: this._model.getProperty("/taskId"), messageId: m.messageId }).then((raw) => {
+            const r = _parseResult(raw);
+            if (r.error) throw new Error(r.error);
+            MessageToast.show("Message pinned.");
+            this._loadChat();
+        }).catch((err) => MessageBox.error((err && err.message) || "Could not pin the message."));
+    };
+
+    GroupChat.prototype.onUnpinMessage = function () {
+        callEmp("unpinTaskMessage", { taskId: this._model.getProperty("/taskId") }).then((raw) => {
+            const r = _parseResult(raw);
+            if (r.error) throw new Error(r.error);
+            MessageToast.show("Message unpinned.");
+            this._loadChat();
+        }).catch((err) => MessageBox.error((err && err.message) || "Could not unpin the message."));
+    };
+
+    // Click the pinned banner → scroll to & briefly highlight the original message.
+    GroupChat.prototype.onPinnedClick = function () {
+        const pinned = this._model.getProperty("/pinned");
+        if (!pinned || !pinned.messageId) return;
+        this._scrollToMessage(pinned.messageId);
+    };
+
+    GroupChat.prototype._scrollToMessage = function (sMessageId) {
+        // The message may be on an older page; ensure it's loaded, then scroll.
+        const exists = (this._all || []).some((m) => m.messageId === sMessageId);
+        const doScroll = () => setTimeout(() => {
+            const el = document.querySelector('[data-msgid="' + sMessageId + '"]');
+            if (el && el.scrollIntoView) {
+                el.scrollIntoView({ behavior: "smooth", block: "center" });
+                el.classList.add("tsChatHighlight");
+                setTimeout(() => { try { el.classList.remove("tsChatHighlight"); } catch (e) { /* */ } }, 1800);
+            }
+        }, 120);
+        if (exists) { doScroll(); return; }
+        // Page back until the message is loaded (bounded), then scroll.
+        let guard = 0;
+        const loadMore = () => {
+            if (guard++ > 10 || (this._all || []).some((m) => m.messageId === sMessageId)) { doScroll(); return; }
+            if (!this._model.getProperty("/hasMore")) { doScroll(); return; }
+            const next = (this._model.getProperty("/page") || 1) + 1;
+            this._fetch(next).then((res) => {
+                const older = (res.messages || []).map((m) => this._build(m));
+                const cur = this._all || [];
+                const ids = new Set(cur.map((m) => m.messageId));
+                this._setMessages(older.filter((m) => !ids.has(m.messageId)).concat(cur));
+                this._model.setProperty("/page", next);
+                this._model.setProperty("/hasMore", !!res.hasMore);
+                loadMore();
+            }).catch(() => doScroll());
+        };
+        loadMore();
     };
 
     // ── Download an attachment ────────────────────────────────────────────

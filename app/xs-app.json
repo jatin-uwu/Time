@@ -37,6 +37,12 @@
       "csrfProtection": false
     },
     {
+      "source": "^/ws$",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa",
+      "csrfProtection": false
+    },
+    {
       "source": "^(.*)$",
       "target": "$1",
       "localDir": "webapp",

@@ -223,6 +223,21 @@ sap.ui.define([
                     () => { this._refreshGroupTasksBadge(); this._refreshSidebarBadges(); }, this);
             } catch (e) { /* EventBus optional */ }
 
+            // ── Real-time (WebSocket): keep the global badges live ────────────
+            // Any real-time event may change the notification / sidebar counts, so
+            // refresh them here regardless of which screen the user is on. Throttled
+            // (250ms) so a burst of events triggers at most one badge refresh.
+            this._fnRtBadges = () => {
+                if (this._rtBadgeTimer) return;
+                this._rtBadgeTimer = setTimeout(() => {
+                    this._rtBadgeTimer = null;
+                    try { this._refreshSidebarBadges(); this._refreshGroupTasksBadge(); } catch (e) { /* */ }
+                }, 250);
+            };
+            try {
+                sap.ui.getCore().getEventBus().subscribe("rt", "ANY", this._fnRtBadges, this);
+            } catch (e) { /* EventBus optional */ }
+
             // Hide the SplitApp's built-in master toggle button — the sidebar is
             // always shown on desktop and toggled via our own header button on
             // mobile. All sidebar visuals are now handled in style.css

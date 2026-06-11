@@ -61,8 +61,15 @@ sap.ui.define([
         // (the taskId is carried in the notification's referenceId — see onNotifClick).
         GROUP_TASK_ASSIGNED:  "group-task-detail",
         GROUP_TASK_UPDATE:    "group-task-detail",
-        GROUP_TASK_COMPLETED: "group-task-detail"
+        GROUP_TASK_COMPLETED: "group-task-detail",
+        // A new group-chat message deep-links to the task AND auto-opens the chat
+        // panel (see onNotifClick → _openGroupChatTaskId flag).
+        GROUP_CHAT_MESSAGE:   "group-task-detail"
     };
+
+    // Notification types that, beyond navigating to the group task, should also
+    // pop the chat panel open on arrival.
+    var CHAT_OPEN_TYPES = { GROUP_CHAT_MESSAGE: true };
 
     function getNavRoute(type, role) {
         // A missed-day (day-unlock) request can reach two different approvers:
@@ -349,6 +356,11 @@ sap.ui.define([
                         // notification's referenceId. Without it, fall back to the
                         // group-tasks list rather than failing the navigation.
                         if (target.referenceId) {
+                            // For chat notifications, ask GroupTaskDetail to auto-open
+                            // the chat panel once it has loaded (Issue 2).
+                            if (CHAT_OPEN_TYPES[target.type]) {
+                                this.getOwnerComponent()._openGroupChatTaskId = target.referenceId;
+                            }
                             oRouter.navTo("group-task-detail", { taskId: target.referenceId });
                         } else {
                             oRouter.navTo("group-tasks");

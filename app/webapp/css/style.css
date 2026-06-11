@@ -2994,6 +2994,52 @@ html .sapUiBlockLayer {
 .tsChatPanelClose .sapMBtnInner { background: transparent !important; border: none !important; }
 .tsChatPanelClose .sapMBtnIcon { color: #ffffff !important; }
 
+/* ── Group chat: pinned banner, message actions, edited/deleted (Issue 3) ── */
+.tsChatPinned {
+    flex: 0 0 auto;
+    margin: 6px 12px 2px;
+    padding: 8px 10px;
+    background: #eff6ff;
+    border: 1px solid #dbeafe;
+    border-left: 3px solid #2563eb;
+    border-radius: 8px;
+    box-sizing: border-box;
+}
+.tsChatPinIcon { color: #2563eb !important; font-size: 1rem; }
+.tsChatPinnedText { flex: 1 1 auto; min-width: 0; }
+.tsChatPinnedPreview .sapMLnk,
+.tsChatPinnedPreview { font-size: 0.82rem; font-weight: 600; color: #1d4ed8;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.tsChatPinnedBy { font-size: 0.72rem; color: #6b7280; }
+.tsChatPinUnpin { flex: 0 0 auto; }
+
+/* Per-message action buttons — subtle, revealed on row hover */
+.tsChatMsgAct { opacity: 0; transition: opacity 0.15s ease; }
+.tsChatItem:hover .tsChatMsgAct { opacity: 0.75; }
+.tsChatMsgAct:hover { opacity: 1 !important; }
+.tsChatMsgAct .sapMBtnIcon { font-size: 0.85rem; color: #6b7280; }
+
+.tsChatEdited { font-size: 0.68rem; color: #9ca3af; font-style: italic; }
+.tsChatBubbleDeleted { opacity: 0.85; }
+.tsChatDeleted { font-style: italic; color: #9ca3af; font-size: 0.85rem; }
+
+.tsChatEditingBar {
+    flex: 0 0 auto;
+    margin: 0 12px;
+    padding: 4px 8px;
+    background: #fff7ed;
+    border-left: 3px solid #f59e0b;
+    border-radius: 6px;
+}
+.tsChatEditingText { font-size: 0.78rem; color: #92400e; }
+
+/* Brief highlight when navigating to a pinned message */
+.tsChatHighlight { animation: tsChatPulse 1.8s ease; border-radius: 10px; }
+@keyframes tsChatPulse {
+    0%   { background: rgba(37, 99, 235, 0.18); }
+    100% { background: transparent; }
+}
+
 
 .tsChatPanel .tsChatSearch { flex: 0 0 auto; margin: 12px 14px 6px !important; }
 .tsChatPanel .tsChatScroll {

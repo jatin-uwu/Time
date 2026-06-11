@@ -136,6 +136,7 @@ sap.ui.define([
             if (selectedYear === currentYear && selectedMonth > currentMonth) {
                 oMonthSelect.setSelectedKey(String(currentMonth));
             }
+            this._checkExistingRating();
         },
 
         // ── Snap back if future month directly selected ───────────────────────
@@ -150,6 +151,32 @@ sap.ui.define([
                 oEvent.getSource().setSelectedKey(String(currentMonth));
                 sap.m.MessageToast.show("Cannot select a future month.");
             }
+            this._checkExistingRating();
+        },
+
+        // ── Issue 5: detect whether a rating already exists for the selected
+        // employee + month + year (from the loaded history) and reflect it in the
+        // form so Submit is disabled and a clear warning is shown. The backend
+        // remains the source of truth; this is the proactive UX layer.
+        _checkExistingRating() {
+            const empId = this._oModel.getProperty("/form/employeeId");
+            const month = parseInt(this.byId("monthSelect").getSelectedKey() || "0", 10);
+            const year = parseInt(this.byId("yearSelect").getSelectedKey() || "0", 10);
+            if (!empId || !month || !year) {
+                this._oModel.setProperty("/form/duplicate", false);
+                this._oModel.setProperty("/form/duplicateMsg", "");
+                return false;
+            }
+            const ratings = this._oModel.getProperty("/ratings") || [];
+            const dup = ratings.some(r =>
+                r.employee_employeeId === empId &&
+                parseInt(r.reviewMonth, 10) === month &&
+                parseInt(r.reviewYear, 10) === year);
+            this._oModel.setProperty("/form/duplicate", dup);
+            this._oModel.setProperty("/form/duplicateMsg", dup
+                ? `Rating for this employee has already been submitted for ${MONTH_NAMES[month]} ${year}.`
+                : "");
+            return dup;
         },
 
         // ── Load employees under this manager ────────────────────────────────
@@ -207,6 +234,7 @@ sap.ui.define([
                     this._oModel.setProperty("/ratings", ratings);
                     this._oModel.setProperty("/ratingsTableHTML",
                         this._buildRatingsTable(ratings));
+                    this._checkExistingRating();   // refresh duplicate state
                 })
                 .catch(() => {
                     this._oModel.setProperty("/ratingsTableHTML",
@@ -244,6 +272,13 @@ sap.ui.define([
 
             if (!form.employeeId) {
                 MessageBox.warning("Please select an employee.");
+                return;
+            }
+
+            // Issue 5: block a duplicate before it reaches the backend (backend
+            // still independently rejects it as the source of truth).
+            if (this._checkExistingRating()) {
+                MessageBox.warning(this._oModel.getProperty("/form/duplicateMsg"));
                 return;
             }
 

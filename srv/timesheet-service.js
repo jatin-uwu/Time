@@ -746,17 +746,35 @@ class EmployeeService extends cds.ApplicationService {
                 messageId: m.messageId,
                 senderId: m.sender_employeeId,
                 senderName: nameMap[m.sender_employeeId] || m.sender_employeeId,
-                message: m.message || '',
+                // A deleted message keeps its slot but exposes no content/attachments.
+                message: m.isDeleted ? '' : (m.message || ''),
                 sentAt: m.sentAt,
-                attachments: atts.filter(a => a.message_messageId === m.messageId).map(a => ({
+                editedAt: m.isDeleted ? null : (m.editedAt || null),
+                isDeleted: !!m.isDeleted,
+                attachments: m.isDeleted ? [] : atts.filter(a => a.message_messageId === m.messageId).map(a => ({
                     attachmentId: a.attachmentId, fileName: a.fileName, mimeType: a.mimeType, fileSize: a.fileSize
                 }))
             }));
 
+            // Pinned message (one per task). Resolved from the FULL list so it shows
+            // even when it lives on a different page. A deleted pin is treated as none.
+            let pinned = null;
+            if (ctx.task.pinnedMessageId) {
+                const pm = all.find(x => x.messageId === ctx.task.pinnedMessageId);
+                if (pm && !pm.isDeleted) {
+                    pinned = {
+                        messageId: pm.messageId,
+                        senderName: nameMap[pm.sender_employeeId] || pm.sender_employeeId,
+                        pinnedByName: ctx.task.pinnedByName || '',
+                        message: pm.message || ''
+                    };
+                }
+            }
+
             // Opening the chat clears the caller's coalesced "new messages" badge.
             await markChatRead(taskId, caller.employeeId);
 
-            return JSON.stringify({ messages, hasMore: total > start + pageSize, total, page, pageSize });
+            return JSON.stringify({ messages, pinned, hasMore: total > start + pageSize, total, page, pageSize });
         });
 
         // Post a chat message (text and/or attachments, ≤10 MB each).
@@ -830,6 +848,72 @@ class EmployeeService extends cds.ApplicationService {
             const caller = await resolveCaller(req);
             await markChatRead(req.data.taskId, caller.employeeId);
             return { ok: true };
+        });
+
+        // ── Edit a chat message (author only) ─────────────────────────────────
+        this.on('editTaskMessage', async (req) => {
+            const { messageId } = req.data;
+            const newText = (req.data.message || '').trim();
+            if (!messageId) return JSON.stringify({ error: 'messageId is required.' });
+            if (!newText) return JSON.stringify({ error: 'Message cannot be empty.' });
+            const msg = await SELECT.one.from(TASK_MESSAGE).where({ messageId });
+            if (!msg) return JSON.stringify({ error: 'Message not found.' });
+            if (msg.isDeleted) return JSON.stringify({ error: 'A deleted message cannot be edited.' });
+            const caller = await resolveCaller(req);
+            if (msg.sender_employeeId !== caller.employeeId) {
+                return JSON.stringify({ error: 'You can only edit your own messages.' });
+            }
+            await UPDATE(TASK_MESSAGE).set({ message: newText, editedAt: new Date() }).where({ messageId });
+            return JSON.stringify({ ok: true, messageId });
+        });
+
+        // ── Delete a chat message (author only) — soft delete ─────────────────
+        // The row is kept (preserving order/history); content + attachments are
+        // dropped and, if it was the pinned message, the task is unpinned.
+        this.on('deleteTaskMessage', async (req) => {
+            const { messageId } = req.data;
+            if (!messageId) return JSON.stringify({ error: 'messageId is required.' });
+            const msg = await SELECT.one.from(TASK_MESSAGE).where({ messageId });
+            if (!msg) return JSON.stringify({ error: 'Message not found.' });
+            const caller = await resolveCaller(req);
+            if (msg.sender_employeeId !== caller.employeeId) {
+                return JSON.stringify({ error: 'You can only delete your own messages.' });
+            }
+            await UPDATE(TASK_MESSAGE).set({ isDeleted: true, message: null, editedAt: new Date() }).where({ messageId });
+            await DELETE.from(TASK_ATTACHMENT).where({ message_messageId: messageId });
+            const task = await SELECT.one.from(TASK).columns('taskId', 'pinnedMessageId').where({ taskId: msg.task_taskId });
+            if (task && task.pinnedMessageId === messageId) {
+                await UPDATE(TASK).set({ pinnedMessageId: null, pinnedByName: null }).where({ taskId: msg.task_taskId });
+            }
+            return JSON.stringify({ ok: true, messageId });
+        });
+
+        // ── Pin a chat message (any group member) — one active pin per task ───
+        this.on('pinTaskMessage', async (req) => {
+            const { taskId, messageId } = req.data;
+            if (!taskId || !messageId) return JSON.stringify({ error: 'taskId and messageId are required.' });
+            const caller = await resolveCaller(req);
+            const ctx = await loadGroupContext(taskId, caller);
+            if (!ctx.task) return JSON.stringify({ error: 'Group task not found.' });
+            if (!ctx.isMember) return JSON.stringify({ error: 'You do not have access to this chat.' });
+            const msg = await SELECT.one.from(TASK_MESSAGE).columns('messageId', 'task_taskId', 'isDeleted').where({ messageId });
+            if (!msg || msg.task_taskId !== taskId) return JSON.stringify({ error: 'Message not found in this task.' });
+            if (msg.isDeleted) return JSON.stringify({ error: 'A deleted message cannot be pinned.' });
+            const pinnedBy = (caller.emp && caller.emp.employeeName) || caller.employeeId || '';
+            await UPDATE(TASK).set({ pinnedMessageId: messageId, pinnedByName: pinnedBy }).where({ taskId });
+            return JSON.stringify({ ok: true, messageId, pinnedByName: pinnedBy });
+        });
+
+        // ── Unpin (any group member) ──────────────────────────────────────────
+        this.on('unpinTaskMessage', async (req) => {
+            const { taskId } = req.data;
+            if (!taskId) return JSON.stringify({ error: 'taskId is required.' });
+            const caller = await resolveCaller(req);
+            const ctx = await loadGroupContext(taskId, caller);
+            if (!ctx.task) return JSON.stringify({ error: 'Group task not found.' });
+            if (!ctx.isMember) return JSON.stringify({ error: 'You do not have access to this chat.' });
+            await UPDATE(TASK).set({ pinnedMessageId: null, pinnedByName: null }).where({ taskId });
+            return JSON.stringify({ ok: true });
         });
 
         // ── Group Task Updates ────────────────────────────────────────────────
@@ -1872,6 +1956,16 @@ class ManagerService extends cds.ApplicationService {
         this.before('*', blockIfInactive);
         this.after('*', emitFounderPing);
 
+        // Issue 4: a manager may create an INDIVIDUAL task only for an employee who
+        // reports directly to them and is active. Enforced at the data layer so it
+        // holds even if the UI is bypassed (direct OData CREATE on /manager/Tasks).
+        this.before('CREATE', 'Tasks', async (req) => {
+            const assigneeId = req.data && req.data.assignedTo_employeeId;
+            if (!assigneeId) return;                       // unassigned drafts are unaffected
+            const err = await this._assertAssignable(req, assigneeId);
+            if (err) return req.reject(403, err);
+        });
+
         this.on('approveTimesheet', async (req) => {
             const { timesheetId, remarks } = req.data;
             const header = await SELECT.one.from(HEADER).where({ timesheetId });
@@ -1909,31 +2003,31 @@ class ManagerService extends cds.ApplicationService {
             // ─────────────────────────────────────────────────────
 
             const PERF = 'ccentrik.employee.timesheet.schema.timesheet.PerformanceRating';
-            const existing = await SELECT.one.from(PERF).where({ employee_employeeId: employeeId, reviewMonth, reviewYear });
-            const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2, '0')}`;
-
-            // Notify the rated employee (shows in recent + Notifications tab).
             const MN = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
             const period = `${MN[reviewMonth] || reviewMonth} ${reviewYear}`;
-            const notifyEmployee = async (bUpdated) => {
-                await createNotification(
-                    employeeId,
-                    'PERFORMANCE_RATED',
-                    bUpdated ? 'Performance Rating Updated ⭐' : 'New Performance Rating ⭐',
-                    `${manager.employeeName || 'Your manager'} rated you ${ratingValue}/5` +
-                        `${ratingCategory ? ' (' + ratingCategory + ')' : ''} for ${period}.` +
-                        `${reviewComment ? ' Comment: ' + reviewComment : ''}`,
-                    ratingId
-                );
-            };
 
+            // Issue 5: one rating per employee per month — never overwrite history.
+            const existing = await SELECT.one.from(PERF).where({ employee_employeeId: employeeId, reviewMonth, reviewYear });
             if (existing) {
-                await UPDATE(PERF).set({ ratingValue, reviewComment: reviewComment || '', ratingCategory: ratingCategory || '' }).where({ ratingId: existing.ratingId });
-                await notifyEmployee(true);
-                return { ratingId: existing.ratingId, message: `Rating updated for ${employeeId} — ${reviewMonth}/${reviewYear}` };
+                return req.error(409, `Rating for this employee has already been submitted for ${period}.`);
             }
-            await INSERT.into(PERF).entries({ ratingId, employee_employeeId: employeeId, ratingValue, reviewMonth, reviewYear, reviewComment: reviewComment || '', ratingCategory: ratingCategory || '' });
-            await notifyEmployee(false);
+            const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2, '0')}`;
+
+            // Insert only. The deterministic ratingId is the primary key, so a
+            // concurrent duplicate (race past the SELECT) fails here — caught and
+            // surfaced as the same friendly "already submitted" message.
+            try {
+                await INSERT.into(PERF).entries({ ratingId, employee_employeeId: employeeId, ratingValue, reviewMonth, reviewYear, reviewComment: reviewComment || '', ratingCategory: ratingCategory || '' });
+            } catch (e) {
+                return req.error(409, `Rating for this employee has already been submitted for ${period}.`);
+            }
+            await createNotification(
+                employeeId, 'PERFORMANCE_RATED', 'New Performance Rating ⭐',
+                `${manager.employeeName || 'Your manager'} rated you ${ratingValue}/5` +
+                    `${ratingCategory ? ' (' + ratingCategory + ')' : ''} for ${period}.` +
+                    `${reviewComment ? ' Comment: ' + reviewComment : ''}`,
+                ratingId
+            );
             return { ratingId, message: `Rating submitted for ${employeeId} — ${reviewMonth}/${reviewYear}` };
         });
 
@@ -2035,6 +2129,13 @@ class ManagerService extends cds.ApplicationService {
             const seen = new Set();
             const uniq = assignees.filter(a => (seen.has(a.employeeId) ? false : (seen.add(a.employeeId), true)));
             if (uniq.length < 2) return req.error(400, 'Select at least 2 employees for a group task.');
+
+            // Issue 4: every member must report directly to the caller and be active.
+            // Backend-enforced so a forged request can't add unrelated employees.
+            for (const a of uniq) {
+                const err = await this._assertAssignable(req, a.employeeId);
+                if (err) return req.error(403, err);
+            }
 
             const taskId = await nextGroupTaskId();
             await INSERT.into(TASK).entries({
@@ -2327,6 +2428,30 @@ class ManagerService extends cds.ApplicationService {
         const emp = await SELECT.one.from(EMPLOYEE)
             .columns('manager_employeeId').where({ employeeId: sEmployeeId });
         return !!(emp && emp.manager_employeeId === manager.employeeId);
+    }
+
+    // Issue 4: validate that the caller (a manager) may assign a task to
+    // `employeeId`. The employee must exist, be active, AND report directly to the
+    // caller. Returns null when allowed, otherwise a user-facing error message.
+    // Used by both the individual-task CREATE guard and createGroupTask so the rule
+    // is identical for solo and group assignment.
+    async _assertAssignable(req, employeeId) {
+        if (!employeeId) return 'An assignee is required.';
+        const user = req.user || {};
+        const email = (((user.attr && (user.attr.email || user.attr.mail)) || user.id || '') + '').trim().toLowerCase();
+        const manager = email
+            ? await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email)
+            : null;
+        if (!manager) return 'Could not resolve your manager account.';
+        const emp = await SELECT.one.from(EMPLOYEE)
+            .columns('employeeId', 'manager_employeeId', 'isActive')
+            .where({ employeeId });
+        if (!emp) return `Employee '${employeeId}' not found.`;
+        if (emp.isActive === false) return `Employee '${employeeId}' is inactive.`;
+        if (emp.manager_employeeId !== manager.employeeId) {
+            return 'You can only assign tasks to employees associated with your account.';
+        }
+        return null;
     }
 }
 
@@ -3336,20 +3461,24 @@ class FounderService extends cds.ApplicationService {
                 const { ids: rateableIds } = await founderDirectReports(req);
                 if (!rateableIds.has(employeeId)) return JSON.stringify({ error: 'You can only rate employees who report to you.' });
                 const ratingId = `${employeeId}-${reviewYear}-${String(reviewMonth).padStart(2, '0')}`;
-                const existing = await SELECT.one.from(PERFORMANCE_RATING).where({ employee_employeeId: employeeId, reviewMonth, reviewYear });
                 const MN = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
                 const period = `${MN[reviewMonth] || reviewMonth} ${reviewYear}`;
+
+                // Issue 5: one rating per employee per month — never overwrite history.
+                const existing = await SELECT.one.from(PERFORMANCE_RATING).where({ employee_employeeId: employeeId, reviewMonth, reviewYear });
                 if (existing) {
-                    await UPDATE(PERFORMANCE_RATING).set({ ratingValue, reviewComment: reviewComment || '', ratingCategory: ratingCategory || '' }).where({ ratingId: existing.ratingId });
-                } else {
-                    await INSERT.into(PERFORMANCE_RATING).entries({ ratingId, employee_employeeId: employeeId, ratingValue, reviewMonth, reviewYear, reviewComment: reviewComment || '', ratingCategory: ratingCategory || '' });
+                    return JSON.stringify({ error: `Rating for this employee has already been submitted for ${period}.` });
                 }
-                await createNotification(employeeId, 'PERFORMANCE_RATED',
-                    existing ? 'Performance Rating Updated ⭐' : 'New Performance Rating ⭐',
+                try {
+                    await INSERT.into(PERFORMANCE_RATING).entries({ ratingId, employee_employeeId: employeeId, ratingValue, reviewMonth, reviewYear, reviewComment: reviewComment || '', ratingCategory: ratingCategory || '' });
+                } catch (e) {
+                    return JSON.stringify({ error: `Rating for this employee has already been submitted for ${period}.` });
+                }
+                await createNotification(employeeId, 'PERFORMANCE_RATED', 'New Performance Rating ⭐',
                     `The Founder rated you ${ratingValue}/5${ratingCategory ? ' (' + ratingCategory + ')' : ''} for ${period}.${reviewComment ? ' Comment: ' + reviewComment : ''}`,
                     ratingId);
                 founderEvents.ping('founderSubmitRating');
-                return JSON.stringify({ ok: true, ratingId, updated: !!existing });
+                return JSON.stringify({ ok: true, ratingId });
             } catch (e) { cds.log('founder').error('founderSubmitRating:', e.message || e); return JSON.stringify({ error: 'Could not submit the rating.' }); }
         });
 

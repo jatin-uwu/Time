@@ -88,10 +88,21 @@ sap.ui.define([
             const sTaskId = oEvent.getParameter("arguments").taskId;
             this._oModel.setProperty("/taskId", sTaskId);
             this.getOwnerComponent().getCurrentUser().then(() => {
-                this._loadDetail(sTaskId);
+                const pDetail = this._loadDetail(sTaskId);
                 this._loadUpdates(sTaskId);
                 this._loadTaskDocuments(sTaskId);
                 this._startPoll();   // keep status + unread-chat dot live
+
+                // Issue 2: if we arrived here from a group-chat notification, open
+                // the chat panel automatically once the detail (incl. taskName) has
+                // loaded. The flag is consumed once so a normal revisit won't reopen.
+                const oComp = this.getOwnerComponent();
+                if (oComp._openGroupChatTaskId === sTaskId) {
+                    oComp._openGroupChatTaskId = null;
+                    (pDetail || Promise.resolve()).then(() => {
+                        try { this.onOpenChat(); } catch (e) { /* non-blocking */ }
+                    });
+                }
             });
         },
 
@@ -132,10 +143,10 @@ sap.ui.define([
 
         _loadDetail(sTaskId) {
             const oModel = this.getOwnerComponent().getModel();
-            if (!oModel) return;
+            if (!oModel) return Promise.resolve();
             const oCtx = oModel.bindContext("/getGroupTaskDetail(...)");
             oCtx.setParameter("taskId", sTaskId);
-            oCtx.execute().then(() => {
+            return oCtx.execute().then(() => {
                 const d = parseActionJson(oCtx) || {};
                 const total = d.total || 0, ended = d.ended || 0;
                 this._oModel.setProperty("/detail", Object.assign({}, d, {

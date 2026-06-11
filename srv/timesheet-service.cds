@@ -28,6 +28,12 @@ service EmployeeService @(path: '/employee') {
         'Manager'
     ])                                               as projection on db.timesheet.EmployeeMaster;
 
+    // Read-only: the dashboard / rating history only READ this. All writes must go
+    // through submitPerformanceRating / founderSubmitRating, which enforce the
+    // one-rating-per-employee-per-month rule (Issue 5). @readonly closes the OData
+    // CREATE/UPDATE/DELETE bypass without affecting those action handlers (they
+    // write the DB entity directly).
+    @readonly
     entity PerformanceRatings                        as projection on db.timesheet.PerformanceRating;
 
     // Expose new approval-request entities to employees
@@ -352,6 +358,21 @@ service EmployeeService @(path: '/employee') {
     action markGroupChatRead(taskId: String(10))                           returns {
         ok : Boolean;
     };
+
+    // ── Group chat message actions (edit / delete / pin) ──────────────────────
+    @(requires: ['Employee', 'Manager'])
+    action editTaskMessage(messageId: String(40),
+                           message: LargeString)                           returns LargeString;
+
+    @(requires: ['Employee', 'Manager'])
+    action deleteTaskMessage(messageId: String(40))                        returns LargeString;
+
+    @(requires: ['Employee', 'Manager'])
+    action pinTaskMessage(taskId: String(10),
+                          messageId: String(40))                           returns LargeString;
+
+    @(requires: ['Employee', 'Manager'])
+    action unpinTaskMessage(taskId: String(10))                            returns LargeString;
 
     // ── Group Task Updates (progress posts on a group task) ───────────────────
     // Read returns JSON (LargeString) — same pattern as getGroupTaskDetail.

@@ -153,6 +153,31 @@ sap.ui.define([
                 const oBus = Core.getEventBus ? Core.getEventBus() : sap.ui.getCore().getEventBus();
                 oBus.subscribe("tasks", "statusChanged", this._fnOnTaskStatusChanged, this);
             } catch (e) { /* ignore */ }
+
+            // ── Real-time (WebSocket) refresh ───────────────────────────────
+            // Refresh ONLY the impacted dashboard data sources for the event's
+            // category. Throttled (200ms) to coalesce bursts and avoid extra
+            // OData calls. We never reload the page or navigate away.
+            this._fnOnRealtime = (sChannel, sEvent, oData) => {
+                const cat = (oData && oData.category) || "";
+                if (this._rtTimers && this._rtTimers[cat]) return;   // already queued
+                this._rtTimers = this._rtTimers || {};
+                this._rtTimers[cat] = setTimeout(() => {
+                    this._rtTimers[cat] = null;
+                    switch (cat) {
+                        case "leave":      this._loadLeaveBalance(); this._loadLeaveOverview(); break;
+                        case "timesheet":  this._computeStats(); break;
+                        case "task":       this._loadTaskSummary(); this._loadMyTasks(); break;
+                        case "rating":     this._loadPerformanceRating(); this._loadPerformanceTrend(); break;
+                        case "attendance": this._loadAttendance(); break;
+                        default: /* generic — nothing heavy on the dashboard */ break;
+                    }
+                }, 200);
+            };
+            try {
+                const oBus2 = Core.getEventBus ? Core.getEventBus() : sap.ui.getCore().getEventBus();
+                oBus2.subscribe("rt", "ANY", this._fnOnRealtime, this);
+            } catch (e) { /* ignore */ }
         },
 
         // Unsubscribe to avoid leaks if the view is ever destroyed.
@@ -162,6 +187,9 @@ sap.ui.define([
                 const oBus = Core.getEventBus ? Core.getEventBus() : sap.ui.getCore().getEventBus();
                 if (this._fnOnTaskStatusChanged) {
                     oBus.unsubscribe("tasks", "statusChanged", this._fnOnTaskStatusChanged, this);
+                }
+                if (this._fnOnRealtime) {
+                    oBus.unsubscribe("rt", "ANY", this._fnOnRealtime, this);
                 }
             } catch (e) { /* ignore */ }
         },

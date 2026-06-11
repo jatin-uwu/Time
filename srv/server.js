@@ -1,6 +1,7 @@
 const cds = require('@sap/cds');
 const express = require('express');
 const founderEvents = require('./founder-events');
+const realtime = require('./realtime');   // NEW — app-wide WebSocket real-time
 
 // Raise the request body size limit so base64 attachments (chat files,
 // documents — up to ~13 MB for a 10 MB file) aren't rejected with HTTP 413
@@ -38,6 +39,16 @@ cds.on('bootstrap', (app) => {
             founderEvents.bus.removeListener('changed', onChange);
         });
     });
+});
+
+// ── App-wide WebSocket real-time (NEW, additive) ──────────────────────────────
+// Attach the WebSocket server to the CAP HTTP server once it is listening. This
+// is fully isolated from the Founder SSE above and from every OData service. If
+// the `ws` package or the upgrade fails, attach() logs and returns null — the
+// CAP app still boots and serves all existing functionality unchanged.
+cds.on('listening', ({ server }) => {
+    try { realtime.attach(server); }
+    catch (e) { cds.log('realtime').warn('WebSocket attach failed (real-time disabled):', e.message || e); }
 });
 
 module.exports = cds.server;

@@ -112,6 +112,10 @@ entity TaskMaster : managed {
     taskType           : String(10) default 'solo';      // 'solo' | 'group'
     completedAt        : Timestamp;                       // set when a group task fully ends
 
+    // ── Group chat pinned message (one active pin per task) ────────────────
+    pinnedMessageId    : String(40);                     // null = nothing pinned
+    pinnedByName       : String(100);                    // display name of who pinned it
+
     assignees          : Composition of many TaskAssignee
                          on assignees.task = $self;
     messages           : Composition of many TaskMessage
@@ -156,6 +160,8 @@ entity TaskMessage : managed {
     sender        : Association to EmployeeMaster;
     message       : LargeString;               // nullable — attachment-only messages allowed
     sentAt        : Timestamp;
+    editedAt      : Timestamp;                 // set when the author edits (drives "Edited")
+    isDeleted     : Boolean default false;     // soft-delete → renders "This message was deleted"
     attachments   : Composition of many TaskAttachment
                     on attachments.message = $self;
 }

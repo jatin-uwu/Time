@@ -21,6 +21,18 @@
         <SearchField placeholder="Search messages" liveChange=".onSearchMessages"
                      showSearchButton="false" width="100%" class="tsChatSearch" />
 
+        <!-- Pinned message banner (fixed, just below search). One pin per task. -->
+        <HBox class="tsChatPinned" alignItems="Center" visible="{= !!${chat>/pinned} }">
+            <core:Icon src="sap-icon://pushpin-on" class="tsChatPinIcon sapUiTinyMarginEnd" />
+            <VBox class="tsChatPinnedText">
+                <Link text="Pinned Message: {chat>/pinned/preview}"
+                      press=".onPinnedClick" class="tsChatPinnedPreview" />
+                <Text text="Pinned By: {chat>/pinned/pinnedByName}" class="tsChatPinnedBy" />
+            </VBox>
+            <Button icon="sap-icon://decline" type="Transparent" tooltip="Unpin"
+                    press=".onUnpinMessage" class="tsChatPinUnpin" />
+        </HBox>
+
         <!-- Messages (fills remaining space, scrolls) -->
         <VBox id="gchatScroll" class="tsChatScroll">
             <Button text="Load earlier messages" type="Transparent"
@@ -30,6 +42,9 @@
             <List items="{chat>/messages}" mode="None" showSeparators="None"
                   class="tsChatList" noDataText="No messages yet — start the conversation.">
                 <CustomListItem class="tsChatItem">
+                    <customData>
+                        <core:CustomData key="msgid" value="{chat>messageId}" writeToDom="true" />
+                    </customData>
                     <HBox justifyContent="{= ${chat>isMine} ? 'End' : 'Start' }" class="tsChatLine">
                         <VBox class="{= ${chat>isMine} ? 'tsChatRow tsChatRowMine' : 'tsChatRow' }">
                             <HBox class="tsChatMeta" alignItems="Center">
@@ -39,8 +54,24 @@
                                 <Text text="{chat>senderName}" class="tsChatSender sapUiTinyMarginEnd"
                                       visible="{= !${chat>isMine} }" />
                                 <Text text="{chat>timeLabel}" class="tsChatTime" />
+                                <Text text="· Edited" class="tsChatEdited sapUiTinyMarginBegin"
+                                      visible="{= ${chat>edited} }" />
+                                <!-- Message actions: pin (any member) + edit/delete (own, live) -->
+                                <Button icon="sap-icon://pushpin-off" type="Transparent"
+                                        tooltip="Pin message" press=".onPinMessage"
+                                        visible="{= ${chat>canPin} }" class="tsChatMsgAct" />
+                                <Button icon="sap-icon://edit" type="Transparent"
+                                        tooltip="Edit" press=".onEditMessage"
+                                        visible="{= ${chat>canManage} }" class="tsChatMsgAct" />
+                                <Button icon="sap-icon://delete" type="Transparent"
+                                        tooltip="Delete" press=".onDeleteMessage"
+                                        visible="{= ${chat>canManage} }" class="tsChatMsgAct" />
                             </HBox>
-                            <VBox class="tsChatBubble">
+                            <!-- Soft-deleted placeholder (keeps the slot in history) -->
+                            <VBox class="tsChatBubble tsChatBubbleDeleted" visible="{= ${chat>isDeleted} }">
+                                <Text text="{chat>deletedText}" class="tsChatDeleted" />
+                            </VBox>
+                            <VBox class="tsChatBubble" visible="{= !${chat>isDeleted} }">
                                 <Text text="{chat>message}" class="tsChatText" visible="{= !!${chat>message} }" />
                                 <VBox items="{chat>attachments}" class="tsChatAtts"
                                       visible="{= ${chat>attachments}.length > 0 }">
@@ -73,10 +104,18 @@
             </HBox>
         </VBox>
 
+        <!-- Editing indicator (shown while the composer is committing an edit) -->
+        <HBox class="tsChatEditingBar" alignItems="Center" visible="{= !!${chat>/editingId} }">
+            <core:Icon src="sap-icon://edit" class="sapUiTinyMarginEnd" />
+            <Text text="Editing message" class="tsChatEditingText" />
+            <Button text="Cancel" type="Transparent" press=".onCancelEdit"
+                    class="sapUiTinyMarginBegin" />
+        </HBox>
+
         <!-- Composer (fixed at bottom). The TextArea uses FlexItemData growFactor
              so it (its flex wrapper) fills the row and the icons stay pinned right. -->
         <HBox class="tsChatComposer" alignItems="End">
-            <TextArea id="gchatInput" value="{chat>/draft}"
+            <TextArea id="gchatInput" value="{chat>/draft}" valueLiveUpdate="true"
                       rows="1" growing="true" growingMaxLines="6" width="100%"
                       placeholder="Type a message" class="tsChatInput">
                 <layoutData>

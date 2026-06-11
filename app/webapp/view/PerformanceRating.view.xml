@@ -123,6 +123,7 @@
                                     type="Emphasized"
                                     icon="sap-icon://paper-plane"
                                     press=".onSubmitRating"
+                                    enabled="{= !${/form/duplicate} }"
                                     class="tsPerfSubmitBtn" />
                         </HBox>
 

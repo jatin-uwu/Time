@@ -49,6 +49,23 @@ sap.ui.define([
                     try { localStorage.setItem("tsRole", user.role); } catch (e) { }
                 }
             });
+
+            // ── Real-time (WebSocket) — additive & non-blocking ────────────────
+            // Opens an app-wide WS that pushes content-free refresh signals.
+            // Wrapped so a load/connect failure can NEVER block app startup.
+            // (The Founder dashboard keeps its own independent SSE stream.)
+            try {
+                sap.ui.require(["timesheet/app/util/RealtimeService"], function (RealtimeService) {
+                    try { RealtimeService.init(); this._realtime = RealtimeService; }
+                    catch (e) { /* real-time is best-effort; ignore */ }
+                }.bind(this));
+            } catch (e) { /* ignore — UI must work without real-time */ }
+        },
+
+        // Cleanly stop the WebSocket when the component is destroyed (e.g. logout).
+        destroy() {
+            try { if (this._realtime) this._realtime.stop(); } catch (e) { /* */ }
+            UIComponent.prototype.destroy.apply(this, arguments);
         },
 
         // ── Demo seed (idempotent) ────────────────────────────────────────
