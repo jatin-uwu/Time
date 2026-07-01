@@ -22,6 +22,7 @@ sap.ui.define([
 
         _load: function () {
             var that = this;
+            this._historyData = null;   // force history re-fetch after any new decision
             var h = this._host();
             if (h) h.setContent("<div class='fdRoot'>" + FP.header("Approvals", "Executive approval center") +
                 "<div class='fdWrap'><div class='fdLoading'>Loading pending approvals…</div></div></div>");
@@ -46,10 +47,13 @@ sap.ui.define([
                 "<button class='" + (this._tab === "timesheets" ? "active" : "") + "' onclick=\"window._faCtrl.onTab('timesheets')\">📋 Timesheets (" + (c.timesheets || 0) + ")</button>" +
                 "<button class='" + (this._tab === "leaves" ? "active" : "") + "' onclick=\"window._faCtrl.onTab('leaves')\">🌴 Leaves (" + (c.leaves || 0) + ")</button>" +
                 "<button class='" + (this._tab === "fill" ? "active" : "") + "' onclick=\"window._faCtrl.onTab('fill')\">📝 Fill Requests (" + (c.fillRequests || 0) + ")</button>" +
+                "<button class='" + (this._tab === "history" ? "active" : "") + "' onclick=\"window._faCtrl.onTab('history')\">🕓 History</button>" +
                 "</div>";
 
             var cards;
-            if (this._tab === "timesheets") {
+            if (this._tab === "history") {
+                cards = this._renderHistory();
+            } else if (this._tab === "timesheets") {
                 cards = ts.length ? ts.map(this._tsCard.bind(this)).join("") : this._empty("No timesheets awaiting your review.");
             } else if (this._tab === "fill") {
                 cards = fr.length ? fr.map(this._frCard.bind(this)).join("") : this._empty("No timesheet fill requests pending.");
@@ -122,7 +126,59 @@ sap.ui.define([
                 "</div></div>";
         },
 
-        onTab: function (t) { this._tab = t; this._render(); },
+        // ── Approval history (read-only) ──────────────────────────────────────
+        _renderHistory: function () {
+            if (this._historyLoading) return "<div class='fdLoading'>Loading approval history…</div>";
+            var hd = this._historyData;
+            if (!hd) return "<div class='fdLoading'>Loading approval history…</div>";
+            var all = []
+                .concat((hd.timesheets || []).map(function (r) { return { r: r, t: "timesheet" }; }))
+                .concat((hd.leaves || []).map(function (r) { return { r: r, t: "leave" }; }))
+                .concat((hd.fillRequests || []).map(function (r) { return { r: r, t: "fill" }; }));
+            // newest first across all types
+            all.sort(function (a, b) { return new Date(b.r.decidedOn || 0) - new Date(a.r.decidedOn || 0); });
+            if (!all.length) return this._empty("No approval history yet. Decisions you make will appear here.");
+            return all.map(function (x) { return this._histCard(x.r, x.t); }.bind(this)).join("");
+        },
+        _histCard: function (r, type) {
+            var statusCls = (r.status === "Rejected") ? "crit" : "ok";
+            var typeLabel = type === "timesheet" ? "📋 Timesheet"
+                : type === "leave" ? ("🌴 " + FP.esc(r.leaveType || "Leave"))
+                    : ((r.kind === "prevweek" ? "📅 " : "🔓 ") + FP.esc(r.title || "Fill Request"));
+            var detail = type === "timesheet" ? ("Week " + FP.esc(r.week))
+                : type === "leave" ? (FP.esc(r.from) + " → " + FP.esc(r.to) + " · " + FP.esc(r.days) + "d")
+                    : FP.esc(r.detail);
+            return "<div class='faCard fdGlass'>" +
+                "<div class='faCardTop'>" + this._avatar(r.employee) +
+                  "<div class='faWho'><div class='faName'>" + FP.esc(r.employee) + "</div>" +
+                  "<div class='faDept'>" + FP.esc(r.department) + "</div></div>" +
+                  "<span class='fdPillStatus " + statusCls + "'>" + FP.esc(r.status) + "</span></div>" +
+                "<div class='faMeta'>" +
+                  "<div><span>" + typeLabel + "</span><b>" + detail + "</b></div>" +
+                  (r.reason ? "<div class='faReason'><span>Applied for</span><b>" + FP.esc(r.reason) + "</b></div>" : "") +
+                  (r.remarks ? "<div class='faReason'><span>Your remarks</span><b>" + FP.esc(r.remarks) + "</b></div>" : "") +
+                  "<div><span>Decided</span><b>" + FP.esc(r.decidedOn || "—") + "</b></div>" +
+                "</div></div>";
+        },
+
+        onTab: function (t) {
+            this._tab = t;
+            if (t === "history") {
+                // ALWAYS re-fetch on open so a just-approved/rejected request is
+                // guaranteed to appear (no stale cache).
+                var that = this;
+                this._historyLoading = true;
+                this._historyData = null;
+                this._render();   // shows the loading line
+                FP.post("getFounderApprovalHistory", {}).then(function (d) {
+                    that._historyData = d || { timesheets: [], leaves: [], fillRequests: [] };
+                }).catch(function () {
+                    that._historyData = { timesheets: [], leaves: [], fillRequests: [] };
+                }).finally(function () { that._historyLoading = false; that._render(); });
+                return;
+            }
+            this._render();
+        },
 
         decideTs: function (id, approve) { this._decide("timesheet", id, approve); },
         decideLv: function (id, approve) { this._decide("leave", id, approve); },

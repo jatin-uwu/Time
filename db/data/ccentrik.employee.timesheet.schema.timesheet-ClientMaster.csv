@@ -1,0 +1,3 @@
+clientId,clientName,companyName,contactPerson,email,phoneNumber,status,notes
+CLT-0001,Acme Corp,Acme Corporation Pvt Ltd,Alice Cooper,contact@acme.com,9810000001,Active,Strategic enterprise client
+CLT-0002,Globex,Globex International,Bob Hardy,contact@globex.com,9810000002,Active,Mid-market client

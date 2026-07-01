@@ -1,0 +1,8 @@
+<mvc:View controllerName="timesheet.app.controller.ResourceSettings"
+    xmlns:mvc="sap.ui.core.mvc" xmlns="sap.m" xmlns:core="sap.ui.core" displayBlock="true">
+    <Page id="resourceSettingsPage" showHeader="false" class="tsDashboardPage" enableScrolling="true">
+        <content>
+            <core:HTML id="rpsHost" content="&lt;div class='rpWrap'&gt;&lt;div class='rpLoading'&gt;Loading settings…&lt;/div&gt;&lt;/div&gt;" />
+        </content>
+    </Page>
+</mvc:View>

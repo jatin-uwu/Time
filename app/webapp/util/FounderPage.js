@@ -86,6 +86,7 @@ sap.ui.define([], function () {
               "</div>" +
               "<div class='fdHeadActions'>" +
                 (pills || "") +
+                "<div class='fdIconBtn' title='Company Newsletter' onclick=\"window.FShell&&window.FShell.newsletter()\">📰</div>" +
                 "<div class='fdIconBtn' title='Notifications' onclick=\"window.FShell&&window.FShell.notifications()\">🔔<span class='fdDot'></span></div>" +
                 "<div class='fdIconBtn' title='Upload profile picture' onclick=\"window.FShell&&window.FShell.uploadPhoto()\">📷</div>" +
                 "<div class='fdIconBtn' title='Settings' onclick=\"window.FShell&&window.FShell.settings()\">⚙️</div>" +
@@ -113,6 +114,69 @@ sap.ui.define([], function () {
         attach: function (oController) {
             this._ctrl = oController;
             if (!this._photoLoaded) { this._photoLoaded = true; this.loadPhoto(); }
+        },
+
+        // ── Company Newsletter (shares the Employee backend; founder is EMP1006) ─
+        // Same source as every other employee: getLatestNewsletter. Shows the
+        // document inline (PDF / image / .docx) with a download fallback.
+        newsletter: function () {
+            var self = this;
+            fetch("/employee/getLatestNewsletter", {
+                method: "POST", credentials: "include",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" }, body: "{}"
+            }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+                var v = (j && (j.value !== undefined ? j.value : j)) || {};
+                if (!v.hasNewsletter || !v.dataBase64) { toast("No newsletter has been published yet.", false); return; }
+                self._showNewsletter(v);
+            }).catch(function () { toast("Could not load the newsletter.", false); });
+        },
+        _showNewsletter: function (v) {
+            var name = v.fileName || "newsletter";
+            var mime = v.mimeType || "";
+            var dataUrl = "data:" + (mime || "application/octet-stream") + ";base64," + v.dataBase64;
+            var isPdf = /pdf/i.test(mime) || /\.pdf$/i.test(name);
+            var isImg = /^image\//i.test(mime);
+            var isDocx = /\.docx$/i.test(name) || /wordprocessingml/i.test(mime);
+            var bodyHtml;
+            if (isPdf) {
+                bodyHtml = "<iframe src='" + dataUrl + "#toolbar=0&navpanes=0' style='width:100%;height:66vh;border:none;border-radius:8px;background:#fff'></iframe>";
+            } else if (isImg) {
+                bodyHtml = "<div style='text-align:center'><img src='" + dataUrl + "' style='max-width:100%;border-radius:8px' alt='Newsletter'/></div>";
+            } else if (isDocx) {
+                bodyHtml = "<div id='fdNewsDoc' class='tsNewsletterDoc'><div class='fdLoading'>Loading newsletter…</div></div>";
+            } else {
+                bodyHtml = "<div style='text-align:center;padding:24px;color:#cbd5e1'>“" + esc(name) + "” can’t be previewed here. Use Download below.</div>";
+            }
+            bodyHtml += "<div class='fmodFoot' style='margin-top:14px'>" +
+                "<a class='faBtn approve' style='text-decoration:none' href='" + dataUrl + "' download='" + esc(name) + "'>⬇ Download</a></div>";
+            var m = modal({ title: "Company Newsletter", sub: name, body: bodyHtml, wide: true });
+            if (isDocx) { var el = m.body.querySelector("#fdNewsDoc"); FShell._renderDocx(v.dataBase64, el); }
+        },
+        _renderDocx: function (b64, el) {
+            if (!el) return;
+            FShell._loadMammoth().then(function (mammoth) {
+                if (!mammoth) { el.innerHTML = "<div style='padding:16px;color:#cbd5e1'>Preview unavailable — use Download.</div>"; return; }
+                try {
+                    var bin = atob(String(b64).replace(/^data:[^;]+;base64,/, ""));
+                    var buf = new ArrayBuffer(bin.length); var view = new Uint8Array(buf);
+                    for (var i = 0; i < bin.length; i++) view[i] = bin.charCodeAt(i);
+                    mammoth.convertToHtml({ arrayBuffer: buf }).then(function (res) {
+                        el.innerHTML = res.value || "<div style='padding:16px'>Empty document.</div>";
+                    }).catch(function () { el.innerHTML = "<div style='padding:16px;color:#cbd5e1'>Preview unavailable — use Download.</div>"; });
+                } catch (e) { el.innerHTML = "<div style='padding:16px;color:#cbd5e1'>Preview unavailable — use Download.</div>"; }
+            });
+        },
+        _loadMammoth: function () {
+            if (window.mammoth) return Promise.resolve(window.mammoth);
+            if (FShell._pMammoth) return FShell._pMammoth;
+            FShell._pMammoth = new Promise(function (resolve) {
+                var s = document.createElement("script");
+                s.src = "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js";
+                s.onload = function () { resolve(window.mammoth); };
+                s.onerror = function () { FShell._pMammoth = null; resolve(null); };
+                document.head.appendChild(s);
+            });
+            return FShell._pMammoth;
         },
         _user: function () {
             try {

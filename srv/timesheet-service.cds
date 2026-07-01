@@ -235,6 +235,9 @@ service EmployeeService @(path: '/employee') {
         mobileNumber : String(20);
         managerId    : String(10);
         isActive     : Boolean;
+        accessDenied : String(40);
+        clientId     : String(20);
+        clientName   : String(150);
     };
 
     @(requires: [
@@ -504,10 +507,12 @@ service EmployeeService @(path: '/employee') {
         notifiedAt     : String; // ISO timestamp string
     };
 
-    // Upcoming Calendar events from Google Calendar
-    action getUpcomingCalendar()                                           returns {
-        eventsJSON : String; // JSON array of {id, title, start, end, timeLabel, dateLabel, isToday}
-    };
+    // Upcoming Teams meetings for the logged-in employee (next 7 days from DB)
+    action getUpcomingMeetings()                                           returns LargeString;
+
+    // All meetings visible to the caller (for standalone Meetings page)
+    // filter: all | today | week | month | upcoming | completed | cancelled
+    action getMyMeetings(filter: String)                                   returns LargeString;
 
     // My Leave Overview — yearly taken vs balance
     action getLeaveOverview(year: Integer)                                 returns {
@@ -673,6 +678,20 @@ service HRService @(path: '/hr')@(requires: 'HR') {
 
     action nextEmployeeId()                                                returns String;
 
+    // Hierarchical resource masters (Department → Role → Specialization) + skill /
+    // certification catalogs, for the cascading HR dropdowns. Returns LargeString JSON.
+    action getResourceHierarchy()                                          returns LargeString;
+
+    // ── Talent Taxonomy (dynamic typeahead + create-if-not-exists) ───────────────
+    // type: role | module | skill | certification. departmentId scopes roles;
+    // roleId scopes modules. Both return LargeString JSON.
+    action searchTaxonomy(type: String(20), q: String(150),
+                          departmentId: String(20), roleId: String(30))   returns LargeString;
+    action upsertTaxonomy(type: String(20), name: String(150),
+                          departmentId: String(20), roleId: String(30))   returns LargeString;
+    // Language typeahead — distinct values already on file (dynamic, no hardcoded list).
+    action searchLanguages(q: String(100))                                 returns LargeString;
+
     action addEmployee(employeeName: String(100),
                        designation: String(50),
                        role: String(20),
@@ -691,9 +710,40 @@ service HRService @(path: '/hr')@(requires: 'HR') {
                        bloodGroup: String(5),
                        bankAccountNumber: String(30),
                        bankName: String(60),
-                       bankIfsc: String(15))                               returns {
+                       bankIfsc: String(15),
+                       // ── Work location + marital details (collected by the form) ──
+                       workLocation: String(50),
+                       maritalStatus: String(20),
+                       fatherName: String(100),
+                       partnerName: String(100),
+                       marriageDate: Date,
+                       hasKids: String(5),
+                       // ── Hierarchical resource profile (additive, optional) ──
+                       roleCategoryId: String(30),
+                       specializationId: String(40),
+                       subSpecialization: String(100),
+                       yearsOfExperience: Decimal,
+                       skills: String(500),
+                       certifications: String(500),
+                       languages: String(255),
+                       ctc: Decimal,
+                       baseAvailabilityPct: Integer)                       returns {
         employeeId : String(10);
     };
+
+    // ── Rich certifications (per-certificate document) ───────────────────────────
+    action saveEmployeeCertification(employeeId: String(10), certName: String(150),
+                                     certificateNumber: String(100), issuedBy: String(150),
+                                     issueDate: Date, expiryDate: Date,
+                                     fileName: String(255), mimeType: String(100),
+                                     dataBase64: LargeString)               returns LargeString;
+    action getEmployeeCertifications(employeeId: String(10))               returns LargeString;
+    action getCertificationDocument(id: String(55))                        returns {
+        fileName   : String(255);
+        mimeType   : String(100);
+        dataBase64 : LargeString;
+    };
+    action deleteEmployeeCertification(id: String(55))                     returns LargeString;
 
     action uploadEmployeeDocument(employeeId: String(10),
                                   documentType: String(40),
@@ -729,7 +779,17 @@ service HRService @(path: '/hr')@(requires: 'HR') {
                           department: String(50),
                           employmentType: String(20),
                           emergencyContact: String(15),
-                          managerEmployeeId: String(10))                   returns {
+                          managerEmployeeId: String(10),
+                          // ── Hierarchical resource profile (additive, optional) ──
+                          roleCategoryId: String(30),
+                          specializationId: String(40),
+                          subSpecialization: String(100),
+                          yearsOfExperience: Decimal,
+                          skills: String(500),
+                          certifications: String(500),
+                          languages: String(255),
+                          ctc: Decimal,
+                          baseAvailabilityPct: Integer)                    returns {
         employeeId : String(10);
         message    : String;
     };
@@ -771,6 +831,10 @@ service FounderService @(path: '/founder') @(requires: 'Founder') {
 
     // Org-wide lists for the Founder sidebar destinations (read-only overview).
     action getFounderApprovals()                                          returns LargeString;
+
+    // Decisions the founder has already made (approved / rejected) for their
+    // direct reports — read-only history.
+    action getFounderApprovalHistory()                                    returns LargeString;
     action getFounderTasks()                                              returns LargeString;
     action getFounderRatings()                                            returns LargeString;
 
@@ -789,4 +853,287 @@ service FounderService @(path: '/founder') @(requires: 'Founder') {
                              startDate: String, dueDate: String, assigneeId: String, reviewerId: String) returns LargeString;
     action founderSubmitRating(employeeId: String, ratingValue: Decimal, reviewMonth: Integer,
                                reviewYear: Integer, reviewComment: String, ratingCategory: String) returns LargeString;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Project Management Service (Phase 1) — ADDITIVE. Path /project. Open to any
+// authenticated user; per-action authorization (Founder / POC / allocated
+// employee) is enforced in the handlers. All reads/writes go through actions that
+// return scoped JSON (LargeString), mirroring the Founder service style — so no
+// raw entity is writable over OData.
+// ══════════════════════════════════════════════════════════════════════════════
+service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
+
+    // ── Founder-only ──────────────────────────────────────────────────────────
+    // clientId is mandatory — every project belongs to exactly one client.
+    action createProject(projectName: String(150), customerName: String(150),
+                         description: String(1000), startDate: String, endDate: String,
+                         priority: String(20), pocEmployeeId: String(10),
+                         budget: Decimal, goLiveDate: String, focusAreas: String(500),
+                         clientId: String(20),
+                         projectType: String(30), contractValue: Decimal,
+                         profitMarginPct: Decimal) returns LargeString;
+    // Configurable project-type master (drives planning/budgeting/resourcing).
+    action getProjectTypes() returns LargeString;
+    // Dynamic roles (= active-employee designations) for a department / project type.
+    action getDepartmentRoles(projectId: String(20), department: String(50)) returns LargeString;
+
+    // ── Milestone Management ────────────────────────────────────────────────────
+    action getMilestones(projectId: String(20))                                   returns LargeString;
+    action seedMilestones(projectId: String(20))                                  returns LargeString;
+    action createMilestone(projectId: String(20), name: String(150), description: String(1000),
+                           plannedStartDate: String, plannedEndDate: String, ownerId: String(10),
+                           isCritical: Boolean, isBillable: Boolean, plannedBudget: Decimal,
+                           progressMode: String(20), sequence: Integer)            returns LargeString;
+    action updateMilestone(milestoneId: String(40), name: String(150), description: String(1000),
+                           plannedStartDate: String, plannedEndDate: String, ownerId: String(10),
+                           isCritical: Boolean, isBillable: Boolean, plannedBudget: Decimal,
+                           progressMode: String(20), sequence: Integer, remarks: String(1000)) returns LargeString;
+    action deleteMilestone(milestoneId: String(40))                               returns LargeString;
+    action setMilestoneDependency(milestoneId: String(40), predecessorId: String(40)) returns LargeString;
+    action removeMilestoneDependency(dependencyId: String(55))                    returns LargeString;
+    action startMilestone(milestoneId: String(40))                               returns LargeString;
+    action updateMilestoneProgress(milestoneId: String(40), progressPct: Integer) returns LargeString;
+    action completeMilestone(milestoneId: String(40), override: Boolean)          returns LargeString;
+    action requestMilestoneApproval(milestoneId: String(40), approverRole: String(30),
+                                    approverId: String(10), comments: String(1000)) returns LargeString;
+    action decideMilestoneApproval(milestoneId: String(40), decision: String(25),
+                                   comments: String(1000))                        returns LargeString;
+    action transferMilestoneResource(fromMilestoneId: String(40), toMilestoneId: String(40),
+                                     employeeId: String(10))                       returns LargeString;
+    // Phase 15 — downloadable reports. reportType: status|budget|resource|delay|
+    // forecast|health · format: xlsx|pdf. Returns {ok,fileName,mime,base64}.
+    action generateMilestoneReport(projectId: String(20), reportType: String(20),
+                                   format: String(10))                            returns LargeString;
+
+    // ── Hierarchical resource requirements (Phase 4) ─────────────────────────────
+    action getResourceHierarchy()                                                 returns LargeString;
+    action getResourceRequirements(projectId: String(20))                         returns LargeString;
+    action createResourceRequirement(projectId: String(20), departmentId: String(20),
+                                     roleCategoryId: String(30), specializationId: String(40),
+                                     requiredCount: Integer, requiredHours: Decimal,
+                                     startDate: String, endDate: String, notes: String(500)) returns LargeString;
+    action deleteResourceRequirement(requirementId: String(45))                   returns LargeString;
+
+    // ── Client Master management (Founder) ──────────────────────────────────────
+    action getClientMasters()                                                     returns LargeString;
+    action createClientMaster(clientName: String(150), companyName: String(150),
+                             contactPerson: String(100), email: String(150),
+                             phoneNumber: String(20), notes: String(1000))         returns LargeString;
+    action updateClientMaster(clientId: String(20), clientName: String(150),
+                             companyName: String(150), contactPerson: String(100),
+                             phoneNumber: String(20), status: String(20),
+                             notes: String(1000))                                  returns LargeString;
+
+    // ── Requirement visibility & handling (Founder / POC / assigned employee) ────
+    // Founder & POC see all requirements for their scope; employees see assigned.
+    action getRequirementsInbox(filter: String(30))                               returns LargeString;
+    action getProjectRequirements(projectId: String(20))                          returns LargeString;
+    action getRequirementDetail(requirementId: String(30))                        returns LargeString;
+    action assignRequirement(requirementId: String(30), employeeId: String(10))   returns LargeString;
+    action updateRequirementStatus(requirementId: String(30), status: String(30)) returns LargeString;
+    action addRequirementComment(requirementId: String(30), message: LargeString,
+                                fileName: String(255), mimeType: String(100),
+                                dataBase64: LargeString)                           returns LargeString;
+    action getRequirementCommentAttachment(commentId: String(50))                 returns {
+        fileName : String; mimeType : String; dataBase64 : LargeString;
+    };
+    action getRequirementAttachment(attachmentId: String(50))                     returns {
+        fileName : String; mimeType : String; dataBase64 : LargeString;
+    };
+
+    // ── Executive dashboard (budget, effort, issues, AI summary) ───────────────
+    // ── Project lifecycle governance (Founder-only) ──────────────────────────
+    // Marks the planning meeting as Completed and advances lifecycleStage.
+    action completePlanningMeeting(projectId: String(20))                          returns LargeString;
+    // Saves department + other budget allocations; advances lifecycleStage to BudgetAllocated.
+    action saveBudgetAllocation(projectId: String(20), totalBudget: Decimal,
+                                departmentBudgets: LargeString,
+                                otherBudgets: LargeString,
+                                categoryBudgets: LargeString)                      returns LargeString;
+    // Returns the saved budget breakdown for a project.
+    action getBudgetAllocation(projectId: String(20))                              returns LargeString;
+    // Returns all active managers (for planning-meeting participant selection).
+    action getManagersForMeeting()                                                 returns LargeString;
+    action getDepartments()                                                        returns LargeString;
+
+    // Per-project Budget vs Actual analysis with dept→employee cost drill-down (Founder only).
+    action getProjectBudgetAnalysis(projectId: String(20))                        returns LargeString;
+    // Additional department-budget request & approval workflow.
+    action requestAdditionalBudget(projectId: String(20), department: String(50),
+            requestedAmount: Decimal, justification: String(2000),
+            businessImpact: String(2000))                                         returns LargeString;
+    action withdrawBudgetRequest(requestId: String(45))                           returns LargeString;
+    action getMyBudgetRequests(projectId: String(20))                             returns LargeString;
+    action decideBudgetRequest(requestId: String(45), decision: String(10),
+            approvedAmount: Decimal, comments: String(2000))                      returns LargeString;
+    // Operational resource-planning indicators — capacity/utilization, NO financials (POC view).
+    action getProjectResourcePlanning(projectId: String(20))                      returns LargeString;
+
+    action getProjectExecutive(projectId: String(20))                             returns LargeString;
+
+    // Risk/issue register
+    action createProjectIssue(projectId: String(20), title: String(200),
+                             description: String(1000), severity: String(20),
+                             ownerId: String(10))                                 returns LargeString;
+    action updateProjectIssue(issueId: String(45), status: String(20))            returns LargeString;
+
+    // Employee cost master (Founder/HR) — used for budget consumption
+    action upsertEmployeeSalary(employeeId: String(10), annualSalary: Decimal,
+                               hourlyCost: Decimal, effectiveFrom: String)         returns LargeString;
+    action getEmployeeSalaries()                                                  returns LargeString;
+
+    action createProjectTask(projectId: String(20), taskName: String(150),
+                            description: String(1000), assignedToId: String(10),
+                            priority: String(20), startDate: String, dueDate: String,
+                            estimatedHours: Decimal, milestoneId: String(40))      returns LargeString;
+
+    action updateProjectStatus(projectId: String(20), status: String(20))         returns LargeString;
+    action getProjectDashboard()                                                  returns LargeString;
+
+    // ── POC of the project (or Founder) ───────────────────────────────────────
+    action getAllocatableEmployees(projectId: String(20))                         returns LargeString;
+    action allocateResources(projectId: String(20),
+                            allocations: many {
+                                employeeId : String(10);
+                                bandwidth  : Integer;
+                                startDate  : String;   // optional ISO YYYY-MM-DD
+                                endDate    : String;   // optional ISO YYYY-MM-DD
+                                role       : String;   // optional project role
+                                phase      : String;   // optional (phase-based plan)
+                                module     : String;   // optional (module assignment)
+                                milestoneId: String;   // optional milestone scope
+                            },
+                            allowOverride: Boolean,
+                            overrideReason: String(500))                           returns LargeString;
+    action removeResource(projectId: String(20), employeeId: String(10))          returns LargeString;
+
+    // ── Resource Planning & Recommendation (Manager / Founder; POC for recommend) ──
+    // All values are backend-computed (utilization, free hours, availability,
+    // recommendation score) — see srv/resource-planning.js.
+    action getResourcePool(skill: String(100), department: String(50),
+                           minUtil: Integer, maxUtil: Integer,
+                           availabilityDate: String, nameSearch: String(100),
+                           status: String(20))                                   returns LargeString;
+    action getResourcePlanningKPIs()                                            returns LargeString;
+    action getOverUtilizedResources()                                          returns LargeString;
+    action getResourceCapacityRisks()                                          returns LargeString;
+    // Cost forecasting + project health + founder financial dashboard (Phase 3).
+    action getProjectHealth(projectId: String(20))                             returns LargeString;
+    action getFounderFinancials()                                              returns LargeString;
+    // Multi-month capacity timeline (single source of truth, time-aware).
+    action getCapacityForecast(employeeId: String(10), fromDate: String, toDate: String) returns LargeString;
+    action getProjectCapacityForecast(projectId: String(20))                   returns LargeString;
+    // Centralized engine configuration (admin) + company events.
+    action getResourcePlanningConfig()                                         returns LargeString;
+    action saveResourcePlanningConfig(skillWeight: Integer, availabilityWeight: Integer,
+                                      utilizationWeight: Integer, experienceWeight: Integer,
+                                      maxUtilizationThreshold: Integer, standardDailyHours: Decimal,
+                                      standardWorkingDays: Integer, nonBillablePct: Integer,
+                                      monthlyOverhead: Decimal) returns LargeString;
+    action getCompanyEvents()                                                  returns LargeString;
+    action saveCompanyEvent(eventId: String(30), eventName: String(150),
+                            fromDate: String, toDate: String, description: String(500)) returns LargeString;
+    action deleteCompanyEvent(eventId: String(30))                             returns LargeString;
+    action recommendResources(projectId: String(20), requiredSkills: String(500),
+                              requiredRole: String(100),
+                              neededBandwidth: Integer, limit: Integer)          returns LargeString;
+
+    // ── Assigned employee ─────────────────────────────────────────────────────
+    action updateProjectTaskStatus(taskId: String(25), status: String(20),
+                                   actualHours: Decimal)                           returns LargeString;
+
+    // ── Scoped reads (Founder: all · POC: assigned · Employee: allocated) ──────
+    action getProjects()                                                          returns LargeString;
+    action getProjectDetail(projectId: String(20))                                returns LargeString;
+    action getProjectAuditLog(projectId: String(20))                              returns LargeString;
+
+    // ── Microsoft Teams Meetings (project-scoped) ─────────────────────────────
+    // POC or Founder can schedule/edit/cancel; all project members can view.
+    action scheduleMeeting(projectId: String(20), title: String(200),
+                           agenda: String(2000), startDateTime: String, endDateTime: String,
+                           participantIds: many String)                            returns LargeString;
+    action updateMeetingDetails(meetingId: String(45), title: String(200),
+                                agenda: String(2000), startDateTime: String,
+                                endDateTime: String)                               returns LargeString;
+    action cancelProjectMeeting(meetingId: String(45))                            returns LargeString;
+    action getProjectMeetings(projectId: String(20))                              returns LargeString;
+
+    // ── Project Chat ──────────────────────────────────────────────────────────
+    // All project members (allocated employees, POC, Founder) can participate.
+    action getProjectMessages(projectId: String(20),
+                              page: Integer,
+                              pageSize: Integer)                                   returns LargeString;
+    action sendProjectMessage(projectId: String(20),
+                              message: LargeString,
+                              attachments: many {
+                                  fileName   : String(255);
+                                  mimeType   : String(100);
+                                  dataBase64 : LargeString;
+                              })                                                   returns {
+        messageId : String;
+    };
+    action getProjectChatAttachment(attachmentId: String(60))                     returns {
+        fileName   : String;
+        mimeType   : String;
+        dataBase64 : LargeString;
+    };
+    action markProjectChatRead(projectId: String(20))                             returns {
+        ok : Boolean;
+    };
+    action editProjectMessage(messageId: String(50),
+                              message: LargeString)                                returns LargeString;
+    action deleteProjectMessage(messageId: String(50))                            returns LargeString;
+    action pinProjectMessage(projectId: String(20),
+                             messageId: String(50))                                returns LargeString;
+    action unpinProjectMessage(projectId: String(20))                             returns LargeString;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CLIENT PORTAL — external customer self-service.
+// Every handler resolves the caller's clientId and filters strictly to it, so a
+// client can never read or act on another client's data. Backend-enforced; the
+// 'Client' XSUAA scope is a necessary first factor.
+// ══════════════════════════════════════════════════════════════════════════════
+service ClientService @(path: '/client') @(requires: 'Client') {
+
+    // Dashboard tiles + project list for the logged-in client.
+    action getClientDashboard()                                                   returns LargeString;
+    // Detail of one project (ownership re-checked server-side).
+    action getClientProjectDetail(projectId: String(20))                          returns LargeString;
+
+    // ── Requirements ────────────────────────────────────────────────────────────
+    action getClientRequirements(projectId: String(20), filter: String(30))       returns LargeString;
+    action getClientRequirementDetail(requirementId: String(30))                  returns LargeString;
+    action createRequirement(projectId: String(20), title: String(200),
+                            description: String(4000), businessJustification: String(2000),
+                            priority: String(20), expectedDeliveryDate: String,
+                            category: String(100), module: String(100), remarks: String(1000),
+                            assignedToId: String(10))                              returns LargeString;
+    // Client assigns/reassigns to a project employee or the POC.
+    action assignClientRequirement(requirementId: String(30), employeeId: String(10)) returns LargeString;
+
+    // ── Attachments (multiple, versioned) ────────────────────────────────────────
+    action uploadRequirementAttachment(requirementId: String(30), fileName: String(255),
+                                      mimeType: String(100), dataBase64: LargeString) returns LargeString;
+    action getRequirementAttachment(attachmentId: String(50))                     returns {
+        fileName : String; mimeType : String; dataBase64 : LargeString;
+    };
+
+    // ── Discussion ────────────────────────────────────────────────────────────────
+    action getRequirementComments(requirementId: String(30))                      returns LargeString;
+    action addRequirementComment(requirementId: String(30), message: LargeString,
+                                fileName: String(255), mimeType: String(100),
+                                dataBase64: LargeString)                           returns LargeString;
+    action getRequirementCommentAttachment(commentId: String(50))                 returns {
+        fileName : String; mimeType : String; dataBase64 : LargeString;
+    };
+
+    // ── Approval (Awaiting Client Review → Approved | Rejected | request changes) ─
+    // approvalComments mandatory. decision: 'approve' | 'reject' | 'changes'
+    action reviewRequirement(requirementId: String(30), decision: String(20),
+                            comments: String(2000))                               returns LargeString;
+
+    // Audit history of a requirement (client-visible).
+    action getRequirementHistory(requirementId: String(30))                       returns LargeString;
 }

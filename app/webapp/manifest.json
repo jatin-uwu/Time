@@ -47,7 +47,7 @@
         },
         "resources": {
             "css": [
-                { "uri": "css/style.css?v=47" },
+                { "uri": "css/style.css?v=58" },
                 { "uri": "css/FounderDashboard.css?v=1" },
                 { "uri": "css/FounderSidebar.css?v=1" },
                 { "uri": "css/sidebar-rail.css?v=1" }
@@ -130,7 +130,14 @@
                 { "name": "founder-dashboard", "pattern": "founder-dashboard", "target": "founder-dashboard" },
                 { "name": "founder-approvals", "pattern": "founder-approvals", "target": "founder-approvals" },
                 { "name": "founder-tasks", "pattern": "founder-tasks", "target": "founder-tasks" },
-                { "name": "founder-ratings", "pattern": "founder-ratings", "target": "founder-ratings" }
+                { "name": "founder-ratings", "pattern": "founder-ratings", "target": "founder-ratings" },
+                { "name": "founder-projects", "pattern": "founder-projects", "target": "founder-projects" },
+                { "name": "projects", "pattern": "projects", "target": "projects" },
+                { "name": "meetings", "pattern": "meetings", "target": "meetings" },
+                { "name": "salary-master", "pattern": "salary-master", "target": "salary-master" },
+                { "name": "resource-planning", "pattern": "resource-planning", "target": "resource-planning" },
+                { "name": "resource-settings", "pattern": "resource-settings", "target": "resource-settings" },
+                { "name": "client-portal", "pattern": "client-portal", "target": "client-portal" }
             ],
             "targets": {
                 "dashboard":     { "viewName": "Dashboard"     },
@@ -158,7 +165,14 @@
                 "founder-dashboard": { "viewName": "FounderDashboard" },
                 "founder-approvals": { "viewName": "FounderApprovals" },
                 "founder-tasks": { "viewName": "FounderTasks" },
-                "founder-ratings": { "viewName": "FounderRatings" }
+                "founder-ratings": { "viewName": "FounderRatings" },
+                "founder-projects": { "viewName": "FounderProjects" },
+                "projects": { "viewName": "Projects" },
+                "meetings": { "viewName": "Meetings" },
+                "salary-master": { "viewName": "SalaryMaster" },
+                "resource-planning": { "viewName": "ResourcePlanning" },
+                "resource-settings": { "viewName": "ResourceSettings" },
+                "client-portal": { "viewName": "ClientPortal" }
             }
         }
     }

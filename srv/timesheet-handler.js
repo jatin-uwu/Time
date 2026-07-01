@@ -10,6 +10,8 @@ const ENTRY      = `${NS}.TimesheetEntry`;
 const EMPLOYEE   = `${NS}.EmployeeMaster`;
 const TASK       = `${NS}.TaskMaster`;
 const TASK_ASSIGNEE = `${NS}.TaskAssignee`;
+const PROJECT_TASK = `${NS}.ProjectTask`;
+const PROJECT      = `${NS}.Project`;
 const DAY_UNLOCK = `${NS}.TimesheetDayUnlockRequest`;
 const PREV_WEEK  = `${NS}.TimesheetPrevWeekRequest`;
 
@@ -181,13 +183,37 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
                 .columns('taskId', 'taskName', 'status')
             : [];
 
+        // PLUS project tasks assigned to this employee (Project Management module).
+        // Tagged isProject so the save routes them to the projectTask association
+        // (never the TaskMaster FK), and prefixed with the project name for clarity.
+        const projTaskRows = await SELECT.from(PROJECT_TASK)
+            .where({ assignedTo_employeeId: emp.employeeId })
+            .columns('taskId', 'taskName', 'status', 'project_projectId');
+        let projTasks = [];
+        if (projTaskRows.length) {
+            const pids = [...new Set(projTaskRows.map(r => r.project_projectId))];
+            const projs = await SELECT.from(PROJECT).columns('projectId', 'projectName').where({ projectId: { in: pids } });
+            const pname = {}; projs.forEach(p => { pname[p.projectId] = p.projectName; });
+            projTasks = projTaskRows.map(r => ({
+                taskId: r.taskId,
+                taskName: (pname[r.project_projectId] ? pname[r.project_projectId] + ' · ' : '') + r.taskName,
+                status: r.status, isProject: true
+            }));
+        }
+
         // Merge + de-duplicate by taskId (an employee can't be in both lists for the
         // same task, but the guard keeps the result clean regardless).
         const seenTaskIds = new Set();
         const tasks = [];
-        [...soloTasks, ...groupTasks].forEach(t => {
+        [...soloTasks, ...groupTasks, ...projTasks].forEach(t => {
             if (t && t.taskId && !seenTaskIds.has(t.taskId)) { seenTaskIds.add(t.taskId); tasks.push(t); }
         });
+
+        // For project-task entries the DB row keeps task_taskId null and
+        // projectTask_taskId set. The grid + history map rows by `task_taskId`, so
+        // surface the project task id there (display only — DB row unchanged), which
+        // matches the project task in the `tasks` list above and resolves its name.
+        (entries || []).forEach(e => { if (!e.task_taskId && e.projectTask_taskId) e.task_taskId = e.projectTask_taskId; });
 
         return {
             timesheetId:      id,
@@ -268,6 +294,7 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
         if (!hdr) return req.error(500, 'Could not create timesheet header.');
 
         let saved = 0;
+        const touchedProjTasks = new Set();   // project tasks to roll up actual hours for
         for (const e of entries) {
             // ── Custom ("Others") task entries carry free text instead of a taskId.
             const isCustom = !!e.isCustomTask;
@@ -281,6 +308,11 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
             }
 
             if ((!isCustom && !e.taskId) || !e.workDate || e.hoursWorked == null) continue;
+
+            // Project tasks (id like PRJ-0001-T-001) link via the projectTask
+            // association, NOT the TaskMaster FK, so HANA FK integrity holds.
+            const isProjTask = !isCustom && /^PRJ-\d+-T-\d+$/.test(String(e.taskId || ''));
+            if (isProjTask) touchedProjTasks.add(e.taskId);
 
             // Guard against impossible daily hours (a single day cannot exceed 24,
             // and negative hours are nonsensical). The grid only ever sends sane
@@ -312,7 +344,8 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
                 await INSERT.into(ENTRY).entries({
                     entryId,
                     timesheet_timesheetId: hdr.timesheetId,
-                    task_taskId:           isCustom ? null : e.taskId,
+                    task_taskId:           (isCustom || isProjTask) ? null : e.taskId,
+                    projectTask_taskId:    isProjTask ? e.taskId : null,
                     workDate:              e.workDate,
                     hoursWorked:           e.hoursWorked,
                     description:           e.description || (isCustom ? customText : ''),
@@ -323,6 +356,17 @@ async function registerTimesheetHandlers(svc, getMailer, createNotification) {
                 });
             }
             saved++;
+        }
+
+        // Roll up actual hours onto each touched project task = sum of ALL its
+        // timesheet entries (across weeks/employees), so the project's Est/Act and
+        // progress reflect real logged time.
+        for (const ptId of touchedProjTasks) {
+            try {
+                const rows = await SELECT.from(ENTRY).columns('hoursWorked').where({ projectTask_taskId: ptId });
+                const total = rows.reduce((s, r) => s + (Number(r.hoursWorked) || 0), 0);
+                await UPDATE(PROJECT_TASK).set({ actualHours: total }).where({ taskId: ptId });
+            } catch (e) { cds.log('timesheet').warn('project actual-hours rollup failed:', e.message || e); }
         }
 
         cds.log('timesheet').info(`Saved ${saved} entries for ${emp.employeeId} week ${weekStartDate}`);

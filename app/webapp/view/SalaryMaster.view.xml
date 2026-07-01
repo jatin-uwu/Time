@@ -1,0 +1,8 @@
+<mvc:View controllerName="timesheet.app.controller.SalaryMaster"
+    xmlns:mvc="sap.ui.core.mvc" xmlns="sap.m" xmlns:core="sap.ui.core" displayBlock="true">
+    <Page id="salaryPage" showHeader="false" class="tsDashboardPage" enableScrolling="true">
+        <content>
+            <core:HTML id="salHost" content="&lt;div class='pmWrap'&gt;&lt;div class='pmLoading'&gt;Loading salary master…&lt;/div&gt;&lt;/div&gt;" />
+        </content>
+    </Page>
+</mvc:View>

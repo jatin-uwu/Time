@@ -42,6 +42,32 @@ entity EmployeeMaster : managed {
     bloodGroup          : String(5);
 
     workLocation        : String(50);
+
+    // ── Resource-planning fields (additive — see ProjectResource / Resource
+    // Planning module). All optional with safe defaults so existing employee
+    // rows remain valid and pre-feature utilization calc keeps working.
+    //   skills              : comma-separated tag list ("Node.js, SAP UI5, HANA")
+    //   monthlyCapacityHours: configurable monthly working capacity (default 160)
+    //   monthlyTrainingHours: recurring training/L&D overhead deducted from capacity
+    // Internal-meeting and approved-leave overheads are derived live from the
+    // Meeting/LeaveRequest tables — not stored here.
+    skills              : String(500);
+    monthlyCapacityHours : Decimal(7,2) default 160;
+    monthlyTrainingHours : Decimal(7,2) default 0;
+
+    // ── Hierarchical resource classification (additive, optional) ──────────────
+    // Layered on top of free-text department/designation. roleCategory/specialization
+    // point at the new masters; subSpecialization is optional free text. certifications
+    // is a comma cache (mirrors `skills`); structured rows live in EmployeeCertification.
+    // baseAvailabilityPct lets HR cap a part-time/shared employee's capacity (default 100).
+    roleCategory        : Association to RoleCategoryMaster;
+    specialization      : Association to SpecializationMaster;
+    subSpecialization   : String(100);
+    yearsOfExperience   : Decimal(4,1) default 0;
+    certifications      : String(500);
+    languages           : String(255);          // comma cache (free-text chips)
+    baseAvailabilityPct : Integer default 100;
+
     maritalStatus       : String(20);
     fatherName          : String(100);
     partnerName         : String(100);
@@ -177,6 +203,28 @@ entity TaskAttachment : managed {
     content          : LargeBinary;
 }
 
+// ── Project chat: one persistent thread per project ───────────────────────
+entity ProjectMessage : managed {
+    key messageId : String(50);               // "<projectId>-PMSG-<ts>-<rand>"
+    project       : Association to Project;
+    sender        : Association to EmployeeMaster;
+    message       : LargeString;              // nullable — attachment-only messages allowed
+    sentAt        : Timestamp;
+    editedAt      : Timestamp;                // set when the author edits
+    isDeleted     : Boolean default false;    // soft-delete → shows "This message was deleted"
+    attachments   : Composition of many ProjectAttachment
+                    on attachments.message = $self;
+}
+
+entity ProjectAttachment : managed {
+    key attachmentId : String(60);            // "<messageId>-PATT-<n>"
+    message          : Association to ProjectMessage;
+    fileName         : String(255);
+    mimeType         : String(100);
+    fileSize         : Integer;
+    content          : LargeBinary;
+}
+
 entity TaskUpdate : managed {
     // Widened from 20 → 40: group-task updates generate longer ids
     // ("<taskId>-UPD-<ts>-<rand>") that overflowed 20 on HANA. Solo updates
@@ -226,6 +274,7 @@ entity TimesheetEntry : managed {
 
     timesheet          : Association to TimesheetHeader;
     task               : Association to TaskMaster;   // null for custom ("Others") entries
+    projectTask        : Association to ProjectTask;  // set instead of `task` when logging time on a project task (additive)
 
     workDate           : Date;
     hoursWorked        : Decimal(4,2);
@@ -385,5 +434,527 @@ entity HolidayMaster : managed {
     holidayName        : String(100);        // Independence Day
     isOptional         : Boolean default false; // optional / restricted holidays
     description        : String(255);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Project Management module (Phase 1) — ENTIRELY ADDITIVE.
+// New entities only; no existing entity is modified, so Task / Leave / Timesheet /
+// Performance / Notifications / Dashboard are unaffected.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Project Type master (configurable without code changes) ───────────────────
+// Seeded with 5 defaults on first run; Founder/HR can add more. Each type drives
+// its planning model, resource categories, phases and whether it earns revenue.
+entity ProjectTypeMaster : managed {
+    key code           : String(30);          // SAP_IMPL | SOFTWARE_DEV | SUPPORT | INTERNAL | OTHER
+    name               : String(100);         // "SAP Implementation Project"
+    planningModel      : String(40);          // Phase | Sprint | MonthlyCapacity | CostTracking
+    hasRevenue         : Boolean default true; // Internal = false (cost tracking only)
+    resourceCategories : LargeString;          // (legacy fallback) JSON array of role categories
+    // Departments this type draws resources from (admin-configurable master data).
+    // Roles are then derived DYNAMICALLY from active employees' designations in
+    // these departments — never hardcoded. Empty → legacy department behaviour.
+    departments        : LargeString;          // JSON array of department names
+    phases             : LargeString;          // JSON array of phases (phase-based types)
+    modules            : LargeString;          // JSON array of modules (e.g. SAP MM/SD/FI…)
+    sortOrder          : Integer default 0;
+    isActive           : Boolean default true;
+}
+
+// A project. POC = the single point-of-contact employee who allocates resources.
+entity Project : managed {
+    key projectId   : String(20);            // auto: PRJ-0001
+    projectName     : String(150);           // unique (enforced in handler)
+    customerName    : String(150);
+    description     : String(1000);
+    startDate       : Date;
+    endDate         : Date;
+    status          : String(20) default 'Planning'; // Planning|Active|On Hold|Completed|Cancelled
+    priority        : String(20) default 'Medium';   // Low|Medium|High|Critical
+    poc             : Association to EmployeeMaster;  // project POC
+    pocName         : String(100);                    // denormalised for quick display
+    createdByName   : String(100);                    // founder display name
+    // ── Client ownership (one project belongs to exactly one client) ──────
+    client          : Association to ClientMaster;
+    clientName      : String(150);                    // denormalised for quick display
+    currentPhase    : String(60);                     // free-text phase shown to client
+    // ── Executive dashboard fields (Phase 2, additive) ────────────────────
+    budget          : Decimal(15, 2) default 0;       // kept = executionBudget for back-compat
+    goLiveDate      : Date;                            // planned go-live
+    focusAreas      : String(500);                     // comma-separated tags
+    // ── Project-type-driven planning (additive) ───────────────────────────
+    // Existing rows default to 'OTHER' (backfilled on first run). Type drives
+    // budgeting / planning-model / resource categories / forecasting.
+    projectType     : Association to ProjectTypeMaster;
+    projectTypeName : String(100);                     // denormalised for display
+    // ── Financial model: Contract → Profit Reserve → Execution Budget ──────
+    // executionBudget = contractValue − profitReserveAmount, and is the ONLY
+    // ceiling resource/cost allocation may consume (never the contract value).
+    contractValue       : Decimal(15, 2) default 0;
+    profitMarginPct     : Decimal(5, 2)  default 0;
+    profitReserveAmount : Decimal(15, 2) default 0;    // contractValue × margin%
+    executionBudget     : Decimal(15, 2) default 0;    // contractValue − reserve
+    // Skills this project needs — drives the Resource Recommendation engine
+    // (70% skill-match weight). Comma-separated tags, matched against
+    // EmployeeMaster.skills. Optional; empty = capacity-only recommendations.
+    requiredSkills  : String(500);
+    // ── Project chat pin (one active pin per project) ─────────────────────
+    pinnedMessageId : String(50);
+    pinnedByName    : String(100);
+    // ── Project lifecycle (governance workflow before going Active) ────────
+    // Planning → MeetingScheduled → MeetingCompleted → BudgetAllocated → (Active)
+    lifecycleStage    : String(30) default 'Planning';
+    planningMeetingId : String(45);      // FK to Meeting.meetingId (the planning meeting)
+    resources       : Composition of many ProjectResource on resources.project = $self;
+    tasks           : Composition of many ProjectTask    on tasks.project = $self;
+    issues          : Composition of many ProjectIssue   on issues.project = $self;
+}
+
+// Budget allocation record created by the Founder once the planning meeting is done.
+// Stores total budget + department-wise + other-category breakdowns as JSON.
+entity ProjectBudget : managed {
+    key budgetId          : String(30);        // <projectId>-BUDGET
+    project               : Association to Project;
+    totalBudget           : Decimal(15,2) default 0;
+    departmentBudgets     : LargeString;        // JSON [{department,amount,notes}] (legacy, still read)
+    otherBudgets          : LargeString;        // JSON [{category,amount,notes}]  (legacy, still read)
+    // ── Category-based allocation (primary) — against Execution Budget ─────────
+    // JSON [{category,amount,notes}] over the 7 cost categories: Resource Cost,
+    // Infrastructure, Licensing, Vendor, Travel, Training, Miscellaneous.
+    categoryBudgets       : LargeString;
+    allocatedAt           : Timestamp;
+    allocatedByName       : String(100);
+}
+
+// POC → Founder additional-budget escalation. One immutable row per request; decision
+// fields are filled when the Founder approves/rejects. Approved amounts are deducted from
+// the project's unallocated pool and added to the requested department's allocation.
+entity ProjectBudgetRequest : managed {
+    key requestId         : String(45);          // <projectId>-BR-<seq>
+    project               : Association to Project;
+    department            : String(50);
+    requestedAmount       : Decimal(15,2) default 0;
+    justification         : String(2000);
+    businessImpact        : String(2000);
+    requestedById         : String(10);
+    requestedByName       : String(100);
+    // Pending Founder Approval | Approved | Rejected | Withdrawn
+    status                : String(30) default 'Pending Founder Approval';
+    approvedAmount        : Decimal(15,2) default 0;
+    founderComments       : String(2000);
+    decidedByName         : String(100);
+    decidedAt             : Timestamp;
+    utilizationSnapshot   : Integer default 0;   // dept utilization % at request time
+    deptBudgetBefore      : Decimal(15,2) default 0;
+    deptBudgetAfter       : Decimal(15,2) default 0;
+    unallocatedBefore     : Decimal(15,2) default 0;
+    unallocatedAfter      : Decimal(15,2) default 0;
+}
+
+// Employee cost master — drives budget consumption (hourlyCost × hours logged).
+entity EmployeeSalaryMaster : managed {
+    key salaryId  : String(45);                        // <employeeId>-<effectiveFrom>
+    employee      : Association to EmployeeMaster;
+    employeeName  : String(100);
+    annualSalary  : Decimal(15, 2);
+    monthlySalary : Decimal(15, 2);
+    hourlyCost    : Decimal(12, 2);                    // used for budget consumption
+    effectiveFrom : Date;
+    effectiveTo   : Date;
+    isActive      : Boolean default true;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Milestone Management (enterprise) — ENTIRELY ADDITIVE.
+// A project can have many milestones (auto-seeded from the project type's phases).
+// Resource/task milestone links are nullable → existing project-level data is
+// untouched and keeps working. Derived metrics (actual cost, variance, delay) are
+// computed live by the cost/timeline engines — not stored, to avoid drift.
+// ══════════════════════════════════════════════════════════════════════════════
+entity Milestone : managed {
+    key milestoneId    : String(40);          // <projectId>-M-001
+    project            : Association to Project;
+    name               : String(150);
+    description        : String(1000);
+    sequence           : Integer default 0;
+    plannedStartDate   : Date;
+    plannedEndDate     : Date;
+    actualStartDate    : Date;
+    actualEndDate      : Date;
+    // Not Started | Planned | In Progress | Delayed | At Risk | Completed |
+    // Completed Early | Blocked | Cancelled
+    status             : String(25) default 'Not Started';
+    progressPct        : Integer default 0;
+    progressMode       : String(20) default 'manual';   // manual | task | timesheet
+    owner              : Association to EmployeeMaster;
+    ownerName          : String(100);
+    remarks            : String(1000);
+    isCritical         : Boolean default false;
+    isBillable         : Boolean default true;
+    plannedBudget      : Decimal(15, 2) default 0;
+    // None | Pending Approval | Approved | Rejected | Rework Required
+    approvalStatus     : String(25) default 'None';
+}
+
+// Finish-to-start dependency: `milestone` cannot start before `predecessor` Completed.
+entity MilestoneDependency : managed {
+    key dependencyId   : String(55);
+    milestone          : Association to Milestone;   // the dependent
+    predecessor        : Association to Milestone;   // must complete first
+}
+
+// Milestone completion approval (PM / Product Manager / Client / Founder).
+entity MilestoneApproval : managed {
+    key approvalId     : String(55);
+    milestone          : Association to Milestone;
+    approverRole       : String(30);
+    approverId         : String(10);
+    approverName       : String(100);
+    status             : String(25) default 'Pending Approval';
+    comments           : String(1000);
+    decidedAt          : Timestamp;
+}
+
+// Project risk/issue register (Phase 2).
+entity ProjectIssue : managed {
+    key issueId  : String(45);                         // <projectId>-ISS-001
+    project      : Association to Project;
+    title        : String(200);
+    description  : String(1000);
+    severity     : String(20) default 'Medium';        // Critical | High | Medium | Low
+    owner        : Association to EmployeeMaster;
+    ownerName    : String(100);
+    status       : String(20) default 'Open';          // Open | In Progress | Resolved | Closed
+}
+
+// FTE-based resource allocation: one row per (project, employee). bandwidth 25/50/75/100.
+entity ProjectResource : managed {
+    key allocationId : String(45);           // <projectId>-<employeeId>
+    project          : Association to Project;
+    employee         : Association to EmployeeMaster;
+    employeeName     : String(100);
+    department       : String(50);
+    bandwidth        : Integer default 0;     // 25 | 50 | 75 | 100  (percent FTE) == allocation %
+    // ── Time-boxed allocation (additive — Resource Planning module) ───────────
+    // Existing rows have null dates → treated as "for the whole project duration"
+    // by the availability/forecasting engine, so historical allocations stay
+    // valid. allocatedHours is derived (bandwidth% × monthlyCapacityHours) and
+    // persisted for fast dashboard reads; recomputed on every allocate.
+    startDate        : Date;
+    endDate          : Date;
+    allocatedHours   : Decimal(7,2) default 0;
+    // ── Allocation model (additive) — role on the project + lifecycle status.
+    // Existing rows: role null, status defaults to 'Active' so they stay valid.
+    role             : String(60);                   // project role/consultant category
+    phase            : String(40);                   // phase-based plan (SAP: Discover…Hypercare)
+    module           : String(60);                   // module assignment (SAP: MM/SD/FI…)
+    milestone        : Association to Milestone;      // optional milestone scope (additive)
+    // ── Cost snapshots (frozen at allocation time → historical accuracy) ───────
+    // PMs never see salary; these are derived cost rates only.
+    hourlyCostSnapshot : Decimal(12,2) default 0;     // fully-loaded rate/hr at allocation
+    overheadSnapshot   : Decimal(12,2) default 0;     // monthly overhead applied
+    totalAllocationCost: Decimal(15,2) default 0;     // rate × allocated hrs × project months
+    status           : String(20) default 'Active';  // Planned | Active | Completed | Cancelled
+    // ── Over-utilization override (additive) ──────────────────────────────────
+    // Set when a POC/Founder knowingly allocates beyond 100% capacity. Drives the
+    // "Overridden" badge; the full audit trail lives in ResourceOverride.
+    isOverridden     : Boolean default false;
+    overrideReason   : String(500);
+}
+
+// ── Centralized Resource Planning configuration (singleton, configId='GLOBAL') ──
+// Drives the capacity engine: recommendation weights (must sum logically; they
+// are normalised at runtime), utilization threshold, working-time basis and the
+// global non-billable reserve. Admin-editable — never hardcoded.
+entity ResourcePlanningConfig : managed {
+    key configId             : String(20) default 'GLOBAL';
+    skillWeight              : Integer default 60;   // recommendation: skill match
+    availabilityWeight       : Integer default 20;   // recommendation: future availability
+    utilizationWeight        : Integer default 10;   // recommendation: current utilization
+    experienceWeight         : Integer default 10;   // recommendation: project experience
+    maxUtilizationThreshold  : Integer default 100;  // overallocation threshold %
+    standardDailyHours       : Decimal(4,2) default 8;
+    standardWorkingDays      : Integer default 20;    // working days per month basis
+    nonBillablePct           : Integer default 0;     // % of capacity reserved (non-billable)
+    // Configurable employee overhead (laptop/software/admin/etc., single amount in
+    // V1) added to monthly salary to form the fully-loaded cost rate. NOT hardcoded.
+    monthlyOverhead          : Decimal(12,2) default 10000;
+}
+
+// Company-wide non-working time (town halls, off-sites, shutdowns). Reduces every
+// employee's effective capacity for the overlapping days. Distinct from public
+// holidays (HolidayMaster) and per-employee leave (LeaveRequest).
+entity CompanyEvent : managed {
+    key eventId   : String(30);          // EVT-0001
+    eventName     : String(150);
+    fromDate      : Date;
+    toDate        : Date;
+    description   : String(500);
+}
+
+// Immutable audit trail of every over-utilization override. One row per override
+// event (employee pushed beyond 100% FTE on a project). Founder-visible.
+entity ResourceOverride : managed {
+    key overrideId        : String(60);          // <projectId>-OVR-<employeeId>-<ts>
+    project               : Association to Project;
+    projectName           : String(150);
+    employee              : Association to EmployeeMaster;
+    employeeName          : String(100);
+    utilizationBefore     : Integer default 0;   // total FTE % before this allocation
+    utilizationAfter      : Integer default 0;   // total FTE % after
+    reason                : String(500);         // mandatory
+    overriddenById        : String(10);
+    overriddenByName      : String(100);
+    overriddenAt          : Timestamp;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Resource Master Data (hierarchical) — Department → RoleCategory → Specialization
+// plus Skill / Certification catalogs. ENTIRELY ADDITIVE & optional. Existing
+// free-text EmployeeMaster.department / .designation keep working untouched; these
+// masters drive the new cascading HR dropdowns and the hierarchical Manage-Resource
+// grid. Names mirror existing free-text values so both worlds stay consistent.
+// ════════════════════════════════════════════════════════════════════════════
+entity DepartmentMaster : managed {
+    key deptId   : String(20);            // SAP, ENG, …
+    name         : String(100);           // matches existing free-text department names
+    description  : String(255);
+    sortOrder    : Integer default 0;
+    isActive     : Boolean default true;
+    roles        : Composition of many RoleCategoryMaster on roles.department = $self;
+}
+// ── Talent taxonomy masters (extended) ───────────────────────────────────────
+// normalizedName = UPPER(trim(collapse-spaces(name))) — the dedup key (case-
+// insensitive existence check). usageCount drives "most-used first" suggestions.
+// Both are additive; existing rows are backfilled. New typed values are stored
+// UPPERCASE per the taxonomy spec; existing display names are left as-is.
+entity RoleCategoryMaster : managed {
+    key roleId      : String(30);         // SAP-BASIS, SAP-FUNC, …
+    department      : Association to DepartmentMaster;
+    name            : String(100);        // Basis Consultant, Functional Consultant
+    normalizedName  : String(100);
+    usageCount      : Integer default 0;
+    sortOrder       : Integer default 0;
+    isActive        : Boolean default true;
+    specializations : Composition of many SpecializationMaster on specializations.roleCategory = $self;
+}
+entity SpecializationMaster : managed {
+    key specId    : String(40);           // SAP-FUNC-MM, …
+    roleCategory  : Association to RoleCategoryMaster;
+    name          : String(100);          // MM, SD, FICO, ABAP, …
+    normalizedName: String(100);
+    usageCount    : Integer default 0;
+    sortOrder     : Integer default 0;
+    isActive      : Boolean default true;
+}
+entity SkillMaster : managed {
+    key skillId    : String(40);
+    name           : String(100);
+    normalizedName : String(100);
+    usageCount     : Integer default 0;
+    department     : Association to DepartmentMaster;   // optional scope
+    category       : String(60);
+    isActive       : Boolean default true;
+}
+entity CertificationMaster : managed {
+    key certId     : String(40);
+    name           : String(150);
+    normalizedName : String(150);
+    usageCount     : Integer default 0;
+    department     : Association to DepartmentMaster;   // optional scope
+    issuer         : String(100);
+    isActive       : Boolean default true;
+}
+// Employee ↔ skill / certification links (normalized). The comma caches on
+// EmployeeMaster (.skills / .certifications) remain the denormalized display
+// values so the existing recommendation engine keeps working unchanged.
+entity EmployeeSkill : managed {
+    key id    : String(55);               // <employeeId>-<skillId>
+    employee  : Association to EmployeeMaster;
+    skill     : Association to SkillMaster;
+    skillName : String(100);
+    level     : String(20);               // Beginner / Intermediate / Expert (optional)
+}
+entity EmployeeCertification : managed {
+    key id            : String(55);        // <employeeId>-<certId>
+    employee          : Association to EmployeeMaster;
+    certification     : Association to CertificationMaster;
+    certName          : String(150);
+    certificateNumber : String(100);       // optional
+    issuedBy          : String(150);       // optional
+    obtainedDate      : Date;              // = Issue Date
+    expiryDate        : Date;
+    // Per-certificate document (PDF / JPG / PNG). Stored inline; served as base64
+    // by a download action (same pattern as EmployeeDocument / TaskDocument).
+    documentFileName  : String(255);
+    documentMimeType  : String(100);
+    document          : LargeBinary;
+}
+
+// Resource demand a project declares up-front: how many of which Dept→Role→Spec it
+// needs, for how many hours, over which window. Additive — drives the hierarchical
+// Manage-Resource grid (supply side = ProjectResource allocations).
+entity ProjectResourceRequirement : managed {
+    key requirementId : String(45);          // <projectId>-REQ-001
+    project           : Association to Project;
+    department        : Association to DepartmentMaster;
+    departmentName    : String(100);          // denormalised display
+    roleCategory      : Association to RoleCategoryMaster;
+    roleCategoryName  : String(100);
+    specialization    : Association to SpecializationMaster;
+    specializationName: String(100);
+    requiredCount     : Integer default 1;
+    requiredHours     : Decimal(9,2) default 0;
+    startDate         : Date;
+    endDate           : Date;
+    notes             : String(500);
+    status            : String(20) default 'Open';   // Open | Fulfilled | Cancelled
+}
+
+// A task that belongs to a project (cannot exist without one). Separate from the
+// existing TaskMaster so production task/timesheet flows are untouched.
+entity ProjectTask : managed {
+    key taskId       : String(25);           // <projectId>-T-001
+    project          : Association to Project;
+    taskName         : String(150);
+    description      : String(1000);
+    assignedTo       : Association to EmployeeMaster;
+    assignedToName   : String(100);
+    priority         : String(20) default 'Medium';
+    status           : String(20) default 'Not Started'; // Not Started|In Progress|In Review|Completed
+    startDate        : Date;
+    dueDate          : Date;
+    estimatedHours   : Decimal(7, 2) default 0;
+    actualHours      : Decimal(7, 2) default 0;
+    completedAt      : Timestamp;
+    milestone        : Association to Milestone;      // optional milestone scope (additive)
+}
+
+// Immutable audit trail for every project-module action.
+entity ProjectAuditLog : managed {
+    key logId   : String(45);
+    project     : Association to Project;
+    userName    : String(100);
+    action      : String(60);                // Project Created | POC Assigned | …
+    oldValue    : String(500);
+    newValue    : String(500);
+    at          : Timestamp;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CLIENT PORTAL & REQUIREMENT MANAGEMENT
+// ════════════════════════════════════════════════════════════════════════════
+
+// External customer who owns one or more projects. Authenticated via the
+// 'Client' XSUAA scope; identity resolved by matching login email → this.email.
+// Clients are NOT employees and never appear in EmployeeMaster.
+entity ClientMaster : managed {
+    key clientId    : String(20);                 // CLT-0001
+    clientName      : String(150);
+    companyName     : String(150);
+    contactPerson   : String(100);
+    email           : String(150);                // login identity (unique, lower-cased on read)
+    phoneNumber     : String(20);
+    status          : String(20) default 'Active'; // Active | Inactive
+    lastLogin       : Timestamp;
+    notes           : String(1000);
+    projects        : Composition of many Project on projects.client = $self;
+}
+
+// A business requirement raised by a client against one of their projects.
+entity Requirement : managed {
+    key requirementId   : String(30);             // <projectId>-REQ-001
+    project             : Association to Project;
+    client              : Association to ClientMaster;   // denormalised owner (isolation key)
+    title               : String(200);
+    description         : String(4000);
+    businessJustification : String(2000);
+    priority            : String(20) default 'Medium';   // Critical | High | Medium | Low
+    expectedDeliveryDate : Date;
+    category            : String(100);             // Requirement Category
+    module              : String(100);
+    remarks             : String(1000);
+    // ── Assignment ────────────────────────────────────────────────────────
+    assignedTo          : Association to EmployeeMaster; // POC or a project employee
+    assignedToName      : String(100);
+    assignedByName      : String(100);            // client contact who assigned
+    assignedDate        : Timestamp;
+    // ── Status workflow ─────────────────────────────────────────────────────
+    // New | Assigned | Under Analysis | In Development | Under Testing |
+    // Awaiting Client Review | Approved | Rejected | Closed
+    status              : String(30) default 'New';
+    approvalComments    : String(2000);           // mandatory on approve/reject
+    closedAt            : Timestamp;
+    attachments         : Composition of many RequirementAttachment on attachments.requirement = $self;
+    comments            : Composition of many RequirementComment    on comments.requirement = $self;
+    history             : Composition of many RequirementAudit       on history.requirement = $self;
+}
+
+// Multiple versioned attachments per requirement (stored inline as base64-blob).
+entity RequirementAttachment : managed {
+    key attachmentId : String(50);                // <requirementId>-ATT-<n>
+    requirement      : Association to Requirement;
+    fileName         : String(255);
+    mimeType         : String(100);
+    fileSize         : Integer;
+    version          : Integer default 1;
+    uploadedByName   : String(100);
+    content          : LargeBinary;
+}
+
+// Flat discussion thread on a requirement (client + assigned employee + POC).
+entity RequirementComment : managed {
+    key commentId    : String(50);                // <requirementId>-CMT-<ts>-<rand>
+    requirement      : Association to Requirement;
+    authorName       : String(100);
+    authorRole       : String(20);                // client | employee | poc | founder
+    authorEmployee   : Association to EmployeeMaster;  // null when author is a client
+    message          : LargeString;
+    isDeleted        : Boolean default false;
+    attachmentName   : String(255);
+    attachmentMimeType : String(100);
+    attachment       : LargeBinary;
+}
+
+// Immutable audit trail for a requirement (created, assigned, status change,
+// document upload, comment, approval/rejection). Stores who + when.
+entity RequirementAudit : managed {
+    key auditId   : String(50);                   // <requirementId>-AUD-<ts>-<rand>
+    requirement   : Association to Requirement;
+    userName      : String(100);
+    action        : String(60);                   // Created | Assigned | Status Changed | …
+    oldValue      : String(500);
+    newValue      : String(500);
+    at            : Timestamp;
+}
+
+// ── Microsoft Teams Meetings ─────────────────────────────────────────────────
+// One row per scheduled meeting.  teamsMeetingId / teamsJoinUrl are populated
+// by the Graph API response (or mock IDs in dev mode).
+entity Meeting : managed {
+    key meetingId       : String(45);           // MTG-<projectId>-<seq>
+    project             : Association to Project;
+    title               : String(200);
+    agenda              : String(2000);
+    startDateTime       : DateTime;
+    endDateTime         : DateTime;
+    organizerEmail      : String(150);           // Azure AD UPN / employee email
+    organizerName       : String(100);
+    organizer           : Association to EmployeeMaster;
+    status              : String(20) default 'Scheduled'; // Scheduled|Completed|Cancelled
+    teamsMeetingId      : String(500);           // Graph API id
+    teamsJoinUrl        : String(1000);          // Graph API joinWebUrl
+    teamsDialIn         : String(500);           // optional dial-in URL
+    participants        : Composition of many MeetingParticipant on participants.meeting = $self;
+}
+
+// One row per invited employee.
+entity MeetingParticipant : managed {
+    key participantId   : String(50);
+    meeting             : Association to Meeting;
+    employee            : Association to EmployeeMaster;
+    employeeName        : String(100);
+    employeeEmail       : String(150);
+    attendanceStatus    : String(20) default 'Invited'; // Invited|Accepted|Declined|Attended
 }
 }

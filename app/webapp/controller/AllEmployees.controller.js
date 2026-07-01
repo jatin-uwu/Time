@@ -10,10 +10,25 @@ sap.ui.define([
     "sap/m/Input",
     "sap/m/Label",
     "sap/m/VBox",
-    "sap/ui/core/ResizeHandler"
+    "sap/ui/core/ResizeHandler",
+    "sap/m/Select",
+    "sap/m/MultiComboBox",
+    "sap/ui/core/Item"
 ], (Controller, JSONModel, Filter, FilterOperator, MessageBox, MessageToast,
-    CustomDialog, Button, Input, Label, VBox, ResizeHandler) => {
+    CustomDialog, Button, Input, Label, VBox, ResizeHandler, Select, MultiComboBox, Item) => {
     "use strict";
+
+    // Plain fetch caller for /hr actions (CSRF + JSON), used for the resource hierarchy.
+    async function callHr(action, params) {
+        let token = null;
+        try { const h = await fetch("/hr/", { headers: { "X-CSRF-Token": "Fetch" }, credentials: "include" }); token = h.headers.get("x-csrf-token"); } catch (e) {}
+        const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+        if (token) headers["X-CSRF-Token"] = token;
+        const resp = await fetch("/hr/" + action, { method: "POST", headers, body: JSON.stringify(params || {}), credentials: "include" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const j = await resp.json().catch(() => ({}));
+        return (j && j.value !== undefined) ? j.value : j;
+    }
 
     // Plain fetch caller for /hr actions (CSRF + JSON, NO $batch). A document's
     // base64 can be several MB; fetching it through an OData $batch can fail
@@ -68,6 +83,13 @@ sap.ui.define([
 
             this.getView().setModel(this._oEmpModel,    "emp");
             this.getView().setModel(this._oDetailModel, "detail");
+
+            // Cache the resource hierarchy for the edit dialog's cascading dropdowns.
+            this._hier = { departments: [], skills: [], certifications: [] };
+            callHr("getResourceHierarchy", {}).then(raw => {
+                const h = (typeof raw === "string") ? JSON.parse(raw) : raw;
+                if (h && !h.error) this._hier = h;
+            }).catch(() => {});
 
             this.getOwnerComponent().getRouter()
                 .getRoute("all-employees")
@@ -126,7 +148,19 @@ sap.ui.define([
         _loadEmployees() {
             const oModel = this.getOwnerComponent().getModel("hr");
             if (!oModel) { MessageToast.show("HR service not available."); return; }
-            oModel.bindList("/Employees").requestContexts(0, 1000)
+            // Explicit $select of scalar columns only — reading the full entity pulls the
+            // profilePhoto LargeBinary, which breaks OData V4 list serialization (HTTP 500)
+            // and left the table empty. The photo is fetched separately when needed.
+            const SELECT_COLS = [
+                "employeeId", "employeeName", "designation", "role", "email", "address", "mobileNumber",
+                "manager_employeeId", "isActive", "dateOfBirth", "gender", "department", "joiningDate",
+                "employmentType", "aadhaarNumber", "panNumber", "status", "emergencyContact", "bloodGroup",
+                "workLocation", "skills", "monthlyCapacityHours", "roleCategory_roleId", "specialization_specId",
+                "subSpecialization", "yearsOfExperience", "certifications", "languages", "baseAvailabilityPct",
+                "maritalStatus", "fatherName", "partnerName", "marriageDate", "hasKids",
+                "bankAccountNumber", "bankName", "bankIfsc", "profilePhotoMimeType"
+            ].join(",");
+            oModel.bindList("/Employees", null, null, null, { $select: SELECT_COLS }).requestContexts(0, 1000)
                 .then(aCtx => {
                     const items = aCtx.map(c => c.getObject()).filter(Boolean);
                     items.sort((a, b) => String(a.employeeId).localeCompare(String(b.employeeId)));
@@ -345,7 +379,15 @@ sap.ui.define([
                 employmentType:   emp.employmentType || "",
                 address:          emp.address || "",
                 emergencyContact: emp.emergencyContact || "",
-                managerEmployeeId: emp.manager_employeeId || ""
+                managerEmployeeId: emp.manager_employeeId || "",
+                // ── Hierarchical resource profile (additive, optional) ──
+                roleCategoryId:   emp.roleCategory_roleId || "",
+                specializationId: emp.specialization_specId || "",
+                subSpecialization: emp.subSpecialization || "",
+                yearsOfExperience: (emp.yearsOfExperience != null ? emp.yearsOfExperience : ""),
+                baseAvailabilityPct: (emp.baseAvailabilityPct != null ? emp.baseAvailabilityPct : 100),
+                skillsArr:        (emp.skills || "").split(",").map(s => s.trim()).filter(Boolean),
+                certsArr:         (emp.certifications || "").split(",").map(s => s.trim()).filter(Boolean)
             });
 
             const field = (sLabel, sPath) => [
@@ -353,13 +395,47 @@ sap.ui.define([
                 new Input({ value: "{edit>/" + sPath + "}", width: "100%" })
             ];
 
+            // ── Cascading Department → Role Category → Specialization ──
+            const hier = this._hier || { departments: [], skills: [], certifications: [] };
+            const depts = hier.departments || [];
+            const m = this._oEditModel;
+            let currentRoles = [];
+            const specSel = new Select({ selectedKey: "{edit>/specializationId}", width: "100%", forceSelection: false });
+            const rebuildSpecs = (specs) => { specSel.removeAllItems(); (specs || []).forEach(s => specSel.addItem(new Item({ key: s.specId, text: s.name }))); };
+            const roleSel = new Select({
+                selectedKey: "{edit>/roleCategoryId}", width: "100%", forceSelection: false,
+                change: (e) => { const role = currentRoles.find(r => r.roleId === e.getSource().getSelectedKey()); rebuildSpecs((role && role.specializations) || []); m.setProperty("/specializationId", ""); }
+            });
+            const rebuildRoles = (roles) => { currentRoles = roles || []; roleSel.removeAllItems(); currentRoles.forEach(r => roleSel.addItem(new Item({ key: r.roleId, text: r.name }))); };
+            const deptSel = new Select({
+                selectedKey: "{edit>/department}", width: "100%", forceSelection: false,
+                items: depts.map(d => new Item({ key: d.name, text: d.name })),
+                change: (e) => { const dept = depts.find(x => x.name === e.getSource().getSelectedKey()); rebuildRoles((dept && dept.roles) || []); rebuildSpecs([]); m.setProperty("/roleCategoryId", ""); m.setProperty("/specializationId", ""); }
+            });
+            // Seed cascading state from the employee's current values.
+            const initDept = depts.find(d => d.name === (emp.department || ""));
+            rebuildRoles((initDept && initDept.roles) || []);
+            const initRole = currentRoles.find(r => r.roleId === (emp.roleCategory_roleId || ""));
+            rebuildSpecs((initRole && initRole.specializations) || []);
+
+            const labelled = (sLabel, ctrl) => [new Label({ text: sLabel }).addStyleClass("sapUiTinyMarginTop"), ctrl];
+            const skillsMcb = new MultiComboBox({ width: "100%", selectedKeys: "{edit>/skillsArr}", items: (hier.skills || []).map(s => new Item({ key: s.name, text: s.name })) });
+            const certsMcb = new MultiComboBox({ width: "100%", selectedKeys: "{edit>/certsArr}", items: (hier.certifications || []).map(c => new Item({ key: c.name, text: c.name })) });
+
             const oContent = new VBox({
                 items: [].concat(
                     field("Full Name", "employeeName"),
                     field("Email", "email"),
                     field("Phone", "mobileNumber"),
-                    field("Department", "department"),
+                    labelled("Department", deptSel),
+                    labelled("Role Category", roleSel),
+                    labelled("Specialization", specSel),
+                    field("Sub-Specialization", "subSpecialization"),
                     field("Designation", "designation"),
+                    field("Years of Experience", "yearsOfExperience"),
+                    field("Base Availability %", "baseAvailabilityPct"),
+                    labelled("Skills", skillsMcb),
+                    labelled("Certifications", certsMcb),
                     field("Employment Type", "employmentType"),
                     field("Address", "address"),
                     field("Emergency Contact", "emergencyContact"),
@@ -379,9 +455,29 @@ sap.ui.define([
                             MessageToast.show("Name and email are required.");
                             return;
                         }
+                        // Mandatory classification (when masters exist for the department).
+                        if (!d.department) { MessageToast.show("Department is required."); return; }
+                        if (currentRoles.length && !d.roleCategoryId) { MessageToast.show("Role Category is required."); return; }
+                        var rn = (currentRoles.find(function (r) { return r.roleId === d.roleCategoryId; }) || {}).name || "";
+                        if (/functional/i.test(rn) && !d.specializationId) { MessageToast.show("Module / Specialization is required for Functional Consultants."); return; }
                         const oModel = this.getOwnerComponent().getModel("hr");
                         const ctx = oModel.bindContext("/updateEmployee(...)");
-                        Object.keys(d).forEach(k => ctx.setParameter(k, d[k]));
+                        // Explicit whitelist — the array fields (skillsArr/certsArr) are
+                        // converted to comma strings; only declared action params are sent.
+                        const skillsCsv = (d.skillsArr || []).join(", ");
+                        const certsCsv = (d.certsArr || []).join(", ");
+                        const params = {
+                            employeeId: d.employeeId, employeeName: d.employeeName, email: d.email,
+                            mobileNumber: d.mobileNumber, department: d.department, designation: d.designation,
+                            employmentType: d.employmentType, address: d.address, emergencyContact: d.emergencyContact,
+                            managerEmployeeId: d.managerEmployeeId,
+                            roleCategoryId: d.roleCategoryId || null, specializationId: d.specializationId || null,
+                            subSpecialization: d.subSpecialization || null,
+                            yearsOfExperience: (d.yearsOfExperience === "" || d.yearsOfExperience == null) ? null : Number(d.yearsOfExperience),
+                            baseAvailabilityPct: (d.baseAvailabilityPct === "" || d.baseAvailabilityPct == null) ? null : parseInt(d.baseAvailabilityPct, 10),
+                            skills: skillsCsv || null, certifications: certsCsv || null
+                        };
+                        Object.keys(params).forEach(k => ctx.setParameter(k, params[k]));
                         ctx.execute().then(() => {
                             MessageToast.show("Employee updated.");
                             oDialog.close();
@@ -390,7 +486,10 @@ sap.ui.define([
                                 employeeName: d.employeeName, email: d.email, mobileNumber: d.mobileNumber,
                                 department: d.department, designation: d.designation,
                                 employmentType: d.employmentType, address: d.address,
-                                emergencyContact: d.emergencyContact, manager_employeeId: d.managerEmployeeId
+                                emergencyContact: d.emergencyContact, manager_employeeId: d.managerEmployeeId,
+                                roleCategory_roleId: d.roleCategoryId, specialization_specId: d.specializationId,
+                                subSpecialization: d.subSpecialization, yearsOfExperience: d.yearsOfExperience,
+                                baseAvailabilityPct: d.baseAvailabilityPct, skills: skillsCsv, certifications: certsCsv
                             });
                             this._oDetailModel.setProperty("/emp", merged);
                             this._oDetailModel.setProperty("/initials", initialsOf(merged.employeeName));

@@ -142,6 +142,7 @@ sap.ui.define([
                     "<div class='fdBrandSub'>Executive Command Center</div></div>" +
                   "</div>" +
                   "<div class='fdHeadActions'>" +
+                    "<div class='fdIconBtn' title='Company Newsletter' onclick=\"window.FShell&&window.FShell.newsletter()\">\u{1F4F0}</div>" +
                     "<div class='fdIconBtn' title='Notifications' onclick=\"window.FShell&&window.FShell.notifications()\">\u{1F514}<span class='fdDot'></span></div>" +
                     "<div class='fdIconBtn' title='Upload profile picture' onclick=\"window.FShell&&window.FShell.uploadPhoto()\">\u{1F4F7}</div>" +
                     "<div class='fdIconBtn' title='Settings' onclick=\"window.FShell&&window.FShell.settings()\">⚙️</div>" +

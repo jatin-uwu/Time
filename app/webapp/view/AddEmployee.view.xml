@@ -3,7 +3,6 @@
     xmlns:mvc="sap.ui.core.mvc"
     xmlns="sap.m"
     xmlns:f="sap.ui.layout.form"
-    xmlns:l="sap.ui.layout"
     xmlns:u="sap.ui.unified"
     xmlns:core="sap.ui.core"
     displayBlock="true">
@@ -14,282 +13,224 @@
             <HBox class="tsPageHeaderCard tsPageHeaderCardStandalone" alignItems="Center" justifyContent="SpaceBetween">
                 <HBox alignItems="Center">
                     <core:Icon src="sap-icon://add-employee" class="tsPageHeaderIcon" style="color:#ffffff;font-size:1.25rem;" />
-                    <Text text="Add New Employee"
-                          style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
+                    <Text text="Add New Employee" style="color:#ffffff;font-size:1.05rem;font-weight:700;margin-left:8px;" />
                 </HBox>
-                <ObjectStatus text="HR · Onboarding" state="None"
-                              icon="sap-icon://employee"
-                              style="color:#ffffff;"
-                              class="tsHeaderBadge" />
+                <ObjectStatus text="HR · Onboarding" state="None" icon="sap-icon://employee" style="color:#ffffff;" class="tsHeaderBadge" />
             </HBox>
 
-            <f:Form id="addEmpForm" editable="true" class="sapUiSmallMargin">
-                <f:layout>
-                    <f:ResponsiveGridLayout labelSpanXL="3" labelSpanL="3" labelSpanM="3" labelSpanS="12" columnsXL="2" columnsL="2" columnsM="2" />
-                </f:layout>
+            <Wizard id="empWizard" class="sapUiSmallMarginTop" finishButtonText="Save Employee" complete=".onSave" showNextButton="true">
 
-                <f:formContainers>
-                    <!-- ── Personal ── -->
-                    <f:FormContainer title="Personal Information">
-                        <f:formElements>
-                            <f:FormElement label="Full Name *">
-                                <f:fields><Input id="inpName" value="{form>/employeeName}" required="true" maxLength="100" placeholder="John Smith" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Email *">
-                                <f:fields><Input id="inpEmail" value="{form>/email}" type="Email" required="true" maxLength="100" placeholder="john.smith@company.com" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Mobile *">
-                                <f:fields><Input id="inpMobile" value="{form>/mobileNumber}" type="Tel" required="true" maxLength="15" placeholder="9876543210" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Date of Birth *">
-                                <f:fields><DatePicker id="inpDOB" value="{form>/dateOfBirth}" valueFormat="yyyy-MM-dd" displayFormat="MMM d, yyyy" width="100%" showWeekNumbers="false" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Gender *">
-                                <f:fields>
-                                    <Select id="selGender" selectedKey="{form>/gender}">
-                                        <core:Item key="" text="— Select —" />
-                                        <core:Item key="Male" text="Male" />
-                                        <core:Item key="Female" text="Female" />
-                                        <core:Item key="Other" text="Other" />
-                                    </Select>
-                                </f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Blood Group *">
-                                <f:fields>
-                                    <Select id="selBlood" selectedKey="{form>/bloodGroup}">
-                                        <core:Item key="" text="— Select —" />
-                                        <core:Item key="A+" text="A+" />
-                                        <core:Item key="A-" text="A-" />
-                                        <core:Item key="B+" text="B+" />
-                                        <core:Item key="B-" text="B-" />
-                                        <core:Item key="O+" text="O+" />
-                                        <core:Item key="O-" text="O-" />
-                                        <core:Item key="AB+" text="AB+" />
-                                        <core:Item key="AB-" text="AB-" />
-                                    </Select>
-                                </f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Address *">
-                                <f:fields><TextArea id="inpAddress" rows="2" value="{form>/address}" maxLength="255" placeholder="Full residential address" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Emergency Contact">
-                                <f:fields><Input id="inpEmergency" value="{form>/emergencyContact}" type="Tel" maxLength="15" placeholder="Optional · 10-digit number" /></f:fields>
-                            </f:FormElement>
+                <!-- ───────── Step 1 · Basic Information ───────── -->
+                <WizardStep id="wzStep1" title="Basic Information" icon="sap-icon://person-placeholder" validated="true">
+                    <f:Form editable="true">
+                        <f:layout><f:ResponsiveGridLayout labelSpanXL="4" labelSpanL="4" labelSpanM="4" labelSpanS="12" columnsXL="2" columnsL="2" columnsM="1" columnsS="1" /></f:layout>
+                        <f:formContainers>
+                            <f:FormContainer title="Personal">
+                                <f:formElements>
+                                    <f:FormElement label="Full Name *"><f:fields><Input id="inpName" value="{form>/employeeName}" maxLength="100" placeholder="John Smith" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Email *"><f:fields><Input id="inpEmail" value="{form>/email}" type="Email" maxLength="100" placeholder="john.smith@company.com" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Mobile *"><f:fields><Input id="inpMobile" value="{form>/mobileNumber}" type="Tel" maxLength="15" placeholder="9876543210" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Emergency Contact"><f:fields><Input id="inpEmergency" value="{form>/emergencyContact}" type="Tel" maxLength="15" placeholder="Optional · 10-digit" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Date of Birth *"><f:fields><DatePicker id="inpDOB" value="{form>/dateOfBirth}" valueFormat="yyyy-MM-dd" displayFormat="MMM d, yyyy" width="100%" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Gender *"><f:fields>
+                                        <Select id="selGender" selectedKey="{form>/gender}"><core:Item key="" text="— Select —" /><core:Item key="Male" text="Male" /><core:Item key="Female" text="Female" /><core:Item key="Other" text="Other" /></Select>
+                                    </f:fields></f:FormElement>
+                                    <f:FormElement label="Blood Group *"><f:fields>
+                                        <Select id="selBlood" selectedKey="{form>/bloodGroup}"><core:Item key="" text="— Select —" /><core:Item key="A+" text="A+" /><core:Item key="A-" text="A-" /><core:Item key="B+" text="B+" /><core:Item key="B-" text="B-" /><core:Item key="O+" text="O+" /><core:Item key="O-" text="O-" /><core:Item key="AB+" text="AB+" /><core:Item key="AB-" text="AB-" /></Select>
+                                    </f:fields></f:FormElement>
+                                    <f:FormElement label="Address *"><f:fields><TextArea id="inpAddress" rows="2" value="{form>/address}" maxLength="255" placeholder="Full residential address" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Marital Status *"><f:fields>
+                                        <Select id="selMarital" selectedKey="{form>/maritalStatus}" change=".onMaritalChange"><core:Item key="" text="— Select —" /><core:Item key="Single" text="Single" /><core:Item key="Married" text="Married" /><core:Item key="Divorced" text="Separate" /><core:Item key="Widowed" text="Widow / Widower" /></Select>
+                                    </f:fields></f:FormElement>
+                                    <f:FormElement label="Father Name *" visible="{= ${form>/maritalStatus} === 'Single' }"><f:fields><Input id="inpFatherName" value="{form>/fatherName}" maxLength="100" placeholder="Father's full name" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Partner Name *" visible="{= ${form>/maritalStatus} === 'Married' }"><f:fields><Input id="inpPartnerName" value="{form>/partnerName}" maxLength="100" placeholder="Spouse full name" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Marriage Date *" visible="{= ${form>/maritalStatus} === 'Married' }"><f:fields><DatePicker id="inpMarriageDate" value="{form>/marriageDate}" valueFormat="yyyy-MM-dd" displayFormat="MMM d, yyyy" width="100%" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Children *" visible="{= ${form>/maritalStatus} === 'Married' }"><f:fields>
+                                        <Select id="selKids" selectedKey="{form>/hasKids}"><core:Item key="" text="— Select —" /><core:Item key="Yes" text="Yes" /><core:Item key="No" text="No" /></Select>
+                                    </f:fields></f:FormElement>
+                                </f:formElements>
+                            </f:FormContainer>
+                            <f:FormContainer title="Identity &amp; Bank">
+                                <f:formElements>
+                                    <f:FormElement label="Aadhaar Number *"><f:fields><Input id="inpAadhaar" value="{form>/aadhaarNumber}" maxLength="20" placeholder="12-digit number" /></f:fields></f:FormElement>
+                                    <f:FormElement label="PAN Number *"><f:fields><Input id="inpPan" value="{form>/panNumber}" maxLength="15" placeholder="ABCPB1234D" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Account Number *"><f:fields><Input id="inpBankAcc" value="{form>/bankAccountNumber}" maxLength="30" placeholder="9-18 digit account" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Bank Name *"><f:fields><Input id="inpBankName" value="{form>/bankName}" maxLength="60" placeholder="e.g. SBI Bank" /></f:fields></f:FormElement>
+                                    <f:FormElement label="IFSC *"><f:fields><Input id="inpIfsc" value="{form>/bankIfsc}" maxLength="15" placeholder="e.g. SBIN0000111" /></f:fields></f:FormElement>
+                                </f:formElements>
+                            </f:FormContainer>
+                        </f:formContainers>
+                    </f:Form>
+                </WizardStep>
 
-                            <!-- ── Marital Status ── -->
-                            <f:FormElement label="Marital Status *">
-                                <f:fields>
-                                    <Select id="selMarital" selectedKey="{form>/maritalStatus}" change=".onMaritalChange">
-                                        <core:Item key="" text="— Select —" />
-                                        <core:Item key="Single" text="Single" />
-                                        <core:Item key="Married" text="Married" />
-                                        <core:Item key="Divorced" text="Separate" />
-                                        <core:Item key="Widowed" text="Widow / Widower" />
-                                    </Select>
-                                </f:fields>
-                            </f:FormElement>
+                <!-- ───────── Step 2 · Employment ───────── -->
+                <WizardStep id="wzStep2" title="Employment" icon="sap-icon://employee" validated="true">
+                    <f:Form editable="true">
+                        <f:layout><f:ResponsiveGridLayout labelSpanXL="4" labelSpanL="4" labelSpanM="4" labelSpanS="12" columnsXL="2" columnsL="2" columnsM="1" columnsS="1" /></f:layout>
+                        <f:formContainers>
+                            <f:FormContainer title="Employment Information">
+                                <f:formElements>
+                                    <f:FormElement label="Department *"><f:fields>
+                                        <Select id="selResDept" selectedKey="{form>/department}" change=".onResDeptChange" forceSelection="false" items="{ path: 'hier>/departments' }">
+                                            <core:Item key="{hier>name}" text="{hier>name}" />
+                                        </Select>
+                                    </f:fields></f:FormElement>
+                                    <f:FormElement label="Role Category"><f:fields>
+                                        <Input id="selRoleCat" value="{form>/roleCategoryName}" showSuggestion="true" startSuggestion="1"
+                                               enabled="{= !!${form>/department} }" placeholder="Select a department first…"
+                                               suggest=".onTaxSuggestRole" suggestionItemSelected=".onTaxRoleSelected" change=".onTaxRoleChange" suggestionItems="{ path: 'taxRole>/items' }">
+                                            <suggestionItems><core:Item key="{taxRole>key}" text="{taxRole>text}" /></suggestionItems>
+                                        </Input>
+                                    </f:fields></f:FormElement>
+                                    <f:FormElement label="Module / Specialization"><f:fields>
+                                        <Input id="selSpec" value="{form>/specializationName}" showSuggestion="true" startSuggestion="1"
+                                               enabled="{= !!${form>/roleCategoryId} }" placeholder="Select a role category first…"
+                                               suggest=".onTaxSuggestModule" suggestionItemSelected=".onTaxModuleSelected" change=".onTaxModuleChange" suggestionItems="{ path: 'taxModule>/items' }">
+                                            <suggestionItems><core:Item key="{taxModule>key}" text="{taxModule>text}" /></suggestionItems>
+                                        </Input>
+                                    </f:fields></f:FormElement>
+                                    <f:FormElement label="Sub-Specialization"><f:fields><Input id="inpSubSpec" value="{form>/subSpecialization}" maxLength="100" placeholder="Optional" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Designation"><f:fields><Input id="inpDesig" value="{form>/designation}" maxLength="50" placeholder="e.g. Software Developer" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Application Role"><f:fields>
+                                        <Select id="selRole" selectedKey="{form>/role}"><core:Item key="" text="— Select Role —" /><core:Item key="employee" text="Employee" /><core:Item key="manager" text="Manager" /><core:Item key="hr" text="HR" /><core:Item key="founder" text="Founder" /></Select>
+                                    </f:fields></f:FormElement>
+                                    <f:FormElement label="Work Location"><f:fields>
+                                        <Select id="selLocation" selectedKey="{form>/workLocation}"><core:Item key="" text="— Select Location —" /><core:Item key="Delhi" text="Delhi (HQ)" /><core:Item key="Mumbai" text="Mumbai" /><core:Item key="Bangalore" text="Bangalore" /><core:Item key="Hyderabad" text="Hyderabad" /><core:Item key="Chennai" text="Chennai" /><core:Item key="Gurgaon" text="Gurgaon" /><core:Item key="Noida" text="Noida" /><core:Item key="Remote" text="Remote" /></Select>
+                                    </f:fields></f:FormElement>
+                                    <f:FormElement label="Joining Date *"><f:fields><DatePicker id="inpJoining" value="{form>/joiningDate}" valueFormat="yyyy-MM-dd" displayFormat="MMM d, yyyy" width="100%" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Employment Type *"><f:fields>
+                                        <Select id="selEmpType" selectedKey="{form>/employmentType}"><core:Item key="" text="— Select —" /><core:Item key="Permanent" text="Permanent" /><core:Item key="Contract" text="Contract" /><core:Item key="Intern" text="Intern" /></Select>
+                                    </f:fields></f:FormElement>
+                                    <f:FormElement label="Reporting Manager"><f:fields>
+                                        <ComboBox id="cmbManager" selectedKey="{form>/managerEmployeeId}" showSecondaryValues="true"
+                                                  filterSecondaryValues="true" placeholder="Search by name or ID…" items="{ path: 'managers>/items' }">
+                                            <core:ListItem key="{managers>employeeId}" text="{managers>employeeName}" additionalText="{managers>employeeId}" />
+                                        </ComboBox>
+                                    </f:fields></f:FormElement>
+                                </f:formElements>
+                            </f:FormContainer>
+                        </f:formContainers>
+                    </f:Form>
+                </WizardStep>
 
-                            <!-- Single → Father Name -->
-                            <f:FormElement label="Father Name *" visible="{= ${form>/maritalStatus} === 'Single' }">
-                                <f:fields><Input id="inpFatherName" value="{form>/fatherName}" maxLength="100" placeholder="Father's full name" /></f:fields>
-                            </f:FormElement>
+                <!-- ───────── Step 3 · Resource Profile ───────── -->
+                <WizardStep id="wzStep3" title="Resource Profile" icon="sap-icon://competitor" validated="true">
+                    <f:Form editable="true">
+                        <f:layout><f:ResponsiveGridLayout labelSpanXL="4" labelSpanL="4" labelSpanM="4" labelSpanS="12" columnsXL="1" columnsL="1" columnsM="1" columnsS="1" /></f:layout>
+                        <f:formContainers>
+                            <f:FormContainer title="Skills">
+                                <f:formElements>
+                                    <f:FormElement label="Skills"><f:fields>
+                                        <MultiInput id="mcbSkills" showSuggestion="true" startSuggestion="1" placeholder="Type a skill — comma / Enter / pick a suggestion to add…"
+                                                    suggest=".onTaxSuggestSkill" suggestionItemSelected=".onTaxSkillSelected" submit=".onTaxSkillSubmit" liveChange=".onTaxSkillLive" suggestionItems="{ path: 'taxSkill>/items' }">
+                                            <suggestionItems><core:Item key="{taxSkill>key}" text="{taxSkill>text}" /></suggestionItems>
+                                        </MultiInput>
+                                    </f:fields></f:FormElement>
+                                </f:formElements>
+                            </f:FormContainer>
+                        </f:formContainers>
+                    </f:Form>
 
-                            <!-- Married fields -->
-                            <f:FormElement label="Partner Name *" visible="{= ${form>/maritalStatus} === 'Married' }">
-                                <f:fields><Input id="inpPartnerName" value="{form>/partnerName}" maxLength="100" placeholder="Spouse full name" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Marriage Date *" visible="{= ${form>/maritalStatus} === 'Married' }">
-                                <f:fields><DatePicker id="inpMarriageDate" value="{form>/marriageDate}" valueFormat="yyyy-MM-dd" displayFormat="MMM d, yyyy" width="100%" showWeekNumbers="false" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Children *" visible="{= ${form>/maritalStatus} === 'Married' }">
-                                <f:fields>
-                                    <Select id="selKids" selectedKey="{form>/hasKids}">
-                                        <core:Item key="" text="— Select —" />
-                                        <core:Item key="Yes" text="Yes" />
-                                        <core:Item key="No" text="No" />
-                                    </Select>
-                                </f:fields>
-                            </f:FormElement>
-                        </f:formElements>
-                    </f:FormContainer>
+                    <!-- Certifications — full-width table immediately below Skills -->
+                    <Panel headerText="Certifications" class="sapUiSmallMarginTop tsCertPanel" expandable="false">
+                        <headerToolbar>
+                            <Toolbar>
+                                <Title text="Certifications" level="H3" />
+                                <ToolbarSpacer />
+                                <Button id="btnAddCert" text="＋ Add Certification" type="Emphasized" press=".onAddCertification" />
+                            </Toolbar>
+                        </headerToolbar>
+                        <content>
+                            <Text text="Add certifications with optional number, issuer, dates and a certificate file." class="sapUiTinyMarginBegin sapUiTinyMarginBottom" />
+                            <Table id="certTable" class="sapUiSizeCompact" items="{form>/certs}" noDataText="No certifications added yet.">
+                                <columns>
+                                    <Column><Text text="Certification" /></Column>
+                                    <Column><Text text="Number" /></Column>
+                                    <Column><Text text="Issued By" /></Column>
+                                    <Column><Text text="Issue Date" /></Column>
+                                    <Column><Text text="Expiry" /></Column>
+                                    <Column><Text text="Document" /></Column>
+                                    <Column width="7rem" hAlign="End"><Text text="Actions" /></Column>
+                                </columns>
+                                <items>
+                                    <ColumnListItem>
+                                        <cells>
+                                            <Text text="{form>certName}" />
+                                            <Text text="{form>certificateNumber}" />
+                                            <Text text="{form>issuedBy}" />
+                                            <Text text="{form>issueDate}" />
+                                            <Text text="{form>expiryDate}" />
+                                            <Link text="{= ${form>fileName} ? ${form>fileName} : '—' }" press=".onPreviewCert" />
+                                            <HBox justifyContent="End">
+                                                <Button icon="sap-icon://edit" type="Transparent" tooltip="Edit" press=".onEditCertification" />
+                                                <Button icon="sap-icon://delete" type="Transparent" tooltip="Remove" press=".onRemoveCertification" />
+                                            </HBox>
+                                        </cells>
+                                    </ColumnListItem>
+                                </items>
+                            </Table>
+                        </content>
+                    </Panel>
 
-                    <!-- ── Employment ── -->
-                    <f:FormContainer title="Employment">
-                        <f:formElements>
-                            <f:FormElement label="Designation *">
-                                <f:fields><Input id="inpDesig" value="{form>/designation}" required="true" maxLength="50" placeholder="e.g. Software Developer" /></f:fields>
-                            </f:FormElement>
-                            <!-- Application role (authoritative). Stored as a canonical
-                                 lowercase value (employee/manager/hr/founder) so it always
-                                 matches the login/authorization check — never 'HR' vs 'hr'. -->
-                            <f:FormElement label="Role *">
-                                <f:fields>
-                                    <Select id="selRole" selectedKey="{form>/role}">
-                                        <core:Item key="" text="— Select Role —" />
-                                        <core:Item key="employee" text="Employee" />
-                                        <core:Item key="manager"  text="Manager" />
-                                        <core:Item key="hr"       text="HR" />
-                                        <core:Item key="founder"  text="Founder" />
-                                    </Select>
-                                </f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Department *">
-                                <f:fields><Input id="inpDept" value="{form>/department}" maxLength="50" placeholder="e.g. Engineering" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Work Location *">
-                                <f:fields>
-                                    <Select id="selLocation" selectedKey="{form>/workLocation}">
-                                        <core:Item key="" text="— Select Location —" />
-                                        <core:Item key="Delhi" text="Delhi (HQ)" />
-                                        <core:Item key="Mumbai" text="Mumbai" />
-                                        <core:Item key="Bangalore" text="Bangalore" />
-                                        <core:Item key="Hyderabad" text="Hyderabad" />
-                                        <core:Item key="Chennai" text="Chennai" />
-                                        <core:Item key="Gurgaon" text="Gurgaon" />
-                                        <core:Item key="Noida" text="Noida" />
-                                        <core:Item key="Remote" text="Remote" />
-                                    </Select>
-                                </f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Joining Date *">
-                                <f:fields><DatePicker id="inpJoining" value="{form>/joiningDate}" valueFormat="yyyy-MM-dd" displayFormat="MMM d, yyyy" width="100%" showWeekNumbers="false" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Employment Type *">
-                                <f:fields>
-                                    <Select id="selEmpType" selectedKey="{form>/employmentType}">
-                                        <core:Item key="" text="— Select —" />
-                                        <core:Item key="Permanent" text="Permanent" />
-                                        <core:Item key="Contract"  text="Contract" />
-                                        <core:Item key="Intern"    text="Intern" />
-                                    </Select>
-                                </f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Reporting Manager *">
-                                <f:fields>
-                                    <ComboBox id="cmbManager"
-                                              selectedKey="{form>/managerEmployeeId}"
-                                              items="{ path: 'managers>/items' }">
-                                        <core:Item key="{managers>employeeId}" text="{managers>employeeName} ({managers>employeeId})" />
-                                    </ComboBox>
-                                </f:fields>
-                            </f:FormElement>
-                        </f:formElements>
-                    </f:FormContainer>
+                    <f:Form editable="true" class="sapUiSmallMarginTop">
+                        <f:layout><f:ResponsiveGridLayout labelSpanXL="4" labelSpanL="4" labelSpanM="4" labelSpanS="12" columnsXL="2" columnsL="2" columnsM="1" columnsS="1" /></f:layout>
+                        <f:formContainers>
+                            <f:FormContainer title="Profile &amp; Cost">
+                                <f:formElements>
+                                    <f:FormElement label="Languages"><f:fields>
+                                        <MultiInput id="miLanguages" showSuggestion="true" startSuggestion="1" placeholder="Type a language and press Enter…"
+                                                    suggest=".onTaxSuggestLang" submit=".onLangSubmit" suggestionItemSelected=".onLangSelected" suggestionItems="{ path: 'taxLang>/items' }">
+                                            <suggestionItems><core:Item key="{taxLang>key}" text="{taxLang>text}" /></suggestionItems>
+                                        </MultiInput>
+                                    </f:fields></f:FormElement>
+                                    <f:FormElement label="Cost Per Hour — Annual CTC (₹)"><f:fields><Input id="inpCtc" value="{form>/ctc}" type="Number" placeholder="e.g. 1200000 — per-hour cost is derived from this" /></f:fields></f:FormElement>
+                                    <f:FormElement label="Years of Experience"><f:fields><Input id="inpExp" value="{form>/yearsOfExperience}" type="Number" placeholder="e.g. 5" /></f:fields></f:FormElement>
+                                </f:formElements>
+                            </f:FormContainer>
+                        </f:formContainers>
+                    </f:Form>
+                </WizardStep>
 
-                    <!-- ── Identity ── -->
-                    <f:FormContainer title="Identity">
-                        <f:formElements>
-                            <f:FormElement label="Aadhaar Number *">
-                                <f:fields><Input id="inpAadhaar" value="{form>/aadhaarNumber}" maxLength="20" placeholder="12-digit number" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="PAN Number *">
-                                <f:fields><Input id="inpPan" value="{form>/panNumber}" maxLength="15" placeholder="ABCPB1234D" /></f:fields>
-                            </f:FormElement>
-                        </f:formElements>
-                    </f:FormContainer>
-
-                    <!-- ── Bank ── -->
-                    <f:FormContainer title="Bank Details">
-                        <f:formElements>
-                            <f:FormElement label="Account Number *">
-                                <f:fields><Input id="inpBankAcc" value="{form>/bankAccountNumber}" maxLength="30" placeholder="9-18 digit account number" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="Bank Name *">
-                                <f:fields><Input id="inpBankName" value="{form>/bankName}" maxLength="60" placeholder="e.g. SBI Bank" /></f:fields>
-                            </f:FormElement>
-                            <f:FormElement label="IFSC *">
-                                <f:fields><Input id="inpIfsc" value="{form>/bankIfsc}" maxLength="15" placeholder="e.g. SBIN0000111" /></f:fields>
-                            </f:FormElement>
-                        </f:formElements>
-                    </f:FormContainer>
-
-                    <!-- ── Documents ── -->
-                    <!-- ── Documents ── -->
-                    <f:FormContainer title="Documents">
-    <f:formElements>
-        <f:FormElement>
-            <f:fields>
-                <VBox>
-
-                    <HBox alignItems="Center"
-                          class="sapUiTinyMarginBottom"
-                          wrap="Wrap">
-
-                        <Select id="docTypeSel"
-                                selectedKey="Aadhaar"
-                                width="160px"
-                                class="sapUiTinyMarginEnd">
-                            <core:Item key="Aadhaar" text="Aadhaar Card"/>
-                            <core:Item key="PAN" text="PAN Card"/>
-                            <core:Item key="Resume" text="Resume"/>
-                            <core:Item key="Certificate" text="Certificate"/>
-                            <core:Item key="Photo" text="Photo"/>
-                            <core:Item key="Other" text="Other"/>
-                        </Select>
-
-                        <u:FileUploader
-                            id="docUploader"
-                            multiple="true"
-                            buttonOnly="true"
-                            buttonText="Add Files"
-                            icon="sap-icon://attachment"
-                            change=".onDocsSelected"
-                            class="sapUiTinyMarginEnd"/>
-
-                        <Text text="Max 5MB"
-                              class="sapUiTinyMarginBegin"/>
-                    </HBox>
-
-                    <Table id="pendingDocsTable"
-                           class="sapUiSizeCompact"
-                           items="{form>/pendingDocs}"
-                           noDataText="No files queued"
-                           showSeparators="Inner">
-
-                        <columns>
-                            <Column width="2rem"/>
-                            <Column><Text text="File"/></Column>
-                            <Column width="9rem"><Text text="Type"/></Column>
-                            <Column width="5rem"><Text text="Size"/></Column>
-                            <Column width="4rem"/>
-                        </columns>
-
-                        <items>
-                            <ColumnListItem>
-                                <cells>
-                                    <core:Icon src="sap-icon://attachment"/>
-                                    <Text text="{form>fileName}" wrapping="false"/>
-                                    <Select selectedKey="{form>documentType}">
-                                        <core:Item key="Aadhaar" text="Aadhaar"/>
-                                        <core:Item key="PAN" text="PAN"/>
-                                        <core:Item key="Resume" text="Resume"/>
-                                        <core:Item key="Certificate" text="Certificate"/>
-                                        <core:Item key="Photo" text="Photo"/>
-                                        <core:Item key="Other" text="Other"/>
-                                    </Select>
-                                    <Text text="{form>sizeLabel}"/>
-                                    <Button icon="sap-icon://delete"
-                                            type="Transparent"
-                                            press=".onRemovePendingDoc"/>
-                                </cells>
-                            </ColumnListItem>
-                        </items>
-                    </Table>
-
-                </VBox>
-            </f:fields>
-        </f:FormElement>
-    </f:formElements>
-</f:FormContainer>
-                </f:formContainers>
-            </f:Form>
-
-            <Bar class="sapUiSmallMargin sapUiMediumMarginTop">
-                <contentRight>
-                    <Button text="Reset" press=".onReset" class="sapUiSmallMarginEnd" />
-                    <Button text="Save Employee" type="Emphasized" press=".onSave" busy="{form>/saving}" />
-                </contentRight>
-            </Bar>
+                <!-- ───────── Step 4 · Documents ───────── -->
+                <WizardStep id="wzStep4" title="Documents" icon="sap-icon://attachment" validated="true">
+                    <f:Form editable="true">
+                        <f:layout><f:ResponsiveGridLayout labelSpanS="12" columnsXL="1" columnsL="1" columnsM="1" columnsS="1" /></f:layout>
+                        <f:formContainers>
+                            <f:FormContainer title="Resume &amp; Attachments">
+                                <f:formElements>
+                                    <f:FormElement>
+                                        <f:fields>
+                                            <VBox>
+                                                <HBox alignItems="Center" class="sapUiTinyMarginBottom" wrap="Wrap">
+                                                    <Select id="docTypeSel" selectedKey="Resume" width="160px" class="sapUiTinyMarginEnd">
+                                                        <core:Item key="Resume" text="Resume" /><core:Item key="Aadhaar" text="Aadhaar Card" /><core:Item key="PAN" text="PAN Card" /><core:Item key="Certificate" text="Certificate" /><core:Item key="Photo" text="Photo" /><core:Item key="Other" text="Other" />
+                                                    </Select>
+                                                    <u:FileUploader id="docUploader" multiple="true" buttonOnly="true" buttonText="Add Files" icon="sap-icon://attachment" change=".onDocsSelected" class="sapUiTinyMarginEnd" />
+                                                    <Text text="Max 5MB" class="sapUiTinyMarginBegin" />
+                                                </HBox>
+                                                <Table id="pendingDocsTable" class="sapUiSizeCompact" items="{form>/pendingDocs}" noDataText="No files queued" showSeparators="Inner">
+                                                    <columns><Column width="2rem" /><Column><Text text="File" /></Column><Column width="9rem"><Text text="Type" /></Column><Column width="5rem"><Text text="Size" /></Column><Column width="4rem" /></columns>
+                                                    <items>
+                                                        <ColumnListItem>
+                                                            <cells>
+                                                                <core:Icon src="sap-icon://attachment" />
+                                                                <Text text="{form>fileName}" wrapping="false" />
+                                                                <Select selectedKey="{form>documentType}"><core:Item key="Aadhaar" text="Aadhaar" /><core:Item key="PAN" text="PAN" /><core:Item key="Resume" text="Resume" /><core:Item key="Certificate" text="Certificate" /><core:Item key="Photo" text="Photo" /><core:Item key="Other" text="Other" /></Select>
+                                                                <Text text="{form>sizeLabel}" />
+                                                                <Button icon="sap-icon://delete" type="Transparent" press=".onRemovePendingDoc" />
+                                                            </cells>
+                                                        </ColumnListItem>
+                                                    </items>
+                                                </Table>
+                                            </VBox>
+                                        </f:fields>
+                                    </f:FormElement>
+                                </f:formElements>
+                            </f:FormContainer>
+                        </f:formContainers>
+                    </f:Form>
+                </WizardStep>
+            </Wizard>
         </content>
     </Page>
 </mvc:View>

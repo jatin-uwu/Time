@@ -64,8 +64,55 @@ sap.ui.define([
         GROUP_TASK_COMPLETED: "group-task-detail",
         // A new group-chat message deep-links to the task AND auto-opens the chat
         // panel (see onNotifClick → _openGroupChatTaskId flag).
-        GROUP_CHAT_MESSAGE:   "group-task-detail"
+        GROUP_CHAT_MESSAGE:   "group-task-detail",
+        // Solo-task review request → the task status page.
+        TASK_REVIEW_REQUESTED: "task-status",
+
+        // ── Project module ──────────────────────────────────────────────────────
+        // referenceId points to the project (or a child record from which the
+        // projectId is derived in projectIdFromRef) → open the project detail.
+        PROJECT_UPDATE:          "projects",
+        PROJECT_POC:             "projects",
+        PROJECT_ALLOCATION:      "projects",
+        PROJECT_DEALLOCATION:    "projects",
+        PROJECT_TASK_ASSIGNED:   "projects",
+        PROJECT_BUDGET_ALLOCATED:"projects",
+        BUDGET_REQUEST:          "projects",
+        BUDGET_REQUEST_DECISION: "projects",
+        PROJECT_CHAT_MESSAGE:    "projects",
+        // Requirements live under a project (referenceId = <projectId>-REQ-nnn).
+        REQUIREMENT_CREATED:     "projects",
+        REQUIREMENT_ASSIGNED:    "projects",
+        REQUIREMENT_STATUS:      "projects",
+        REQUIREMENT_COMMENT:     "projects",
+        REQUIREMENT_REVIEW:      "projects",
+        REQUIREMENT_UPDATE:      "projects",
+        // ── Meetings ────────────────────────────────────────────────────────────
+        // No standalone meeting-detail route — the personal Meetings center lists it.
+        MEETING_CREATED:   "meetings",
+        MEETING_UPDATED:   "meetings",
+        MEETING_CANCELLED: "meetings"
     };
+
+    // Types whose "projects" route must open a SPECIFIC project detail. The
+    // projectId is derived from the notification's referenceId.
+    var PROJECT_OPEN_TYPES = {
+        PROJECT_UPDATE: 1, PROJECT_POC: 1, PROJECT_ALLOCATION: 1, PROJECT_DEALLOCATION: 1,
+        PROJECT_TASK_ASSIGNED: 1, PROJECT_BUDGET_ALLOCATED: 1, BUDGET_REQUEST: 1,
+        BUDGET_REQUEST_DECISION: 1, PROJECT_CHAT_MESSAGE: 1,
+        REQUIREMENT_CREATED: 1, REQUIREMENT_ASSIGNED: 1, REQUIREMENT_STATUS: 1,
+        REQUIREMENT_COMMENT: 1, REQUIREMENT_REVIEW: 1, REQUIREMENT_UPDATE: 1
+    };
+
+    // Derive the owning projectId from a notification's referenceId.
+    //   <projectId>-REQ-nnn  (requirement)  → <projectId>
+    //   <projectId>-T-nnn    (project task) → <projectId>
+    //   PRJ-0001             (project)      → itself
+    function projectIdFromRef(ref) {
+        if (!ref) return null;
+        var m = String(ref).match(/^(.*?)-REQ-/) || String(ref).match(/^(.*?)-T-/);
+        return m ? m[1] : String(ref);
+    }
 
     // Notification types that, beyond navigating to the group task, should also
     // pop the chat panel open on arrival.
@@ -351,7 +398,13 @@ sap.ui.define([
             if (sRoute) {
                 try {
                     var oRouter = this.getOwnerComponent().getRouter();
-                    if (sRoute === "group-task-detail") {
+                    if (sRoute === "projects" && PROJECT_OPEN_TYPES[target.type]) {
+                        // Stash the projectId so Projects.controller opens that
+                        // project's detail directly on arrival (route has no param).
+                        var pid = projectIdFromRef(target.referenceId);
+                        if (pid) { this.getOwnerComponent()._openProjectId = pid; }
+                        oRouter.navTo("projects");
+                    } else if (sRoute === "group-task-detail") {
                         // The group task detail route needs the taskId, carried in the
                         // notification's referenceId. Without it, fall back to the
                         // group-tasks list rather than failing the navigation.

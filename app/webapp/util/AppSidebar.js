@@ -15,8 +15,12 @@ sap.ui.define(["sap/ui/core/IconPool"], function (IconPool) {
     }
 
     // Sections reuse the exact route names + icons of the existing menu.
+    // Projects & Meetings are promoted to top-level items (like Dashboard / Rating
+    // History) for all non-founder roles — fewer clicks, clearer navigation.
     var COMMON = [
         { items: [{ route: "dashboard", label: "Overview", icon: "home" }] },
+        { items: [{ route: "projects", label: "Projects", icon: "tree" }] },
+        { items: [{ route: "meetings", label: "Meetings", icon: "appointments-2" }] },
         { title: "Timesheet", items: [
             { route: "timesheet", label: "Fill Timesheet", icon: "add-activity" },
             { route: "history", label: "Timesheet History", icon: "history" }
@@ -38,11 +42,14 @@ sap.ui.define(["sap/ui/core/IconPool"], function (IconPool) {
         { route: "manager", label: "Approvals", icon: "approvals" },
         { route: "approval-history", label: "Approval History", icon: "history" },
         { route: "team-attendance", label: "Team Attendance", icon: "employee-pane" },
-        { route: "performance-rating", label: "Performance Rating", icon: "line-chart" }
+        { route: "performance-rating", label: "Performance Rating", icon: "line-chart" },
+        { route: "resource-planning", label: "Resource Planning", icon: "org-chart" },
+        { route: "resource-settings", label: "Planning Settings", icon: "action-settings" }
     ]}];
     var HR = [{ title: "Human Resources", items: [
         { route: "add-employee", label: "Add Employee", icon: "add-employee" },
         { route: "all-employees", label: "All Employees", icon: "employee" },
+        { route: "salary-master", label: "Salary Master", icon: "money-bills" },
         { route: "hr-approvals", label: "HR Approvals", icon: "approvals" }
     ]}];
 

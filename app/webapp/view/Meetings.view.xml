@@ -1,0 +1,8 @@
+<mvc:View controllerName="timesheet.app.controller.Meetings"
+    xmlns:mvc="sap.ui.core.mvc" xmlns="sap.m" xmlns:core="sap.ui.core" displayBlock="true">
+    <Page id="meetingsPage" showHeader="false" class="tsDashboardPage" enableScrolling="true">
+        <content>
+            <core:HTML id="mtgHost" content="&lt;div class='pmWrap'&gt;&lt;div class='pmLoading'&gt;Loading meetings…&lt;/div&gt;&lt;/div&gt;" />
+        </content>
+    </Page>
+</mvc:View>

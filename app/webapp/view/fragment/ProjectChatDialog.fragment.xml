@@ -1,0 +1,136 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+
+    <!-- Right-docked, full-height project chat panel. Mirrors GroupChatDialog
+         but is bound to the /project/ service and ProjectMessage entities. -->
+    <VBox id="pchatPanel" class="tsChatPanel">
+
+        <!-- Header -->
+        <HBox class="tsChatPanelHeader" alignItems="Center" justifyContent="SpaceBetween">
+            <HBox alignItems="Center">
+                <core:Icon src="sap-icon://discussion" class="tsChatPanelIcon" />
+                <VBox class="sapUiTinyMarginBegin">
+                    <Text text="{chat>/projectName}" class="tsChatPanelTitle" />
+                    <Text text="Project Chat" class="tsChatPanelSub" />
+                </VBox>
+            </HBox>
+            <Button icon="sap-icon://decline" type="Transparent" tooltip="Close"
+                    press=".onChatClosed" class="tsChatPanelClose" />
+        </HBox>
+
+        <!-- Search -->
+        <SearchField placeholder="Search messages" liveChange=".onSearchMessages"
+                     showSearchButton="false" width="100%" class="tsChatSearch" />
+
+        <!-- Pinned message banner -->
+        <HBox class="tsChatPinned" alignItems="Center" visible="{= !!${chat>/pinned} }">
+            <core:Icon src="sap-icon://pushpin-on" class="tsChatPinIcon sapUiTinyMarginEnd" />
+            <VBox class="tsChatPinnedText">
+                <Link text="Pinned Message: {chat>/pinned/preview}"
+                      press=".onPinnedClick" class="tsChatPinnedPreview" />
+                <Text text="Pinned By: {chat>/pinned/pinnedByName}" class="tsChatPinnedBy" />
+            </VBox>
+            <Button icon="sap-icon://decline" type="Transparent" tooltip="Unpin"
+                    press=".onUnpinMessage" class="tsChatPinUnpin" />
+        </HBox>
+
+        <!-- Messages (scrollable) -->
+        <VBox id="pchatScroll" class="tsChatScroll">
+            <Button text="Load earlier messages" type="Transparent"
+                    icon="sap-icon://slim-arrow-up"
+                    visible="{chat>/hasMore}" press=".onLoadEarlier" class="tsChatLoadMore" />
+
+            <List items="{chat>/messages}" mode="None" showSeparators="None"
+                  class="tsChatList" noDataText="No messages yet — start the conversation.">
+                <CustomListItem class="tsChatItem">
+                    <customData>
+                        <core:CustomData key="msgid" value="{chat>messageId}" writeToDom="true" />
+                    </customData>
+                    <HBox justifyContent="{= ${chat>isMine} ? 'End' : 'Start' }" class="tsChatLine">
+                        <VBox class="{= ${chat>isMine} ? 'tsChatRow tsChatRowMine' : 'tsChatRow' }">
+                            <HBox class="tsChatMeta" alignItems="Center">
+                                <Avatar initials="{chat>initials}" displaySize="XS"
+                                        backgroundColor="Accent6" class="sapUiTinyMarginEnd"
+                                        visible="{= !${chat>isMine} }" />
+                                <Text text="{chat>senderName}" class="tsChatSender sapUiTinyMarginEnd"
+                                      visible="{= !${chat>isMine} }" />
+                                <Text text="{chat>timeLabel}" class="tsChatTime" />
+                                <Text text="· Edited" class="tsChatEdited sapUiTinyMarginBegin"
+                                      visible="{= ${chat>edited} }" />
+                                <Button icon="sap-icon://pushpin-off" type="Transparent"
+                                        tooltip="Pin message" press=".onPinMessage"
+                                        visible="{= ${chat>canPin} }" class="tsChatMsgAct" />
+                                <Button icon="sap-icon://edit" type="Transparent"
+                                        tooltip="Edit" press=".onEditMessage"
+                                        visible="{= ${chat>canManage} }" class="tsChatMsgAct" />
+                                <Button icon="sap-icon://delete" type="Transparent"
+                                        tooltip="Delete" press=".onDeleteMessage"
+                                        visible="{= ${chat>canManage} }" class="tsChatMsgAct" />
+                            </HBox>
+                            <VBox class="tsChatBubble tsChatBubbleDeleted" visible="{= ${chat>isDeleted} }">
+                                <Text text="{chat>deletedText}" class="tsChatDeleted" />
+                            </VBox>
+                            <VBox class="tsChatBubble" visible="{= !${chat>isDeleted} }">
+                                <Text text="{chat>message}" class="tsChatText" visible="{= !!${chat>message} }" />
+                                <VBox items="{chat>attachments}" class="tsChatAtts"
+                                      visible="{= ${chat>attachments}.length > 0 }">
+                                    <VBox class="tsChatAtt">
+                                        <Image src="{chat>thumbUrl}"
+                                               visible="{= ${chat>isImage} &amp;&amp; !!${chat>thumbUrl} }"
+                                               press=".onDownloadAttachment" class="tsChatThumb" />
+                                        <HBox class="tsChatAttChip" alignItems="Center"
+                                              visible="{= !(${chat>isImage} &amp;&amp; !!${chat>thumbUrl}) }">
+                                            <core:Icon src="sap-icon://attachment" size="0.9rem" color="#3b82f6" class="sapUiTinyMarginEnd" />
+                                            <Link text="{chat>fileName} ({chat>sizeLabel})" press=".onDownloadAttachment" />
+                                        </HBox>
+                                    </VBox>
+                                </VBox>
+                            </VBox>
+                        </VBox>
+                    </HBox>
+                </CustomListItem>
+            </List>
+        </VBox>
+
+        <!-- Pending attachments -->
+        <VBox items="{chat>/pendingFiles}" class="tsChatPending"
+              visible="{= ${chat>/pendingFiles}.length > 0 }">
+            <HBox class="tsChatPendingChip" alignItems="Center">
+                <core:Icon src="sap-icon://document" size="0.9rem" color="#3b82f6" class="sapUiTinyMarginEnd" />
+                <Text text="{chat>fileName} ({chat>sizeLabel})" class="tsChatPendingName" />
+                <Button icon="sap-icon://decline" type="Transparent" tooltip="Remove"
+                        press=".onRemovePending" class="sapUiTinyMarginBegin" />
+            </HBox>
+        </VBox>
+
+        <!-- Editing indicator -->
+        <HBox class="tsChatEditingBar" alignItems="Center" visible="{= !!${chat>/editingId} }">
+            <core:Icon src="sap-icon://edit" class="sapUiTinyMarginEnd" />
+            <Text text="Editing message" class="tsChatEditingText" />
+            <Button text="Cancel" type="Transparent" press=".onCancelEdit"
+                    class="sapUiTinyMarginBegin" />
+        </HBox>
+
+        <!-- Composer -->
+        <HBox class="tsChatComposer" alignItems="End">
+            <TextArea id="pchatInput" value="{chat>/draft}" valueLiveUpdate="true"
+                      rows="1" growing="true" growingMaxLines="6" width="100%"
+                      placeholder="Type a message" class="tsChatInput">
+                <layoutData>
+                    <FlexItemData growFactor="1" baseSize="70%" minWidth="0" />
+                </layoutData>
+            </TextArea>
+            <Button id="pchatEmojiBtn" text="🙂" type="Transparent"
+                    tooltip="Emoji" press=".onToggleEmoji" class="tsChatIconBtn tsChatEmojiBtn" />
+            <Button icon="sap-icon://attachment" type="Transparent"
+                    tooltip="Attach files (max 10 MB each)"
+                    press=".onPickAttachment" class="tsChatIconBtn" />
+            <Button icon="sap-icon://paper-plane" type="Transparent" tooltip="Send"
+                    enabled="{= ${chat>/draft}.length > 0 || ${chat>/pendingFiles}.length > 0 }"
+                    busy="{chat>/sending}" press=".onSendMessage" class="tsChatSendIcon" />
+        </HBox>
+
+    </VBox>
+
+</core:FragmentDefinition>

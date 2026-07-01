@@ -31,6 +31,12 @@
       "csrfProtection": false
     },
     {
+      "source": "^/project/(.*)$",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa",
+      "csrfProtection": false
+    },
+    {
       "source": "^/founder-stream$",
       "destination": "srv-api",
       "authenticationType": "xsuaa",

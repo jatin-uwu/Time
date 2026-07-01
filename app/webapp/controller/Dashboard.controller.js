@@ -97,7 +97,7 @@ sap.ui.define([
                 leaveOverview: {
                     casual: 0, sick: 0, annual: 0, unpaid: 0, totalDays: 0, takenData: []
                 },
-                upcomingCalendar: {
+                upcomingMeetings: {
                     events: []
                 },
                 recentNotifications: {
@@ -1289,26 +1289,20 @@ sap.ui.define([
             });
         },
 
-        // ── Upcoming Calendar ─────────────────────────────────────────────────────
+        // ── Upcoming Teams Meetings ───────────────────────────────────────────────
         _loadUpcomingCalendar() {
-            this._callAction("getUpcomingCalendar", {})
+            this._callAction("getUpcomingMeetings", {})
                 .then(oData => {
                     let events = [];
                     try {
-                        if (Array.isArray(oData)) {
-                            events = oData;
-                        } else if (oData.eventsJSON) {
-                            events = JSON.parse(oData.eventsJSON);
-                        } else if (Array.isArray(oData.value)) {
-                            events = oData.value;
-                        }
-                    } catch (e) {
-                        events = [];
-                    }
-                    this._oDashModel.setProperty("/upcomingCalendar/events", events);
+                        const raw = typeof oData === "string" ? JSON.parse(oData) : oData;
+                        if (Array.isArray(raw)) events = raw;
+                        else if (raw && Array.isArray(raw.value)) events = raw.value;
+                    } catch (e) { events = []; }
+                    this._oDashModel.setProperty("/upcomingMeetings/events", events);
                 })
                 .catch(() => {
-                    this._oDashModel.setProperty("/upcomingCalendar/events", []);
+                    this._oDashModel.setProperty("/upcomingMeetings/events", []);
                 })
                 .finally(() => this._refreshDash());
         },
@@ -1433,7 +1427,7 @@ sap.ui.define([
                 trend: m.getProperty("/performanceTrend") || {},
                 summary: m.getProperty("/taskSummary") || {},
                 leaveOv: m.getProperty("/leaveOverview") || {},
-                calendar: m.getProperty("/upcomingCalendar/events") || [],
+                calendar: m.getProperty("/upcomingMeetings/events") || [],
                 notifs: m.getProperty("/recentNotifications/items") || [],
                 thought: m.getProperty("/thought") || {},
             }));
@@ -1978,52 +1972,45 @@ sap.ui.define([
         </div>
     </div>`;
 
-            // ── Upcoming Calendar ─────────────────────────────────────────────────────
+            // ── Upcoming Teams Meetings ───────────────────────────────────────────────
             const calEvents = Array.isArray(o.calendar) ? o.calendar : [];
-
-            // Icon per event — rotate through 4 colours matching reference image
-            const CAL_COLORS = ["#3b82f6", "#f59e0b", "#16a34a", "#8b5cf6"];
+            const MTG_COLORS = ["#5b5fc7", "#f59e0b", "#16a34a", "#8b5cf6"];
+            const teamsIcon = '<path d="M19 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2z"/><path d="M8 10h8M8 14h5"/>';
             const calRows = calEvents.length === 0
-                ? `<div style="text-align:center;padding:24px 0;color:#9ca3af;font-size:0.82rem;">
-           No upcoming events in the next 7 days
-       </div>`
-                : calEvents.map((ev, i) => {
-                    const col = CAL_COLORS[i % CAL_COLORS.length];
-                    const iconPaths = [
-                        '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>',  // team
-                        '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',  // screen
-                        '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>',  // person
-                        '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'  // calendar
-                    ];
+                ? `<div style="text-align:center;padding:24px 0;color:#9ca3af;font-size:0.82rem;">No upcoming meetings in the next 7 days</div>`
+                : calEvents.slice(0, 5).map((ev, i) => {
+                    const col = MTG_COLORS[i % MTG_COLORS.length];
+                    const joinBtn = ev.teamsJoinUrl
+                        ? `<a href="${ev.teamsJoinUrl}" target="_blank" rel="noopener"
+                              style="display:inline-block;margin-top:5px;padding:3px 10px;
+                                     background:#5b5fc7;color:#fff;border-radius:6px;
+                                     font-size:0.7rem;font-weight:600;text-decoration:none;">
+                              Join Teams
+                           </a>` : '';
+                    const todayBadge = ev.isToday ? `<span style="margin-left:6px;padding:1px 7px;background:#fef3c7;color:#92400e;border-radius:8px;font-size:0.68rem;font-weight:700;">TODAY</span>` : '';
                     return `
-        <div style="display:flex;align-items:flex-start;gap:12px;
-                    padding:10px 0;border-bottom:1px solid #f9fafb;">
-            <span style="width:34px;height:34px;border-radius:50%;
-                         background:${col}18;display:flex;align-items:center;
-                         justify-content:center;flex-shrink:0;margin-top:1px;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                     stroke="${col}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    ${iconPaths[i % iconPaths.length]}
-                </svg>
+        <div style="display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid #f9fafb;">
+            <span style="width:34px;height:34px;border-radius:50%;background:${col}18;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="${col}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${teamsIcon}</svg>
             </span>
             <div style="flex:1;min-width:0;">
-                <div style="font-size:0.82rem;font-weight:600;color:#111827;
-                            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                    ${ev.title}
+                <div style="font-size:0.82rem;font-weight:600;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                    ${ev.title}${todayBadge}
                 </div>
-                <div style="font-size:0.75rem;color:#6b7280;margin-top:2px;">
-                    ${ev.dateLabel}, ${ev.timeLabel}
-                </div>
+                <div style="font-size:0.75rem;color:#6b7280;margin-top:2px;">${ev.dateLabel}, ${ev.timeLabel}</div>
+                ${joinBtn}
             </div>
         </div>`;
                 }).join("");
 
             const sCalendar = `
-    <div class="tsDashTile" style="flex:1;min-width:0;background:#fff;border-radius:12px;
-                box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
+    <div class="tsDashTile" style="flex:1;min-width:0;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:18px;box-sizing:border-box;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-            <span style="font-size:0.95rem;font-weight:600;color:#111827;">Upcoming Calendar</span>
-            <span style="font-size:0.75rem;color:#3b82f6;cursor:pointer;">View Calendar</span>
+            <span style="display:flex;align-items:center;gap:7px;font-size:0.95rem;font-weight:600;color:#111827;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b5fc7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${teamsIcon}</svg>
+                Upcoming Meetings
+            </span>
+            <a href="#/meetings" style="font-size:0.75rem;color:#5b5fc7;text-decoration:none;cursor:pointer;">View All</a>
         </div>
         ${calRows}
     </div>`;

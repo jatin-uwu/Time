@@ -1,0 +1,10 @@
+<mvc:View
+    controllerName="timesheet.app.controller.ClientPortal"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns:core="sap.ui.core"
+    xmlns="sap.m"
+    height="100%">
+    <Page showHeader="false" class="clientPortalPage" backgroundDesign="Transparent">
+        <core:HTML id="clientHost" sanitizeContent="false" />
+    </Page>
+</mvc:View>

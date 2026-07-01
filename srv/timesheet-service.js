@@ -1,5 +1,6 @@
 const cds = require('@sap/cds');
 const founderEvents = require('./founder-events');
+const rp = require('./resource-planning');   // Resource Planning & Recommendation engine
 
 // Mutating events that should ping the Founder Dashboard to re-fetch (covers the
 // CRUD verbs plus the named actions that change org data). Read-only actions are
@@ -111,6 +112,323 @@ const TASK_UPDATE = 'ccentrik.employee.timesheet.schema.timesheet.TaskUpdate';
 const TASK_DOCUMENT = 'ccentrik.employee.timesheet.schema.timesheet.TaskDocument';
 const PREV_WEEK_REQUEST = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetPrevWeekRequest';
 const DAY_UNLOCK_REQUEST = 'ccentrik.employee.timesheet.schema.timesheet.TimesheetDayUnlockRequest';
+// ── Project Management (Phase 1) entities ──────────────────────────────────────
+const PROJECT = 'ccentrik.employee.timesheet.schema.timesheet.Project';
+const PROJECT_TYPE = 'ccentrik.employee.timesheet.schema.timesheet.ProjectTypeMaster';
+
+// Default project types (seeded once if the master is empty). Configurable
+// thereafter — adding a type is data, not code.
+const DEFAULT_PROJECT_TYPES = [
+    { code: 'SAP_IMPL', name: 'SAP Implementation Project', planningModel: 'Phase', hasRevenue: true, sortOrder: 1,
+      departments: ['SAP'],   // roles derived dynamically from employees in these depts
+      resourceCategories: [],
+      phases: ['Discover', 'Explore', 'Realize', 'Deploy', 'Hypercare'],
+      modules: ['SAP MM', 'SAP SD', 'SAP FI', 'SAP CO', 'SAP PP', 'SAP SuccessFactors', 'SAP Ariba', 'SAP BTP'] },
+    { code: 'SOFTWARE_DEV', name: 'Software Development Project', planningModel: 'Sprint', hasRevenue: true, sortOrder: 2,
+      departments: ['Engineering'], resourceCategories: [], phases: [], modules: [] },
+    { code: 'SUPPORT', name: 'Support & Maintenance Project', planningModel: 'MonthlyCapacity', hasRevenue: true, sortOrder: 3,
+      departments: ['Support'], resourceCategories: [], phases: [], modules: [] },
+    { code: 'INTERNAL', name: 'Internal Project', planningModel: 'CostTracking', hasRevenue: false, sortOrder: 4,
+      departments: [], resourceCategories: [], phases: [], modules: [] },
+    { code: 'OTHER', name: 'Other', planningModel: 'MonthlyCapacity', hasRevenue: true, sortOrder: 5,
+      departments: [], resourceCategories: [], phases: [], modules: [] }
+];
+// 7 standard cost categories the Execution Budget is allocated across.
+const COST_CATEGORIES = ['Resource Cost', 'Infrastructure Cost', 'Licensing Cost', 'Vendor Cost', 'Travel Cost', 'Training Cost', 'Miscellaneous Cost'];
+
+// Seed/refresh project types + backfill existing projects to OTHER. Runs once per
+// process (guarded). Refreshes the 5 default types' category/phase/module lists so
+// existing installs pick up new categories; custom types are left untouched.
+let _typesEnsured = false;
+async function ensureProjectTypes() {
+    if (_typesEnsured) return;
+    try {
+        for (const t of DEFAULT_PROJECT_TYPES) {
+            const cfg = {
+                name: t.name, planningModel: t.planningModel, hasRevenue: t.hasRevenue,
+                resourceCategories: JSON.stringify(t.resourceCategories), phases: JSON.stringify(t.phases),
+                modules: JSON.stringify(t.modules || []), departments: JSON.stringify(t.departments || [])
+            };
+            const row = await SELECT.one.from(PROJECT_TYPE).columns('code').where({ code: t.code });
+            if (row) await UPDATE(PROJECT_TYPE).set(cfg).where({ code: t.code });
+            else await INSERT.into(PROJECT_TYPE).entries({ code: t.code, ...cfg, sortOrder: t.sortOrder, isActive: true });
+        }
+        // Backfill any project missing a type → OTHER (back-compat, no data loss).
+        await UPDATE(PROJECT).set({ projectType_code: 'OTHER', projectTypeName: 'Other' }).where({ projectType_code: null });
+        _typesEnsured = true;
+    } catch (e) { cds.log('project').warn('ensureProjectTypes skipped:', e.message || e); }
+}
+const PROJECT_RESOURCE = 'ccentrik.employee.timesheet.schema.timesheet.ProjectResource';
+const RESOURCE_OVERRIDE = 'ccentrik.employee.timesheet.schema.timesheet.ResourceOverride';
+const RP_CONFIG = 'ccentrik.employee.timesheet.schema.timesheet.ResourcePlanningConfig';
+const COMPANY_EVENT = 'ccentrik.employee.timesheet.schema.timesheet.CompanyEvent';
+const MILESTONE = 'ccentrik.employee.timesheet.schema.timesheet.Milestone';
+const MILESTONE_DEP = 'ccentrik.employee.timesheet.schema.timesheet.MilestoneDependency';
+const MILESTONE_APPROVAL = 'ccentrik.employee.timesheet.schema.timesheet.MilestoneApproval';
+const MS_TERMINAL = ['Completed', 'Completed Early', 'Cancelled'];
+// ── Resource master data (hierarchical) ──────────────────────────────────────
+const DEPT_MASTER = 'ccentrik.employee.timesheet.schema.timesheet.DepartmentMaster';
+const ROLE_MASTER = 'ccentrik.employee.timesheet.schema.timesheet.RoleCategoryMaster';
+const SPEC_MASTER = 'ccentrik.employee.timesheet.schema.timesheet.SpecializationMaster';
+const SKILL_MASTER = 'ccentrik.employee.timesheet.schema.timesheet.SkillMaster';
+const CERT_MASTER = 'ccentrik.employee.timesheet.schema.timesheet.CertificationMaster';
+const EMP_SKILL = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeSkill';
+const EMP_CERT = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeCertification';
+const PROJ_REQ = 'ccentrik.employee.timesheet.schema.timesheet.ProjectResourceRequirement';
+
+// Default hierarchical seed — SAP fully fleshed out per spec; other departments get
+// a sensible starter set. Idempotent: only inserts rows that don't already exist, so
+// admin edits and existing data are never overwritten. Department NAMES intentionally
+// match the existing free-text values so both worlds stay consistent.
+const DEFAULT_RESOURCE_MASTERS = [
+    { deptId: 'SAP', name: 'SAP', roles: [
+        { roleId: 'SAP-BASIS', name: 'Basis Consultant', specs: ['HANA Administration', 'System Upgrade', 'Migration', 'Security'] },
+        { roleId: 'SAP-TECH',  name: 'Technical Consultant', specs: ['ABAP', 'Fiori', 'BTP', 'CPI', 'PI/PO'] },
+        { roleId: 'SAP-FUNC',  name: 'Functional Consultant', specs: ['MM', 'SD', 'FICO', 'PP', 'QM', 'EWM'] },
+        { roleId: 'SAP-SEC',   name: 'Security Consultant', specs: ['GRC', 'Authorizations'] }
+    ] },
+    { deptId: 'ENG', name: 'Engineering', roles: [
+        { roleId: 'ENG-FE',  name: 'Frontend Engineer', specs: ['React', 'SAPUI5', 'Angular'] },
+        { roleId: 'ENG-BE',  name: 'Backend Engineer', specs: ['Node.js', 'Java', 'Python'] },
+        { roleId: 'ENG-QA',  name: 'QA Engineer', specs: ['Automation', 'Manual', 'Performance'] }
+    ] }
+];
+const DEFAULT_SKILLS = ['Node.js', 'Java', 'Python', 'React', 'SAPUI5', 'HANA', 'ABAP', 'Fiori', 'BTP', 'CPI', 'MM', 'SD', 'FICO', 'PP', 'QM', 'EWM'];
+const DEFAULT_CERTS = ['SAP Certified Application Associate', 'SAP Certified Technology Associate', 'AWS Solutions Architect', 'Azure Fundamentals', 'PMP', 'Scrum Master (CSM)'];
+
+let _resourceMastersEnsured = false;
+// Seeds the hierarchy + catalogs once per process. Also backfills DepartmentMaster
+// from any existing free-text employee departments not already mastered, so the
+// admin sees every real department. Purely additive — never deletes/overwrites.
+async function ensureResourceMasters() {
+    if (_resourceMastersEnsured) return;
+    try {
+        for (const d of DEFAULT_RESOURCE_MASTERS) {
+            const exists = await SELECT.one.from(DEPT_MASTER).columns('deptId').where({ deptId: d.deptId });
+            if (!exists) await INSERT.into(DEPT_MASTER).entries({ deptId: d.deptId, name: d.name, sortOrder: 0, isActive: true });
+            for (let ri = 0; ri < d.roles.length; ri++) {
+                const r = d.roles[ri];
+                const rExists = await SELECT.one.from(ROLE_MASTER).columns('roleId').where({ roleId: r.roleId });
+                if (!rExists) await INSERT.into(ROLE_MASTER).entries({ roleId: r.roleId, department_deptId: d.deptId, name: r.name, sortOrder: ri, isActive: true });
+                for (let si = 0; si < r.specs.length; si++) {
+                    const specId = `${r.roleId}-${r.specs[si].replace(/[^A-Za-z0-9]+/g, '').toUpperCase()}`;
+                    const sExists = await SELECT.one.from(SPEC_MASTER).columns('specId').where({ specId });
+                    if (!sExists) await INSERT.into(SPEC_MASTER).entries({ specId, roleCategory_roleId: r.roleId, name: r.specs[si], sortOrder: si, isActive: true });
+                }
+            }
+        }
+        // Backfill DepartmentMaster from existing free-text employee departments.
+        const empDepts = await SELECT.from(EMPLOYEE).columns('department').where({ isActive: true });
+        const seen = new Set();
+        for (const e of (empDepts || [])) {
+            const name = String(e.department || '').trim();
+            if (!name || seen.has(name.toLowerCase())) continue;
+            seen.add(name.toLowerCase());
+            const id = name.replace(/[^A-Za-z0-9]+/g, '').toUpperCase().slice(0, 20) || ('DEP' + seen.size);
+            const dExists = await SELECT.one.from(DEPT_MASTER).where('lower(name) =', name.toLowerCase());
+            if (!dExists) await INSERT.into(DEPT_MASTER).entries({ deptId: id, name, sortOrder: 99, isActive: true });
+        }
+        for (const s of DEFAULT_SKILLS) {
+            const id = s.replace(/[^A-Za-z0-9]+/g, '').toUpperCase();
+            const ex = await SELECT.one.from(SKILL_MASTER).columns('skillId').where({ skillId: id });
+            if (!ex) await INSERT.into(SKILL_MASTER).entries({ skillId: id, name: s, isActive: true });
+        }
+        for (const cN of DEFAULT_CERTS) {
+            const id = cN.replace(/[^A-Za-z0-9]+/g, '').toUpperCase().slice(0, 40);
+            const ex = await SELECT.one.from(CERT_MASTER).columns('certId').where({ certId: id });
+            if (!ex) await INSERT.into(CERT_MASTER).entries({ certId: id, name: cN, isActive: true });
+        }
+        _resourceMastersEnsured = true;
+    } catch (e) { cds.log('resource-master').warn('ensureResourceMasters skipped:', e.message || e); }
+}
+
+// Builds the full Department → Role → Specialization tree (+ skill/cert catalogs)
+// for the cascading HR dropdowns and the hierarchical Manage-Resource grid.
+async function buildResourceHierarchy() {
+    await ensureResourceMasters();
+    const [depts, roles, specs, skills, certs] = await Promise.all([
+        SELECT.from(DEPT_MASTER).where({ isActive: true }).orderBy('sortOrder asc', 'name asc'),
+        SELECT.from(ROLE_MASTER).where({ isActive: true }).orderBy('sortOrder asc', 'name asc'),
+        SELECT.from(SPEC_MASTER).where({ isActive: true }).orderBy('sortOrder asc', 'name asc'),
+        SELECT.from(SKILL_MASTER).where({ isActive: true }).orderBy('name asc'),
+        SELECT.from(CERT_MASTER).where({ isActive: true }).orderBy('name asc')
+    ]);
+    const specsByRole = {}; specs.forEach(s => { (specsByRole[s.roleCategory_roleId] = specsByRole[s.roleCategory_roleId] || []).push({ specId: s.specId, name: s.name }); });
+    const rolesByDept = {}; roles.forEach(r => { (rolesByDept[r.department_deptId] = rolesByDept[r.department_deptId] || []).push({ roleId: r.roleId, name: r.name, specializations: specsByRole[r.roleId] || [] }); });
+    return {
+        departments: depts.map(d => ({ deptId: d.deptId, name: d.name, roles: rolesByDept[d.deptId] || [] })),
+        skills: skills.map(s => ({ skillId: s.skillId, name: s.name })),
+        certifications: certs.map(c => ({ certId: c.certId, name: c.name }))
+    };
+}
+
+// Builds the EmployeeMaster patch for the optional resource-profile fields. Only
+// keys actually supplied are included, so partial updates never wipe data.
+function resourceProfilePatch(d) {
+    const p = {};
+    if (d.roleCategoryId !== undefined) p.roleCategory_roleId = d.roleCategoryId || null;
+    if (d.specializationId !== undefined) p.specialization_specId = d.specializationId || null;
+    if (d.subSpecialization !== undefined) p.subSpecialization = d.subSpecialization || null;
+    if (d.yearsOfExperience !== undefined && d.yearsOfExperience !== null && d.yearsOfExperience !== '') p.yearsOfExperience = Number(d.yearsOfExperience) || 0;
+    if (d.skills !== undefined) p.skills = String(d.skills || '').trim() || null;
+    if (d.certifications !== undefined) p.certifications = String(d.certifications || '').trim() || null;
+    if (d.languages !== undefined) p.languages = String(d.languages || '').trim() || null;
+    if (d.baseAvailabilityPct !== undefined && d.baseAvailabilityPct !== null && d.baseAvailabilityPct !== '') p.baseAvailabilityPct = Math.max(0, Math.min(100, parseInt(d.baseAvailabilityPct, 10) || 100));
+    return p;
+}
+
+// HR enters annual CTC → derive monthly + hourly cost and store in the salary
+// master (single active row per employee). The Manage-Resources estimate uses
+// this hourly cost; PMs never see the salary itself.
+async function upsertSalaryFromCtc(employeeId, employeeName, ctc, capacityHours) {
+    const annual = Number(ctc) || 0;
+    if (!(annual > 0)) return;
+    const cap = Number(capacityHours) > 0 ? Number(capacityHours) : 160;
+    const monthly = Math.round((annual / 12) * 100) / 100;
+    const hourly = Math.round((monthly / cap) * 100) / 100;
+    await UPSERT.into(SALARY_MASTER).entries({
+        salaryId: `${employeeId}-CTC`, employee_employeeId: employeeId, employeeName: employeeName || '',
+        annualSalary: annual, monthlySalary: monthly, hourlyCost: hourly,
+        effectiveFrom: new Date().toISOString().slice(0, 10), isActive: true
+    });
+}
+
+// Re-syncs the normalized EmployeeSkill / EmployeeCertification link rows from the
+// comma caches (matching catalog names → master ids). Non-fatal: the comma caches
+// on EmployeeMaster remain the source of truth for the recommendation engine.
+async function syncEmployeeLinks(empId, skillsCsv, certsCsv) {
+    try {
+        if (skillsCsv !== undefined) {
+            await DELETE.from(EMP_SKILL).where({ employee_employeeId: empId });
+            for (const n of String(skillsCsv || '').split(',').map(s => s.trim()).filter(Boolean)) {
+                const sm = await SELECT.one.from(SKILL_MASTER).columns('skillId').where('lower(name) =', n.toLowerCase());
+                await INSERT.into(EMP_SKILL).entries({ id: `${empId}-${sm ? sm.skillId : n.replace(/[^A-Za-z0-9]+/g, '').toUpperCase()}`.slice(0, 55), employee_employeeId: empId, skill_skillId: sm ? sm.skillId : null, skillName: n });
+            }
+        }
+        if (certsCsv !== undefined) {
+            await DELETE.from(EMP_CERT).where({ employee_employeeId: empId });
+            for (const n of String(certsCsv || '').split(',').map(s => s.trim()).filter(Boolean)) {
+                const cm = await SELECT.one.from(CERT_MASTER).columns('certId').where('lower(name) =', n.toLowerCase());
+                await INSERT.into(EMP_CERT).entries({ id: `${empId}-${cm ? cm.certId : n.replace(/[^A-Za-z0-9]+/g, '').toUpperCase().slice(0, 40)}`.slice(0, 55), employee_employeeId: empId, certification_certId: cm ? cm.certId : null, certName: n });
+            }
+        }
+    } catch (e) { cds.log('resource-master').warn('syncEmployeeLinks skipped:', e.message || e); }
+}
+
+// Refresh the employee's denormalized `certifications` comma cache from the
+// structured EmployeeCertification rows (keeps the recommendation/display consistent).
+async function refreshCertCache(employeeId) {
+    const rows = await SELECT.from(EMP_CERT).columns('certName').where({ employee_employeeId: employeeId });
+    const names = [...new Set((rows || []).map(r => r.certName).filter(Boolean))];
+    await UPDATE(EMPLOYEE).set({ certifications: names.join(', ') || null }).where({ employeeId });
+}
+
+// ── Talent Taxonomy (dynamic, LinkedIn-style) ────────────────────────────────
+// Normalize: trim → collapse internal whitespace → UPPERCASE. This is the dedup
+// key (NormalizedName) and the case-insensitive existence check.
+function normalizeTaxonomy(s) { return String(s || '').trim().replace(/\s+/g, ' ').toUpperCase(); }
+
+// Per-type config: entity, key column, optional parent scope column. Skills and
+// certifications are global; roles are scoped per department; modules per role.
+const TAXONOMY = {
+    role:          { entity: ROLE_MASTER, key: 'roleId',  prefix: 'R',  scope: 'department_deptId',    nameLen: 100 },
+    module:        { entity: SPEC_MASTER, key: 'specId',  prefix: 'M',  scope: 'roleCategory_roleId',  nameLen: 100 },
+    skill:         { entity: SKILL_MASTER, key: 'skillId', prefix: 'S', scope: null,                   nameLen: 100 },
+    certification: { entity: CERT_MASTER, key: 'certId',  prefix: 'C',  scope: null,                   nameLen: 150 }
+};
+function taxonomyId(prefix, norm) {
+    return `${prefix}-${norm.replace(/[^A-Z0-9]+/g, '').slice(0, 16)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+// Search: partial, case-insensitive on normalizedName, ordered usageCount DESC,
+// then name ASC. Optional parent scope (department for roles, role for modules).
+async function searchTaxonomy(type, q, scopeVal) {
+    const cfg = TAXONOMY[type]; if (!cfg) return { error: 'Unknown taxonomy type.' };
+    await ensureResourceMasters();
+    const norm = normalizeTaxonomy(q);
+    const where = { isActive: true };
+    if (cfg.scope && scopeVal) where[cfg.scope] = scopeVal;
+    let rows = await SELECT.from(cfg.entity).where(where).orderBy('usageCount desc', 'name asc').limit(50);
+    if (norm) rows = rows.filter(r => normalizeTaxonomy(r.name).includes(norm));
+    const suggestions = rows.slice(0, 25).map(r => ({ id: r[cfg.key], name: r.name, normalizedName: r.normalizedName || normalizeTaxonomy(r.name), usageCount: r.usageCount || 0 }));
+    const exactMatch = suggestions.some(s => s.normalizedName === norm);
+    return { type, q, suggestions, exactMatch, normalized: norm };
+}
+// Upsert + usage increment. Normalizes, does a scoped case-insensitive existence
+// check, returns the existing record (no duplicate) or creates a new UPPERCASE one.
+// Every call increments usageCount (a value was selected/created).
+async function upsertTaxonomy(type, name, scopeVal, extra) {
+    const cfg = TAXONOMY[type]; if (!cfg) return { error: 'Unknown taxonomy type.' };
+    await ensureResourceMasters();
+    const norm = normalizeTaxonomy(name);
+    if (!norm) return { error: 'Value is required.' };
+    if (cfg.scope && !scopeVal) return { error: type === 'role' ? 'Select a department first.' : 'Select a role category first.' };
+    const where = { normalizedName: norm };
+    if (cfg.scope && scopeVal) where[cfg.scope] = scopeVal;
+    let existing = await SELECT.one.from(cfg.entity).where(where);
+    // Fallback: older rows may have null normalizedName → match by UPPER(name).
+    if (!existing) {
+        const scopeWhere = (cfg.scope && scopeVal) ? { [cfg.scope]: scopeVal } : {};
+        const all = await SELECT.from(cfg.entity).where(scopeWhere);
+        existing = all.find(r => normalizeTaxonomy(r.name) === norm);
+    }
+    if (existing) {
+        await UPDATE(cfg.entity).set({ usageCount: (Number(existing.usageCount) || 0) + 1, normalizedName: norm }).where({ [cfg.key]: existing[cfg.key] });
+        return { id: existing[cfg.key], name: existing.name, created: false };
+    }
+    const id = taxonomyId(cfg.prefix, norm);
+    const row = { [cfg.key]: id, name: norm.slice(0, cfg.nameLen), normalizedName: norm, usageCount: 1, isActive: true };
+    if (cfg.scope && scopeVal) row[cfg.scope] = scopeVal;                 // department/role parent
+    if (type === 'module' && extra && extra.departmentId) { /* module inherits role's dept implicitly */ }
+    await INSERT.into(cfg.entity).entries(row);
+    return { id, name: row.name, created: true };
+}
+
+// Effective milestone status + schedule metrics (computed; stored status stays
+// authoritative for Completed/Cancelled/Blocked). today is an ISO yyyy-mm-dd.
+function milestoneStatus(m, progressPct, todayStr) {
+    const stored = m.status || 'Not Started';
+    if (stored === 'Cancelled' || stored === 'Blocked') return stored;
+    if (stored === 'Completed' || stored === 'Completed Early') {
+        return (m.actualEndDate && m.plannedEndDate && String(m.actualEndDate) < String(m.plannedEndDate)) ? 'Completed Early' : 'Completed';
+    }
+    const pEnd = m.plannedEndDate ? String(m.plannedEndDate).slice(0, 10) : null;
+    const pStart = m.plannedStartDate ? String(m.plannedStartDate).slice(0, 10) : null;
+    if (pEnd && todayStr > pEnd) return 'Delayed';
+    const started = !!m.actualStartDate || (progressPct || 0) > 0 || stored === 'In Progress';
+    if (started && pStart && pEnd && pEnd > pStart) {
+        const total = (new Date(pEnd) - new Date(pStart)) || 1;
+        const elapsedPct = Math.max(0, Math.min(100, Math.round((new Date(todayStr) - new Date(pStart)) / total * 100)));
+        if (elapsedPct > (progressPct || 0) + 20) return 'At Risk';
+        return 'In Progress';
+    }
+    if (started) return 'In Progress';
+    if (pStart && todayStr >= pStart) return 'Planned';
+    return 'Not Started';
+}
+const daysBetween = (aStr, bStr) => Math.round((new Date(aStr) - new Date(bStr)) / 86400000);
+const PROJECT_TASK = 'ccentrik.employee.timesheet.schema.timesheet.ProjectTask';
+const PROJECT_AUDIT = 'ccentrik.employee.timesheet.schema.timesheet.ProjectAuditLog';
+const SALARY_MASTER = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeSalaryMaster';
+const PROJECT_ISSUE = 'ccentrik.employee.timesheet.schema.timesheet.ProjectIssue';
+// ── Meeting entities (Microsoft Teams integration) ─────────────────────────────
+const MEETING = 'ccentrik.employee.timesheet.schema.timesheet.Meeting';
+const MEETING_PARTICIPANT = 'ccentrik.employee.timesheet.schema.timesheet.MeetingParticipant';
+// ── Project chat entities ──────────────────────────────────────────────────────
+const PROJECT_MESSAGE = 'ccentrik.employee.timesheet.schema.timesheet.ProjectMessage';
+const PROJECT_ATTACHMENT = 'ccentrik.employee.timesheet.schema.timesheet.ProjectAttachment';
+// ── Client portal & requirement entities ────────────────────────────────────────
+const PROJECT_BUDGET = 'ccentrik.employee.timesheet.schema.timesheet.ProjectBudget';
+const PROJECT_BUDGET_REQUEST = 'ccentrik.employee.timesheet.schema.timesheet.ProjectBudgetRequest';
+const CLIENT_MASTER = 'ccentrik.employee.timesheet.schema.timesheet.ClientMaster';
+const REQUIREMENT = 'ccentrik.employee.timesheet.schema.timesheet.Requirement';
+const REQUIREMENT_ATTACHMENT = 'ccentrik.employee.timesheet.schema.timesheet.RequirementAttachment';
+const REQUIREMENT_COMMENT = 'ccentrik.employee.timesheet.schema.timesheet.RequirementComment';
+const REQUIREMENT_AUDIT = 'ccentrik.employee.timesheet.schema.timesheet.RequirementAudit';
+// Requirement status workflow (ordered).
+const REQ_STATUSES = ['New', 'Assigned', 'Under Analysis', 'In Development', 'Under Testing', 'Awaiting Client Review', 'Approved', 'Rejected', 'Closed'];
+// Project statuses that consume an employee's FTE bandwidth (Completed/Cancelled free it).
+const ACTIVE_PROJECT_STATUSES = ['Planning', 'Active', 'On Hold'];
+const VALID_BANDWIDTH = new Set([25, 50, 75, 100]);
 
 
 const PRIORITY_PREFIX = {
@@ -259,6 +577,48 @@ async function markChatRead(taskId, employeeId) {
     } catch (e) { /* best-effort */ }
 }
 
+// Coalesced project chat notification: one unread row per (recipient, project).
+async function notifyProjectChat(projectId, projectName, senderId, recipientIds) {
+    for (const rid of recipientIds) {
+        if (!rid || rid === senderId) continue;
+        try {
+            const existing = await SELECT.one.from(NOTIFICATION).where({
+                employee_employeeId: rid, referenceId: projectId,
+                type: 'PROJECT_CHAT_MESSAGE', isRead: false
+            });
+            if (existing) {
+                const c = (existing.msgCount || 1) + 1;
+                await UPDATE(NOTIFICATION).set({
+                    msgCount: c,
+                    message: `${c} new messages in project chat "${projectName}"`,
+                    notifiedAt: new Date()
+                }).where({ notificationId: existing.notificationId });
+            } else {
+                await INSERT.into(NOTIFICATION).entries({
+                    notificationId: `NOTIF-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+                    employee_employeeId: rid,
+                    type: 'PROJECT_CHAT_MESSAGE',
+                    title: 'New project chat message',
+                    message: `1 new message in project chat "${projectName}"`,
+                    isRead: false,
+                    referenceId: projectId,
+                    notifiedAt: new Date(),
+                    msgCount: 1
+                });
+            }
+        } catch (e) { cds.log('notif').warn('project chat notify failed:', e.message || e); }
+    }
+}
+
+async function markProjectChatReadFn(projectId, employeeId) {
+    if (!employeeId) return;
+    try {
+        await UPDATE(NOTIFICATION)
+            .set({ isRead: true })
+            .where({ employee_employeeId: employeeId, referenceId: projectId, type: 'PROJECT_CHAT_MESSAGE', isRead: false });
+    } catch (e) { /* best-effort */ }
+}
+
 // Read a LargeBinary column into a base64 string (handles Buffer / stream).
 async function binaryToBase64(content) {
     if (!content) return '';
@@ -380,6 +740,7 @@ function hasScopeFor(user, role) {
         case 'hr':       return user.is('HR');
         case 'manager':  return user.is('Manager');
         case 'employee': return user.is('Employee');
+        case 'client':   return user.is('Client');
         default:         return false;
     }
 }
@@ -464,6 +825,33 @@ class EmployeeService extends cds.ApplicationService {
             let emp = null;
             if (email) {
                 emp = await SELECT.one.from(EMPLOYEE).where('lower(email) =', email);
+            }
+
+            // ── Client identity path ──────────────────────────────────────────
+            // If the login is not an employee but matches an active ClientMaster
+            // row AND carries the Client XSUAA scope, sign in as a client. Clients
+            // live entirely outside EmployeeMaster.
+            if (!emp && email) {
+                const client = await SELECT.one.from(CLIENT_MASTER).where('lower(email) =', email);
+                if (client) {
+                    let denied = null;
+                    if (String(client.status || '').toLowerCase() === 'inactive') denied = 'inactive';
+                    else if (!hasScopeFor(user, 'client')) denied = 'role-mismatch';
+                    // Best-effort lastLogin stamp.
+                    if (!denied) { try { await UPDATE(CLIENT_MASTER).set({ lastLogin: new Date() }).where({ clientId: client.clientId }); } catch (e) { /* */ } }
+                    return {
+                        email: client.email || email,
+                        role: denied ? 'unknown' : 'client',
+                        accessDenied: denied,
+                        employeeId: '',
+                        employeeName: client.contactPerson || client.clientName || 'Client',
+                        designation: client.companyName || '',
+                        address: '', mobileNumber: client.phoneNumber || '', managerId: '',
+                        isActive: true,
+                        clientId: client.clientId,
+                        clientName: client.clientName || ''
+                    };
+                }
             }
 
             // ── Login gate ────────────────────────────────────────────────────
@@ -1506,22 +1894,93 @@ class EmployeeService extends cds.ApplicationService {
             return { success: true };
         });
 
-        // ── Dashboard: Upcoming Calendar (Google Calendar API) ─────────────────────
-        // Reads GOOGLE_CALENDAR_API_KEY + GOOGLE_CALENDAR_ID from environment.
-        // Falls back to empty array if not configured — card shows "No events".
-        const { fetchUpcomingMeetings } = require('./google-calendar');
+        // ── Dashboard: Upcoming Teams Meetings (DB-based, next 7 days) ────────────
+        const { formatMeetingForDisplay } = require('./services/teams-service');
 
-        this.on('getUpcomingCalendar', async (req) => {
-            const user = req.user || {};
-            const email = user.attr?.email || user.attr?.mail || user.attr?.upn || user.id || '';
-            cds.log('gcal').info(`Fetching Google Meet events for: ${email}`);
-            if (!email) return { eventsJSON: JSON.stringify([]) };
+        this.on('getUpcomingMeetings', async (req) => {
+            const user  = req.user || {};
+            const email = ((user.attr && (user.attr.email || user.attr.mail)) || user.id || '').trim().toLowerCase();
+            if (!email) return JSON.stringify([]);
             try {
-                const events = await fetchUpcomingMeetings(email);
-                return { eventsJSON: JSON.stringify(events) };
+                const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
+                if (!emp) return JSON.stringify([]);
+                const now     = new Date().toISOString();
+                const in7days = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+                // Meetings where this employee is the organizer OR a participant.
+                const asOrg = await SELECT.from(MEETING)
+                    .columns('meetingId','title','agenda','startDateTime','endDateTime','organizerEmail','organizerName','status','teamsJoinUrl','project_projectId')
+                    .where({ organizer_employeeId: emp.employeeId, status: { '<>': 'Cancelled' } })
+                    .where({ startDateTime: { '>=': now } })
+                    .where({ startDateTime: { '<=': in7days } });
+                const asPart = await SELECT.from(MEETING_PARTICIPANT)
+                    .columns('meeting_meetingId')
+                    .where({ employee_employeeId: emp.employeeId });
+                const partIds = asPart.map(p => p.meeting_meetingId);
+                const asMember = partIds.length ? await SELECT.from(MEETING)
+                    .columns('meetingId','title','agenda','startDateTime','endDateTime','organizerEmail','organizerName','status','teamsJoinUrl','project_projectId')
+                    .where({ meetingId: { in: partIds }, status: { '<>': 'Cancelled' } })
+                    .where({ startDateTime: { '>=': now } })
+                    .where({ startDateTime: { '<=': in7days } }) : [];
+                const seen = new Set(); const all = [];
+                [...asOrg, ...asMember].forEach(m => { if (!seen.has(m.meetingId)) { seen.add(m.meetingId); all.push(m); } });
+                all.sort((a, b) => String(a.startDateTime).localeCompare(String(b.startDateTime)));
+                return JSON.stringify(all.map(formatMeetingForDisplay));
             } catch (e) {
-                cds.log('gcal').error('getUpcomingCalendar failed:', e.message);
-                return { eventsJSON: JSON.stringify([{ title: 'Could not load calendar', dateLabel: 'Check server logs', timeLabel: e.message?.substring(0, 60) || 'Unknown error', meetLink: null, isError: true }]) };
+                cds.log('teams').error('getUpcomingMeetings failed:', e.message);
+                return JSON.stringify([]);
+            }
+        });
+
+        this.on('getMyMeetings', async (req) => {
+            const user  = req.user || {};
+            const email = ((user.attr && (user.attr.email || user.attr.mail)) || user.id || '').trim().toLowerCase();
+            const filter = req.data.filter || 'upcoming';
+            if (!email) return JSON.stringify({ meetings: [] });
+            try {
+                const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where('lower(email) =', email);
+                if (!emp) return JSON.stringify({ meetings: [] });
+                const now = new Date();
+                // Meetings where employee is organizer OR participant.
+                const asOrg = await SELECT.from(MEETING)
+                    .columns('meetingId','title','agenda','startDateTime','endDateTime','organizerEmail','organizerName','status','teamsJoinUrl','project_projectId')
+                    .where({ organizer_employeeId: emp.employeeId });
+                const asPart = await SELECT.from(MEETING_PARTICIPANT).columns('meeting_meetingId').where({ employee_employeeId: emp.employeeId });
+                const partIds = asPart.map(p => p.meeting_meetingId);
+                const asMember = partIds.length ? await SELECT.from(MEETING)
+                    .columns('meetingId','title','agenda','startDateTime','endDateTime','organizerEmail','organizerName','status','teamsJoinUrl','project_projectId')
+                    .where({ meetingId: { in: partIds } }) : [];
+                const seen = new Set(); const all = [];
+                [...asOrg, ...asMember].forEach(m => { if (!seen.has(m.meetingId)) { seen.add(m.meetingId); all.push(m); } });
+                // Apply filter.
+                // Start of today (midnight) — used for date-only comparisons so past
+                // meetings earlier today still appear in Today / This Week / This Month.
+                const startOfToday = new Date(now); startOfToday.setHours(0, 0, 0, 0);
+                const filtered = all.filter(m => {
+                    const s = new Date(m.startDateTime);
+                    if (filter === 'today') return s.toDateString() === now.toDateString();
+                    if (filter === 'week') {
+                        const weekEnd = new Date(startOfToday); weekEnd.setDate(startOfToday.getDate() + 7);
+                        return s >= startOfToday && s <= weekEnd;
+                    }
+                    if (filter === 'month') {
+                        return s.getFullYear() === now.getFullYear() && s.getMonth() === now.getMonth();
+                    }
+                    if (filter === 'completed') return m.status === 'Completed';
+                    if (filter === 'cancelled') return m.status === 'Cancelled';
+                    if (filter === 'ongoing')   return m.status === 'Scheduled' && s <= now && new Date(m.endDateTime) >= now;
+                    if (filter === 'upcoming')  return s >= now && m.status === 'Scheduled';
+                    return true; // 'all'
+                });
+                filtered.sort((a, b) => String(a.startDateTime).localeCompare(String(b.startDateTime)));
+                // Get project names.
+                const projIds = [...new Set(filtered.map(m => m.project_projectId).filter(Boolean))];
+                const projs = projIds.length ? await SELECT.from(PROJECT).columns('projectId','projectName').where({ projectId: { in: projIds } }) : [];
+                const projName = {}; projs.forEach(p => { projName[p.projectId] = p.projectName; });
+                const meetings = filtered.map(m => formatMeetingForDisplay({ ...m, projectName: projName[m.project_projectId] || '' }));
+                return JSON.stringify({ meetings });
+            } catch (e) {
+                cds.log('teams').error('getMyMeetings failed:', e.message);
+                return JSON.stringify({ meetings: [] });
             }
         });
 
@@ -2472,6 +2931,35 @@ class HRService extends cds.ApplicationService {
 
         this.on('nextEmployeeId', async () => await generateEmployeeId());
 
+        this.on('getResourceHierarchy', async () => {
+            try { return JSON.stringify(await buildResourceHierarchy()); }
+            catch (e) { return JSON.stringify({ error: 'Could not load resource hierarchy.' }); }
+        });
+
+        // Talent-taxonomy typeahead + create-if-not-exists.
+        this.on('searchTaxonomy', async (req) => {
+            const d = req.data || {};
+            const scope = d.type === 'role' ? d.departmentId : (d.type === 'module' ? d.roleId : null);
+            try { return JSON.stringify(await searchTaxonomy(d.type, d.q, scope)); }
+            catch (e) { return JSON.stringify({ error: 'Search failed.' }); }
+        });
+        this.on('upsertTaxonomy', async (req) => {
+            const d = req.data || {};
+            const scope = d.type === 'role' ? d.departmentId : (d.type === 'module' ? d.roleId : null);
+            try { return JSON.stringify(await upsertTaxonomy(d.type, d.name, scope, { departmentId: d.departmentId })); }
+            catch (e) { return JSON.stringify({ error: 'Could not save the value.' }); }
+        });
+        this.on('searchLanguages', async (req) => {
+            try {
+                const q = normalizeTaxonomy(req.data.q || '');
+                const rows = await SELECT.from(EMPLOYEE).columns('languages').where({ isActive: true });
+                const set = new Set();
+                (rows || []).forEach(r => String(r.languages || '').split(',').forEach(x => { const v = normalizeTaxonomy(x); if (v) set.add(v); }));
+                let list = [...set]; if (q) list = list.filter(v => v.includes(q)); list.sort();
+                return JSON.stringify({ suggestions: list.slice(0, 25) });
+            } catch (e) { return JSON.stringify({ suggestions: [] }); }
+        });
+
         this.on('addEmployee', async (req) => {
             const d = req.data || {};
             if (!d.employeeName) return req.error(400, 'employeeName is required.');
@@ -2496,8 +2984,15 @@ class HRService extends cds.ApplicationService {
                 joiningDate: d.joiningDate || null, employmentType: d.employmentType || null,
                 aadhaarNumber: d.aadhaarNumber || null, panNumber: d.panNumber || null, status: 'Active',
                 emergencyContact: d.emergencyContact || null, bloodGroup: d.bloodGroup || null,
-                bankAccountNumber: d.bankAccountNumber || null, bankName: d.bankName || null, bankIfsc: d.bankIfsc || null
+                bankAccountNumber: d.bankAccountNumber || null, bankName: d.bankName || null, bankIfsc: d.bankIfsc || null,
+                // Work location + marital details (were previously collected but never saved).
+                workLocation: d.workLocation || null, maritalStatus: d.maritalStatus || null,
+                fatherName: d.fatherName || null, partnerName: d.partnerName || null,
+                marriageDate: d.marriageDate || null, hasKids: d.hasKids || null,
+                ...resourceProfilePatch(d)
             });
+            await syncEmployeeLinks(newId, d.skills, d.certifications);
+            await upsertSalaryFromCtc(newId, d.employeeName, d.ctc, 160);
             cds.log('hr').info(`HR created employee ${newId} (${d.employeeName})`);
             return { employeeId: newId };
         });
@@ -2544,6 +3039,72 @@ class HRService extends cds.ApplicationService {
             }
             if (!dataBase64) return req.error(404, 'Document has no content.');
             return { fileName: doc.fileName, mimeType: doc.mimeType || 'application/octet-stream', dataBase64 };
+        });
+
+        // ── Rich certifications (per-certificate document) ────────────────────
+        this.on('saveEmployeeCertification', async (req) => {
+            const d = req.data || {};
+            if (!d.employeeId || !String(d.certName || '').trim()) return JSON.stringify({ error: 'Employee and certification name are required.' });
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId').where({ employeeId: d.employeeId });
+            if (!emp) return JSON.stringify({ error: 'Employee not found.' });
+            // Dedup + create in the certification taxonomy (case-insensitive).
+            const up = await upsertTaxonomy('certification', d.certName, null, {});
+            if (up.error) return JSON.stringify({ error: up.error });
+            const id = `${d.employeeId}-${up.id}`.slice(0, 55);
+            let buf = null, fileName = null, mime = null;
+            if (d.dataBase64) {
+                try { buf = Buffer.from(d.dataBase64, 'base64'); } catch (e) { return JSON.stringify({ error: 'Invalid file data.' }); }
+                if (buf.length > 5 * 1024 * 1024) return JSON.stringify({ error: 'File exceeds 5MB.' });
+                fileName = d.fileName || 'certificate'; mime = d.mimeType || 'application/octet-stream';
+            }
+            const row = {
+                id, employee_employeeId: d.employeeId, certification_certId: up.id, certName: up.name,
+                certificateNumber: String(d.certificateNumber || '').trim() || null, issuedBy: String(d.issuedBy || '').trim() || null,
+                obtainedDate: d.issueDate || null, expiryDate: d.expiryDate || null
+            };
+            // Keep an existing file when none is re-supplied on edit.
+            const existing = await SELECT.one.from(EMP_CERT).columns('id', 'documentFileName').where({ id });
+            if (buf) { row.document = buf; row.documentFileName = fileName; row.documentMimeType = mime; }
+            else if (!existing) { row.document = null; row.documentFileName = null; row.documentMimeType = null; }
+            await UPSERT.into(EMP_CERT).entries(row);
+            await refreshCertCache(d.employeeId);
+            return JSON.stringify({ ok: true, id, certName: up.name });
+        });
+
+        this.on('getEmployeeCertifications', async (req) => {
+            const rows = await SELECT.from(EMP_CERT)
+                .columns('id', 'certName', 'certificateNumber', 'issuedBy', 'obtainedDate', 'expiryDate', 'documentFileName', 'documentMimeType')
+                .where({ employee_employeeId: req.data.employeeId }).orderBy('certName asc');
+            return JSON.stringify({
+                certifications: (rows || []).map(r => ({
+                    id: r.id, certName: r.certName, certificateNumber: r.certificateNumber || '', issuedBy: r.issuedBy || '',
+                    issueDate: r.obtainedDate, expiryDate: r.expiryDate, fileName: r.documentFileName || '',
+                    mimeType: r.documentMimeType || '', hasDocument: !!r.documentFileName
+                }))
+            });
+        });
+
+        this.on('getCertificationDocument', async (req) => {
+            const doc = await SELECT.one.from(EMP_CERT).columns('documentFileName', 'documentMimeType', 'document').where({ id: req.data.id });
+            if (!doc || !doc.document) return req.error(404, 'No document for this certification.');
+            let dataBase64 = '';
+            try {
+                const c = doc.document;
+                if (Buffer.isBuffer(c)) dataBase64 = c.toString('base64');
+                else if (c instanceof Uint8Array) dataBase64 = Buffer.from(c).toString('base64');
+                else if (typeof c === 'string') dataBase64 = c;
+                else if (c && typeof c.pipe === 'function') { const chunks = []; for await (const ch of c) chunks.push(ch); dataBase64 = Buffer.concat(chunks).toString('base64'); }
+                else dataBase64 = Buffer.from(c).toString('base64');
+            } catch (e) { return req.error(500, 'Could not read document.'); }
+            return { fileName: doc.documentFileName || 'certificate', mimeType: doc.documentMimeType || 'application/octet-stream', dataBase64 };
+        });
+
+        this.on('deleteEmployeeCertification', async (req) => {
+            const row = await SELECT.one.from(EMP_CERT).columns('employee_employeeId').where({ id: req.data.id });
+            if (!row) return JSON.stringify({ error: 'Certification not found.' });
+            await DELETE.from(EMP_CERT).where({ id: req.data.id });
+            await refreshCertCache(row.employee_employeeId);
+            return JSON.stringify({ ok: true });
         });
 
         // ── Activate / deactivate an employee ─────────────────────────────────
@@ -2594,9 +3155,19 @@ class HRService extends cds.ApplicationService {
                 if (!nr) return req.error(400, `Invalid role '${d.role}'. Allowed: ${VALID_ROLES.join(', ')}.`);
                 patch.role = nr;
             }
-            if (!Object.keys(patch).length) return { employeeId: d.employeeId, message: 'Nothing to update.' };
+            // Hierarchical resource-profile fields (additive).
+            Object.assign(patch, resourceProfilePatch(d));
+            const hasCtc = (d.ctc !== undefined && d.ctc !== null && d.ctc !== '');
+            if (!Object.keys(patch).length && !hasCtc) return { employeeId: d.employeeId, message: 'Nothing to update.' };
 
-            await UPDATE(EMPLOYEE).set(patch).where({ employeeId: d.employeeId });
+            if (Object.keys(patch).length) {
+                await UPDATE(EMPLOYEE).set(patch).where({ employeeId: d.employeeId });
+                await syncEmployeeLinks(d.employeeId, d.skills, d.certifications);
+            }
+            if (hasCtc) {
+                const e2 = await SELECT.one.from(EMPLOYEE).columns('employeeName', 'monthlyCapacityHours').where({ employeeId: d.employeeId });
+                await upsertSalaryFromCtc(d.employeeId, e2 && e2.employeeName, d.ctc, e2 && e2.monthlyCapacityHours);
+            }
             cds.log('hr').info(`Employee ${d.employeeId} updated by HR (${Object.keys(patch).join(', ')})`);
             return { employeeId: d.employeeId, message: 'Employee updated successfully.' };
         });
@@ -3213,6 +3784,58 @@ class FounderService extends cds.ApplicationService {
             } catch (e) { return JSON.stringify({ timesheets: [], leaves: [], fillRequests: [], counts: { timesheets: 0, leaves: 0, fillRequests: 0 } }); }
         });
 
+        // ── Approval HISTORY — decisions the founder already made ─────────────
+        // Same direct-report scope as getFounderApprovals, but returns the
+        // Approved/Rejected records with the decision, the employee's original
+        // reason, the founder's remarks and the decision date. Read-only.
+        this.on('getFounderApprovalHistory', async (req) => {
+            try {
+                const { ids: scopeIds } = await founderDirectReports(req);
+                const inScope = (id) => scopeIds.has(id);
+                const decided = { in: ['Approved', 'Rejected', 'AutoApproved'] };
+                const [emps, headers, leaves, prevWeeks, dayUnlocks] = await Promise.all([
+                    SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department'),
+                    SELECT.from(HEADER).where({ status: decided }),
+                    SELECT.from(LEAVE_REQUEST).where({ status: { in: ['Approved', 'Rejected'] } }),
+                    SELECT.from(PREV_WEEK_REQUEST).where({ status: { in: ['Approved', 'Rejected'] } }),
+                    SELECT.from(DAY_UNLOCK_REQUEST).where({ status: { in: ['Approved', 'Rejected'] } })
+                ]);
+                const nm = {}, dp = {}; emps.forEach(e => { nm[e.employeeId] = e.employeeName; dp[e.employeeId] = e.department || '—'; });
+                const fmt = (d) => d ? new Date(d).toLocaleString() : '';
+                const sortDesc = (a, b) => (b._ord || 0) - (a._ord || 0);
+                const ordOf = (d) => d ? new Date(d).getTime() : 0;
+
+                const timesheets = (headers || []).filter(h => inScope(h.employee_employeeId)).map(h => ({
+                    employee: nm[h.employee_employeeId] || h.employee_employeeId, department: dp[h.employee_employeeId] || '—',
+                    week: (h.weekStartDate || '') + ' – ' + (h.weekEndDate || ''), status: h.status,
+                    remarks: h.remarks || '', decidedOn: fmt(h.approvedOn || h.rejectedOn), _ord: ordOf(h.approvedOn || h.rejectedOn)
+                })).sort(sortDesc);
+
+                const lv = (leaves || []).filter(l => inScope(l.employee_employeeId)).map(l => ({
+                    employee: nm[l.employee_employeeId] || l.employee_employeeId, department: dp[l.employee_employeeId] || '—',
+                    leaveType: l.leaveType, from: l.fromDate, to: l.toDate, days: l.days, reason: l.reason || '',
+                    status: l.status, remarks: l.managerRemarks || '', decidedOn: fmt(l.approvedOn), _ord: ordOf(l.approvedOn)
+                })).sort(sortDesc);
+
+                const fillRequests = []
+                    .concat((prevWeeks || []).filter(r => inScope(r.employee_employeeId)).map(r => ({
+                        kind: 'prevweek', employee: nm[r.employee_employeeId] || r.employee_employeeId, department: dp[r.employee_employeeId] || '—',
+                        title: 'Previous Week Fill', detail: (r.weekStartDate || '') + ' → ' + (r.weekEndDate || ''),
+                        reason: r.employeeRemarks || '', status: r.status, remarks: r.managerRemarks || '', decidedOn: fmt(r.resolvedOn), _ord: ordOf(r.resolvedOn)
+                    })))
+                    .concat((dayUnlocks || []).filter(r => inScope(r.employee_employeeId)).map(r => ({
+                        kind: 'dayunlock', employee: nm[r.employee_employeeId] || r.employee_employeeId, department: dp[r.employee_employeeId] || '—',
+                        title: 'Missed Day Unlock', detail: r.targetDate || '',
+                        reason: r.employeeRemarks || '', status: r.status, remarks: r.hrRemarks || '', decidedOn: fmt(r.resolvedOn), _ord: ordOf(r.resolvedOn)
+                    }))).sort(sortDesc);
+
+                return JSON.stringify({
+                    timesheets, leaves: lv, fillRequests,
+                    counts: { timesheets: timesheets.length, leaves: lv.length, fillRequests: fillRequests.length }
+                });
+            } catch (e) { return JSON.stringify({ timesheets: [], leaves: [], fillRequests: [], counts: { timesheets: 0, leaves: 0, fillRequests: 0 } }); }
+        });
+
         // Org-wide task list with status + assignee.
         this.on('getFounderTasks', async () => {
             try {
@@ -3299,7 +3922,12 @@ class FounderService extends cds.ApplicationService {
                 if (!header) return JSON.stringify({ error: `Timesheet '${timesheetId}' not found.` });
                 const { ids: scopeIds } = await founderDirectReports(req);
                 if (!scopeIds.has(header.employee_employeeId)) return JSON.stringify({ error: 'This timesheet is not within your reporting hierarchy.' });
-                if (header.status !== 'Pending') return JSON.stringify({ error: `Cannot act — current status is '${header.status}'.` });
+                // The approvals list surfaces both 'Pending' and 'Submitted' (the two
+                // awaiting-decision states), so accept either — only an already
+                // Approved/Rejected timesheet is blocked here.
+                if (!['Pending', 'Submitted'].includes(header.status)) {
+                    return JSON.stringify({ error: `Cannot act — current status is '${header.status}'.` });
+                }
                 if (approve) {
                     await UPDATE(HEADER).set({ status: 'Approved', approvedOn: new Date(), remarks: remarks || '' }).where({ timesheetId });
                     await UPDATE(ENTRY).set({ isLocked: true, entryStatus: 'Approved' }).where({ timesheet_timesheetId: timesheetId });
@@ -3486,5 +4114,3479 @@ class FounderService extends cds.ApplicationService {
     }
 }
 
-module.exports = { EmployeeService, ManagerService, HRService, FounderService };
+// ══════════════════════════════════════════════════════════════════════════════
+// Project Management module (Phase 1) — helpers + service. Fully additive.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Auto-generate the next PRJ-#### id (gap-tolerant).
+async function nextProjectId() {
+    const rows = await SELECT.from(PROJECT).columns('projectId');
+    let max = 0;
+    (rows || []).forEach(r => { const m = /PRJ-(\d+)/.exec(r.projectId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+    return 'PRJ-' + String(max + 1).padStart(4, '0');
+}
+async function nextProjectTaskId(projectId) {
+    const rows = await SELECT.from(PROJECT_TASK).columns('taskId').where({ project_projectId: projectId });
+    let max = 0;
+    (rows || []).forEach(r => { const m = /-T-(\d+)$/.exec(r.taskId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+    return `${projectId}-T-${String(max + 1).padStart(3, '0')}`;
+}
+async function nextBudgetRequestId(projectId) {
+    const rows = await SELECT.from(PROJECT_BUDGET_REQUEST).columns('requestId').where({ project_projectId: projectId });
+    let max = 0;
+    (rows || []).forEach(r => { const m = /-BR-(\d+)$/.exec(r.requestId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+    return `${projectId}-BR-${String(max + 1).padStart(3, '0')}`;
+}
+
+// Read + parse the ProjectBudget row and derive the unallocated pool.
+// Returns { row, totalBudget, deptArr, otherArr, allocated, unallocated }.
+async function readProjectBudget(projectId) {
+    const row = await SELECT.one.from(PROJECT_BUDGET).where({ budgetId: `${projectId}-BUDGET` });
+    let deptArr = [], otherArr = [];
+    if (row) {
+        try { deptArr = JSON.parse(row.departmentBudgets || '[]') || []; } catch (_) { deptArr = []; }
+        try { otherArr = JSON.parse(row.otherBudgets || '[]') || []; } catch (_) { otherArr = []; }
+    }
+    const totalBudget = row ? Number(row.totalBudget) || 0 : 0;
+    const sumDept = deptArr.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+    const sumOther = otherArr.reduce((s, o) => s + (Number(o.amount) || 0), 0);
+    const allocated = sumDept + sumOther;
+    return { row, totalBudget, deptArr, otherArr, allocated, unallocated: Math.round((totalBudget - allocated) * 100) / 100 };
+}
+
+// Inclusive whole-month span of a date range (≥ 1). Drives planned-cost spread.
+function monthsBetweenInclusive(s, e) {
+    if (!s || !e) return 1;
+    const a = new Date(s), b = new Date(e);
+    const m = (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + (b.getUTCMonth() - a.getUTCMonth()) + 1;
+    return Math.max(1, m);
+}
+// Traffic-light helper.
+function healthColor(ratio, greenBelow, yellowBelow) {
+    if (ratio < greenBelow) return 'Green';
+    if (ratio < yellowBelow) return 'Yellow';
+    return 'Red';
+}
+// Actual cost consumed by a project = Σ(logged hours on its tasks × active hourlyCost).
+// Returns { actualCost, actualHours, hourly } (hourly map reused by planned-cost calc).
+async function projectActualCost(projectId) {
+    const tasks = await SELECT.from(PROJECT_TASK).columns('taskId').where({ project_projectId: projectId });
+    const taskIds = tasks.map(t => t.taskId);
+    const entries = taskIds.length ? await SELECT.from(ENTRY).columns('timesheet_timesheetId', 'projectTask_taskId', 'hoursWorked').where({ projectTask_taskId: { in: taskIds } }) : [];
+    const tsIds = [...new Set(entries.map(e => e.timesheet_timesheetId))];
+    const headers = tsIds.length ? await SELECT.from(HEADER).columns('timesheetId', 'employee_employeeId').where({ timesheetId: { in: tsIds } }) : [];
+    const empOfTs = {}; headers.forEach(h => { empOfTs[h.timesheetId] = h.employee_employeeId; });
+    const salaries = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'hourlyCost', 'isActive');
+    const hourly = {}; salaries.forEach(s => { if (s.isActive !== false) hourly[s.employee_employeeId] = Number(s.hourlyCost) || 0; });
+    let cost = 0, hours = 0;
+    entries.forEach(e => { const emp = empOfTs[e.timesheet_timesheetId]; const h = Number(e.hoursWorked) || 0; hours += h; cost += h * (hourly[emp] || 0); });
+    return { actualCost: Math.round(cost), actualHours: Math.round(hours), hourly };
+}
+// Full financial forecast for a project (single source of truth for health + dashboards).
+async function projectFinancials(p, hourly) {
+    const res = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'bandwidth', 'totalAllocationCost').where({ project_projectId: p.projectId });
+    // Snapshot-based allocated resource cost (frozen at allocation time).
+    const allocatedResourceCost = Math.round((res || []).reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0));
+    const caps = {}; if (res.length) {
+        (await SELECT.from(EMPLOYEE).columns('employeeId', 'monthlyCapacityHours').where({ employeeId: { in: res.map(r => r.employee_employeeId) } }))
+            .forEach(e => { caps[e.employeeId] = Number(e.monthlyCapacityHours) > 0 ? Number(e.monthlyCapacityHours) : 160; });
+    }
+    const months = monthsBetweenInclusive(p.startDate, p.endDate);
+    let plannedResourceCost = 0;
+    res.forEach(r => { const cap = caps[r.employee_employeeId] || 160; const hrs = (Number(r.bandwidth) || 0) / 100 * cap * months; plannedResourceCost += hrs * (hourly[r.employee_employeeId] || 0); });
+    plannedResourceCost = Math.round(plannedResourceCost);
+
+    let catArr = [];
+    const bRow = await SELECT.one.from(PROJECT_BUDGET).columns('categoryBudgets').where({ budgetId: `${p.projectId}-BUDGET` });
+    if (bRow) { try { catArr = JSON.parse(bRow.categoryBudgets || '[]') || []; } catch (_) {} }
+    const nonResourcePlanned = catArr.filter(x => String(x.category) !== 'Resource Cost').reduce((s, x) => s + (Number(x.amount) || 0), 0);
+    const allocatedBudget = catArr.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+
+    const contractValue = Number(p.contractValue) || 0;
+    const executionBudget = Number(p.executionBudget) || Number(p.budget) || 0;
+    const profitReserve = Number(p.profitReserveAmount) || 0;
+    const expectedMarginPct = Number(p.profitMarginPct) || 0;
+    const projectedTotalCost = plannedResourceCost + nonResourcePlanned;
+    const projectedMargin = contractValue - projectedTotalCost;
+    const projectedMarginPct = contractValue > 0 ? Math.round(projectedMargin / contractValue * 100) : 0;
+    return {
+        contractValue, profitReserve, executionBudget, expectedMarginPct, allocatedBudget,
+        allocatedResourceCost, remainingBudget: Math.round(executionBudget - allocatedResourceCost),
+        plannedResourceCost, nonResourcePlanned, projectedTotalCost,
+        projectedMargin, projectedMarginPct,
+        budgetVariance: Math.round(executionBudget - projectedTotalCost),
+        profitVariance: Math.round(projectedMargin - profitReserve)
+    };
+}
+
+// Distinct job ROLES (= EmployeeMaster.designation) of ACTIVE employees in the
+// given departments (or all departments when the list is empty). This is the
+// single dynamic source of roles — never hardcoded.
+//   SELECT DISTINCT designation FROM EmployeeMaster
+//   WHERE isActive AND status NOT IN (Inactive,Resigned) [AND department IN (...)]
+async function rolesForDepartments(deptList) {
+    const where = { isActive: true };
+    if (deptList && deptList.length) where.department = { in: deptList };
+    const rows = await SELECT.from(EMPLOYEE).columns('designation', 'status').where(where);
+    const set = new Set();
+    (rows || []).forEach(r => {
+        const st = String(r.status || 'Active').toLowerCase();
+        if (st === 'inactive' || st === 'resigned') return;
+        const d = String(r.designation || '').trim();
+        if (d) set.add(d);
+    });
+    return [...set].sort((a, b) => a.localeCompare(b));
+}
+// The configured department(s) a project type draws from (admin master data).
+async function typeDepartments(projectTypeCode) {
+    try {
+        const t = await SELECT.one.from(PROJECT_TYPE).columns('departments').where({ code: projectTypeCode || 'OTHER' });
+        return JSON.parse((t && t.departments) || '[]') || [];
+    } catch (_) { return []; }
+}
+
+// Departments that received a budget allocation (> 0) for a project. Resource
+// assignment is restricted to these departments. Returns a lower-cased Set plus
+// the original display names (for the "Eligible Departments" UI hint).
+async function fundedDepartments(projectId) {
+    const b = await readProjectBudget(projectId);
+    const names = [];
+    (b.deptArr || []).forEach(d => {
+        const name = String(d.department || d.name || '').trim();
+        if (name && (Number(d.amount) || 0) > 0) names.push(name);
+    });
+    return { set: new Set(names.map(n => n.toLowerCase())), names: [...new Set(names)].sort((a, b2) => a.localeCompare(b2)) };
+}
+
+// Department utilization % for a project = avg committed FTE bandwidth (capped 100) across
+// that department's allocated members. Mirrors getProjectResourcePlanning.
+async function deptUtilizationPct(projectId, department) {
+    const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'department').where({ project_projectId: projectId });
+    const members = resources.filter(r => (r.department || 'Unassigned') === department);
+    if (!members.length) return 0;
+    const ids = members.map(r => r.employee_employeeId);
+    const totalBw = await committedBandwidthByEmployee(ids);   // excludes cancelled/completed projects
+    const utils = members.map(m => Math.min(100, totalBw[m.employee_employeeId] || 0));
+    return Math.round(utils.reduce((s, v) => s + v, 0) / utils.length);
+}
+
+// Immutable audit entry — never throws into the caller.
+async function projectAudit(projectId, userName, action, oldValue, newValue) {
+    try {
+        await INSERT.into(PROJECT_AUDIT).entries({
+            logId: `${projectId}-LOG-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+            project_projectId: projectId, userName: userName || '', action,
+            oldValue: oldValue == null ? null : String(oldValue),
+            newValue: newValue == null ? null : String(newValue), at: new Date()
+        });
+    } catch (e) { cds.log('project').warn('audit failed:', e.message || e); }
+}
+
+// Project email — reuses the existing mailer; falls back to log (same as the rest
+// of the app). Notification is always created regardless of SMTP.
+async function sendProjectMail(employeeId, email, subject, body, refId, notifType) {
+    await createNotification(employeeId, notifType || 'PROJECT_UPDATE', subject, body, refId);
+    const mailer = getMailer();
+    if (mailer && email) {
+        try { await mailer.sendMail({ from: process.env.SMTP_FROM || 'no-reply@timesheet.local', to: email, subject, text: body }); }
+        catch (e) { cds.log('project').warn('project email failed:', e.message || e); }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CLIENT PORTAL & REQUIREMENT — shared helpers (used by ClientService +
+// ProjectService). Authorization is enforced by each caller; these helpers
+// assume the caller has already been authorized for the requirement.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Resolve the logged-in client by email → ClientMaster. Mirrors projectCaller.
+async function clientCaller(req) {
+    const caller = await resolveCaller(req);
+    const email = caller.email;
+    let client = null;
+    if (email) client = await SELECT.one.from(CLIENT_MASTER).where('lower(email) =', email);
+    return {
+        email,
+        clientId: client && client.clientId,
+        clientName: client && client.clientName,
+        contactPerson: client && client.contactPerson,
+        client,
+        active: !!client && String(client.status || '').toLowerCase() !== 'inactive'
+    };
+}
+
+async function nextRequirementId(projectId) {
+    const rows = await SELECT.from(REQUIREMENT).columns('requirementId').where({ project_projectId: projectId });
+    let max = 0;
+    (rows || []).forEach(r => { const m = /-REQ-(\d+)$/.exec(r.requirementId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+    return `${projectId}-REQ-${String(max + 1).padStart(3, '0')}`;
+}
+
+// Immutable requirement audit entry — never throws into the caller.
+async function reqAudit(requirementId, userName, action, oldValue, newValue) {
+    try {
+        await INSERT.into(REQUIREMENT_AUDIT).entries({
+            auditId: `${requirementId}-AUD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+            requirement_requirementId: requirementId, userName: userName || '', action,
+            oldValue: oldValue == null ? null : String(oldValue),
+            newValue: newValue == null ? null : String(newValue), at: new Date()
+        });
+    } catch (e) { cds.log('requirement').warn('req audit failed:', e.message || e); }
+}
+
+// Best-effort email to a client contact (no in-app Notification row — those are
+// keyed to EmployeeMaster). Internal users are notified via createNotification.
+async function sendClientMail(client, subject, body) {
+    const mailer = getMailer();
+    if (mailer && client && client.email) {
+        try { await mailer.sendMail({ from: process.env.SMTP_FROM || 'no-reply@timesheet.local', to: client.email, subject, text: body }); }
+        catch (e) { cds.log('requirement').warn('client email failed:', e.message || e); }
+    }
+}
+
+// Notify the relevant internal stakeholders (assigned employee + project POC)
+// of a requirement event, and email the owning client.
+async function notifyRequirement(reqRow, projectRow, clientRow, subject, body, notifType) {
+    const targets = new Set();
+    if (reqRow.assignedTo_employeeId) targets.add(reqRow.assignedTo_employeeId);
+    if (projectRow && projectRow.poc_employeeId) targets.add(projectRow.poc_employeeId);
+    for (const empId of targets) {
+        await createNotification(empId, notifType || 'REQUIREMENT_UPDATE', subject, body, reqRow.requirementId).catch(() => {});
+    }
+    if (clientRow) await sendClientMail(clientRow, subject, body);
+}
+
+// Assemble the full requirement detail JSON (attachments meta, flat comments,
+// audit history, project + assignee info). Shared by client + internal reads.
+async function buildRequirementDetailJSON(reqRow) {
+    const project = await SELECT.one.from(PROJECT)
+        .columns('projectId', 'projectName', 'currentPhase', 'status', 'poc_employeeId', 'pocName')
+        .where({ projectId: reqRow.project_projectId });
+
+    const atts = await SELECT.from(REQUIREMENT_ATTACHMENT)
+        .columns('attachmentId', 'fileName', 'mimeType', 'fileSize', 'version', 'uploadedByName', 'createdAt')
+        .where({ requirement_requirementId: reqRow.requirementId }).orderBy('createdAt asc');
+
+    const comments = await SELECT.from(REQUIREMENT_COMMENT)
+        .where({ requirement_requirementId: reqRow.requirementId }).orderBy('createdAt asc');
+
+    const history = await SELECT.from(REQUIREMENT_AUDIT)
+        .columns('auditId', 'userName', 'action', 'oldValue', 'newValue', 'at')
+        .where({ requirement_requirementId: reqRow.requirementId }).orderBy('at asc');
+
+    return {
+        requirementId: reqRow.requirementId,
+        projectId: reqRow.project_projectId,
+        projectName: project ? project.projectName : '',
+        currentPhase: project ? (project.currentPhase || project.status) : '',
+        title: reqRow.title,
+        description: reqRow.description,
+        businessJustification: reqRow.businessJustification,
+        priority: reqRow.priority,
+        expectedDeliveryDate: reqRow.expectedDeliveryDate,
+        category: reqRow.category,
+        module: reqRow.module,
+        remarks: reqRow.remarks,
+        status: reqRow.status,
+        assignedToId: reqRow.assignedTo_employeeId || '',
+        assignedToName: reqRow.assignedToName || '',
+        assignedByName: reqRow.assignedByName || '',
+        assignedDate: reqRow.assignedDate || null,
+        approvalComments: reqRow.approvalComments || '',
+        createdAt: reqRow.createdAt,
+        clientName: reqRow.clientName || (reqRow.client_clientId || ''),
+        attachments: (atts || []).map(a => ({
+            attachmentId: a.attachmentId, fileName: a.fileName, mimeType: a.mimeType,
+            fileSize: a.fileSize, version: a.version, uploadedByName: a.uploadedByName, uploadedAt: a.createdAt
+        })),
+        comments: (comments || []).map(c => ({
+            commentId: c.commentId, authorName: c.authorName, authorRole: c.authorRole,
+            message: c.isDeleted ? '' : (c.message || ''), isDeleted: !!c.isDeleted,
+            hasAttachment: !!c.attachmentName, attachmentName: c.attachmentName || '',
+            at: c.createdAt
+        })),
+        history: (history || []).map(h => ({
+            action: h.action, userName: h.userName, oldValue: h.oldValue, newValue: h.newValue, at: h.at
+        }))
+    };
+}
+
+// Add a flat comment to a requirement (author = client OR employee). Returns id.
+async function addRequirementCommentRow(requirementId, { authorName, authorRole, authorEmployeeId, message, fileName, mimeType, dataBase64 }) {
+    const text = (message || '').trim();
+    let buf = null;
+    if (dataBase64) {
+        try { buf = Buffer.from(String(dataBase64).replace(/^data:[^;]+;base64,/, ''), 'base64'); } catch (e) { buf = null; }
+        if (buf && buf.length > 10 * 1024 * 1024) throw new Error('Attachment exceeds the 10 MB limit.');
+    }
+    if (!text && !buf) throw new Error('A comment or an attachment is required.');
+    const commentId = `${requirementId}-CMT-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+    await INSERT.into(REQUIREMENT_COMMENT).entries({
+        commentId, requirement_requirementId: requirementId,
+        authorName: authorName || '', authorRole: authorRole || '',
+        authorEmployee_employeeId: authorEmployeeId || null,
+        message: text || null,
+        attachmentName: buf ? (fileName || 'file') : null,
+        attachmentMimeType: buf ? (mimeType || 'application/octet-stream') : null,
+        attachment: buf || null
+    });
+    return commentId;
+}
+
+// Sum an employee's allocated bandwidth across ACTIVE projects (optionally
+// excluding one project, e.g. when re-allocating within the same project).
+async function usedBandwidth(employeeId, excludeProjectId) {
+    const rows = await SELECT.from(PROJECT_RESOURCE).columns('project_projectId', 'bandwidth').where({ employee_employeeId: employeeId });
+    if (!rows.length) return 0;
+    const pids = [...new Set(rows.map(r => r.project_projectId))];
+    const projs = await SELECT.from(PROJECT).columns('projectId', 'status').where({ projectId: { in: pids } });
+    const activeSet = new Set((projs || []).filter(p => ACTIVE_PROJECT_STATUSES.includes(p.status)).map(p => p.projectId));
+    return rows.filter(r => activeSet.has(r.project_projectId) && r.project_projectId !== excludeProjectId)
+        .reduce((s, r) => s + (Number(r.bandwidth) || 0), 0);
+}
+
+// Total committed FTE bandwidth per employee, counting ONLY capacity-consuming
+// projects (ACTIVE_PROJECT_STATUSES). Allocations on Cancelled or Completed projects
+// are excluded, so cancelling a project immediately frees that employee's capacity.
+// Returns { employeeId: totalBandwidth }.
+async function committedBandwidthByEmployee(employeeIds) {
+    const map = {};
+    if (!employeeIds || !employeeIds.length) return map;
+    const rows = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'project_projectId', 'bandwidth').where({ employee_employeeId: { in: employeeIds } });
+    if (!rows.length) return map;
+    const pids = [...new Set(rows.map(r => r.project_projectId))];
+    const projs = await SELECT.from(PROJECT).columns('projectId', 'status').where({ projectId: { in: pids } });
+    const activeSet = new Set((projs || []).filter(p => ACTIVE_PROJECT_STATUSES.includes(p.status)).map(p => p.projectId));
+    rows.forEach(r => { if (!activeSet.has(r.project_projectId)) return; map[r.employee_employeeId] = (map[r.employee_employeeId] || 0) + (Number(r.bandwidth) || 0); });
+    return map;
+}
+
+// Resolve caller + their EmployeeMaster role/active flag in one shot.
+async function projectCaller(req) {
+    const caller = await resolveCaller(req);
+    if (!caller.employeeId) return { ...caller, role: null, name: '', active: false };
+    const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'role', 'isActive')
+        .where({ employeeId: caller.employeeId });
+    return { ...caller, role: (emp && emp.role || '').toLowerCase(), name: emp && emp.employeeName || caller.email, active: !(emp && emp.isActive === false) };
+}
+// Two-factor founder check: XSUAA Founder scope AND EmployeeMaster role 'founder'.
+function isFounderCaller(req, c) { return hasScopeFor(req.user, 'founder') && c.role === 'founder'; }
+
+// ── Executive / high-authority detection ────────────────────────────────────
+// Founder/CEO/Executive/Super-Admin-style users have org-wide visibility and must
+// NOT be assignable as project resources (they monitor, they aren't allocated).
+// The app's only org-wide role is 'founder'; designation is also checked so a
+// free-text "CEO"/"Executive"/"Super Admin" title is caught even if the role
+// column wasn't set. Used by getAllocatableEmployees + allocateResources and any
+// other resource-selection surface.
+const EXECUTIVE_ROLES = new Set(['founder']);
+// Only true C-suite / org-wide titles — deliberately NOT a bare "executive" so
+// normal titles like "Sales Executive" / "Account Executive" are unaffected.
+const EXECUTIVE_DESIGNATION_RX = /(\bfounder\b|\bco-?founder\b|\bceo\b|\bcto\b|\bcfo\b|\bcoo\b|chief\s+\w+\s+officer|chief\s+executive|executive\s+officer|c-level|super\s*admin|managing\s+director)/i;
+function isExecutiveEmployee(emp) {
+    if (!emp) return false;
+    if (EXECUTIVE_ROLES.has(String(emp.role || '').toLowerCase())) return true;
+    return EXECUTIVE_DESIGNATION_RX.test(String(emp.designation || ''));
+}
+// Weighted task progress (status weighted by estimated hours):
+//   Progress% = Σ(estimatedHours × statusWeight) / Σ(estimatedHours) × 100
+// Status weights: Not Started 0 · In Progress 0.5 · (In) Review 0.8 · Completed 1 · Blocked 0.
+// Edge cases: no tasks → 0; total estimate 0 → 0; all completed → 100.
+const STATUS_WEIGHT = {
+    'not started': 0, 'inprogress': 0.5, 'in progress': 0.5,
+    'review': 0.8, 'in review': 0.8, 'completed': 1, 'blocked': 0
+};
+const projectProgress = (tasks) => {
+    const t = tasks || []; if (!t.length) return 0;
+    let earned = 0, total = 0;
+    t.forEach(x => {
+        const est = Number(x.estimatedHours) || 0;
+        const w = STATUS_WEIGHT[String(x.status || '').toLowerCase().trim()];
+        earned += est * (w == null ? 0 : w);
+        total += est;
+    });
+    if (total <= 0) return 0;
+    return Math.round((earned / total) * 100);
+};
+
+// Executive "AI" health summary — a deterministic narrative generated from the
+// project metrics (no external LLM). Returns { health, text }.
+function projectHealthSummary(m) {
+    const health = (m.status === 'Completed') ? 'Completed'
+        : (m.openCritical > 0 || m.budgetPct > 100) ? 'Critical'
+            : (m.openHigh > 0 || m.progress < 40 || m.budgetPct > 90) ? 'At Risk'
+                : 'On Track';
+    const parts = [];
+    parts.push(`Project is currently ${m.progress}% complete and ` +
+        (health === 'Completed' ? 'is Completed.' : health === 'On Track' ? 'remains On Track.' : `is flagged ${health}.`));
+    if (m.budget > 0) parts.push(`Budget utilization is ${m.budgetPct}%.`);
+    if (m.openCritical || m.openHigh) parts.push(`${m.openCritical} critical and ${m.openHigh} high-severity issue(s) remain open.`);
+    else parts.push('No high-severity issues are open.');
+    if (m.plannedHours > 0) parts.push(`Resource utilization is ${m.workedPct < 60 ? 'below plan' : m.workedPct > 110 ? 'over plan' : 'healthy'} with ${m.workedPct}% of planned effort consumed.`);
+    parts.push(health === 'Critical' ? 'Immediate leadership attention is recommended.'
+        : health === 'At Risk' ? 'Delivery forecast is at risk — monitor closely.'
+            : health === 'Completed' ? 'Delivery is complete.'
+                : 'Current delivery forecast indicates the project can be achieved on schedule.');
+    return { health, text: parts.join(' ') };
+}
+
+class ProjectService extends cds.ApplicationService {
+    async init() {
+        this.before('*', blockIfInactive);   // inactive accounts blocked (same as everywhere)
+        ensureProjectTypes();   // seed types + backfill existing projects (fire-and-forget)
+
+        // List active project types (for the creation dropdown + type-driven config).
+        this.on('getProjectTypes', async (req) => {
+            await ensureProjectTypes();
+            const rows = await SELECT.from(PROJECT_TYPE).where({ isActive: true }).orderBy('sortOrder asc', 'name asc');
+            return JSON.stringify({
+                types: (rows || []).map(t => {
+                    let cats = [], phs = [], mods = [], depts = [];
+                    try { cats = JSON.parse(t.resourceCategories || '[]'); } catch (_) {}
+                    try { phs = JSON.parse(t.phases || '[]'); } catch (_) {}
+                    try { mods = JSON.parse(t.modules || '[]'); } catch (_) {}
+                    try { depts = JSON.parse(t.departments || '[]'); } catch (_) {}
+                    return { code: t.code, name: t.name, planningModel: t.planningModel, hasRevenue: t.hasRevenue !== false, resourceCategories: cats, departments: depts, phases: phs, modules: mods };
+                })
+            });
+        });
+
+        // Distinct active job ROLES (designations) — for a department, or for a
+        // project's type departments. Backend query only (no UI filtering of all rows).
+        this.on('getDepartmentRoles', async (req) => {
+            const d = req.data || {};
+            let depts = [];
+            if (d.projectId) { const p = await SELECT.one.from(PROJECT).columns('projectType_code').where({ projectId: d.projectId }); depts = await typeDepartments(p && p.projectType_code); }
+            else if (d.department) depts = [d.department];
+            const roles = await rolesForDepartments(depts);
+            return JSON.stringify({ departments: depts, roles });
+        });
+
+        // ══════════════════════════════════════════════════════════════════════
+        // MILESTONE MANAGEMENT — additive, integrated with budget/cost/resource/
+        // timesheet engines. Resource & task milestone links are optional, so
+        // projects without milestones keep working exactly as before.
+        // ══════════════════════════════════════════════════════════════════════
+        const nextMilestoneId = async (pid) => {
+            const rows = await SELECT.from(MILESTONE).columns('milestoneId').where({ project_projectId: pid });
+            let max = 0; rows.forEach(r => { const mm = String(r.milestoneId).match(/-M-(\d+)$/); if (mm) max = Math.max(max, +mm[1]); });
+            return `${pid}-M-${String(max + 1).padStart(3, '0')}`;
+        };
+        // PM / Product-Manager / Founder may manage milestones (app has no separate
+        // Product-Manager role → manager + founder + the project POC qualify).
+        const msAccess = async (req, c, pid) => {
+            const p = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'startDate', 'endDate', 'executionBudget', 'budget', 'projectType_code').where({ projectId: pid });
+            if (!p) return { error: 'Project not found.' };
+            const isPoc = p.poc_employeeId === c.employeeId;
+            return { p, isPoc, canManage: isFounderCaller(req, c) || c.role === 'manager' || c.role === 'founder' || isPoc };
+        };
+
+        // Per-project milestone metrics (progress / budget / cost / delay / deps) —
+        // single source used by list, dashboard and reports. Server-side aggregation.
+        async function computeMilestoneRollups(projectId) {
+            const today = new Date().toISOString().slice(0, 10);
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'executionBudget', 'budget').where({ projectId });
+            const executionBudget = project ? (Number(project.executionBudget) || Number(project.budget) || 0) : 0;
+            const ms = await SELECT.from(MILESTONE).where({ project_projectId: projectId }).orderBy('sequence asc', 'plannedStartDate asc');
+            if (!ms.length) return { milestones: [], executionBudget };
+            const msIds = ms.map(m => m.milestoneId);
+            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'milestone_milestoneId', 'totalAllocationCost').where({ project_projectId: projectId });
+            const tasks = await SELECT.from(PROJECT_TASK).columns('taskId', 'assignedTo_employeeId', 'milestone_milestoneId', 'status', 'estimatedHours', 'actualHours').where({ project_projectId: projectId });
+            const taskIds = tasks.map(t => t.taskId);
+            const entries = taskIds.length ? await SELECT.from(ENTRY).columns('timesheet_timesheetId', 'projectTask_taskId', 'hoursWorked').where({ projectTask_taskId: { in: taskIds } }) : [];
+            const tsIds = [...new Set(entries.map(e => e.timesheet_timesheetId))];
+            const headers = tsIds.length ? await SELECT.from(HEADER).columns('timesheetId', 'employee_employeeId').where({ timesheetId: { in: tsIds } }) : [];
+            const empOfTs = {}; headers.forEach(h => { empOfTs[h.timesheetId] = h.employee_employeeId; });
+            const config = await rp.loadConfig(); const overhead = Number(config.monthlyOverhead) || 0;
+            const salaries = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'monthlySalary', 'hourlyCost', 'isActive').where({ isActive: true });
+            const salByEmp = {}; salaries.forEach(s => { salByEmp[s.employee_employeeId] = s; });
+            const caps = await SELECT.from(EMPLOYEE).columns('employeeId', 'monthlyCapacityHours');
+            const capByEmp = {}; caps.forEach(e => { capByEmp[e.employeeId] = Number(e.monthlyCapacityHours) > 0 ? Number(e.monthlyCapacityHours) : 160; });
+            const rateOf = emp => rp.loadedHourlyRate(salByEmp[emp], capByEmp[emp] || 160, overhead);
+
+            const resByMs = {}, taskByMs = {}, taskMs = {}, taskEmp = {};
+            resources.forEach(r => { if (r.milestone_milestoneId) (resByMs[r.milestone_milestoneId] = resByMs[r.milestone_milestoneId] || []).push(r); });
+            tasks.forEach(t => { taskMs[t.taskId] = t.milestone_milestoneId; taskEmp[t.taskId] = t.assignedTo_employeeId; if (t.milestone_milestoneId) (taskByMs[t.milestone_milestoneId] = taskByMs[t.milestone_milestoneId] || []).push(t); });
+            const actualCostByMs = {}, actualHrsByMs = {};
+            entries.forEach(e => { const k = taskMs[e.projectTask_taskId]; if (!k) return; const hrs = Number(e.hoursWorked) || 0; const emp = empOfTs[e.timesheet_timesheetId] || taskEmp[e.projectTask_taskId]; actualHrsByMs[k] = (actualHrsByMs[k] || 0) + hrs; actualCostByMs[k] = (actualCostByMs[k] || 0) + hrs * rateOf(emp); });
+
+            const deps = await SELECT.from(MILESTONE_DEP).columns('dependencyId', 'milestone_milestoneId', 'predecessor_milestoneId').where({ milestone_milestoneId: { in: msIds } });
+            const depByMs = {}; deps.forEach(d => { (depByMs[d.milestone_milestoneId] = depByMs[d.milestone_milestoneId] || []).push(d); });
+            const nameById = {}; ms.forEach(m => { nameById[m.milestoneId] = m.name; });
+            const statusById = {}; // computed below, needed for dependency-ready flag
+
+            const out = ms.map(m => {
+                const mid = m.milestoneId;
+                const res = resByMs[mid] || [], mtasks = taskByMs[mid] || [];
+                const allocatedCost = Math.round(res.reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0));
+                const actualCost = Math.round(actualCostByMs[mid] || 0);
+                let progress = Number(m.progressPct) || 0;
+                if (m.progressMode === 'task') progress = projectProgress(mtasks);
+                else if (m.progressMode === 'timesheet') { const est = mtasks.reduce((s, t) => s + (Number(t.estimatedHours) || 0), 0); progress = est > 0 ? Math.min(100, Math.round((actualHrsByMs[mid] || 0) / est * 100)) : 0; }
+                const effStatus = milestoneStatus(m, progress, today);
+                statusById[mid] = effStatus;
+                const pEnd = m.plannedEndDate ? String(m.plannedEndDate).slice(0, 10) : null;
+                const delayDays = (pEnd && today > pEnd && !MS_TERMINAL.includes(effStatus)) ? daysBetween(today, pEnd) : 0;
+                const earlyDays = (effStatus === 'Completed Early' && m.actualEndDate && pEnd) ? daysBetween(pEnd, String(m.actualEndDate).slice(0, 10)) : 0;
+                const plannedBudget = Number(m.plannedBudget) || 0;
+                const forecastCost = Math.max(allocatedCost, actualCost);
+                return {
+                    milestoneId: mid, name: m.name, description: m.description || '', sequence: m.sequence || 0,
+                    plannedStartDate: m.plannedStartDate, plannedEndDate: m.plannedEndDate, actualStartDate: m.actualStartDate, actualEndDate: m.actualEndDate,
+                    status: effStatus, storedStatus: m.status, progressPct: progress, progressMode: m.progressMode || 'manual',
+                    ownerId: m.owner_employeeId || '', ownerName: m.ownerName || '', remarks: m.remarks || '',
+                    isCritical: m.isCritical === true, isBillable: m.isBillable !== false, approvalStatus: m.approvalStatus || 'None',
+                    plannedBudget, allocatedCost, actualCost, forecastCost, remainingBudget: Math.round(plannedBudget - actualCost), budgetVariance: Math.round(plannedBudget - forecastCost),
+                    taskCount: mtasks.length, resourceCount: new Set(res.map(r => r.employee_employeeId)).size, delayDays, earlyDays,
+                    dependencies: (depByMs[mid] || []).map(d => ({ dependencyId: d.dependencyId, predecessorId: d.predecessor_milestoneId, predecessorName: nameById[d.predecessor_milestoneId] || d.predecessor_milestoneId }))
+                };
+            });
+            // Mark which milestones are blocked by incomplete predecessors.
+            out.forEach(o => { o.predecessorsComplete = (o.dependencies || []).every(d => MS_TERMINAL.includes(statusById[d.predecessorId])); });
+            return { milestones: out, executionBudget };
+        }
+
+        // ── List milestones + dashboard summary (single call) ─────────────────────
+        this.on('getMilestones', async (req) => {
+            const c = await projectCaller(req);
+            const acc = await msAccess(req, c, req.data.projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const roll = await computeMilestoneRollups(req.data.projectId);
+            const ms = roll.milestones;
+            const allocatedPlanned = ms.reduce((s, m) => s + (m.plannedBudget || 0), 0);
+            const dashboard = {
+                total: ms.length,
+                completed: ms.filter(m => m.status === 'Completed' || m.status === 'Completed Early').length,
+                delayed: ms.filter(m => m.status === 'Delayed').length,
+                atRisk: ms.filter(m => m.status === 'At Risk').length,
+                inProgress: ms.filter(m => m.status === 'In Progress').length,
+                upcoming: ms.filter(m => m.status === 'Not Started' || m.status === 'Planned').length,
+                blocked: ms.filter(m => m.status === 'Blocked').length,
+                executionBudget: roll.executionBudget,
+                milestoneBudgetAllocated: allocatedPlanned,
+                milestoneBudgetUnallocated: Math.round(roll.executionBudget - allocatedPlanned),
+                totalActualCost: ms.reduce((s, m) => s + (m.actualCost || 0), 0),
+                totalForecastCost: ms.reduce((s, m) => s + (m.forecastCost || 0), 0)
+            };
+            return JSON.stringify({ milestones: ms, dashboard, canManage: acc.canManage, executionBudget: roll.executionBudget });
+        });
+
+        // ── Auto-seed milestones from the project type's phases ───────────────────
+        this.on('seedMilestones', async (req) => {
+            const c = await projectCaller(req);
+            const acc = await msAccess(req, c, req.data.projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised to manage milestones.' });
+            const existing = await SELECT.from(MILESTONE).columns('milestoneId').where({ project_projectId: req.data.projectId });
+            if (existing.length) return JSON.stringify({ ok: true, created: 0, message: 'Milestones already exist.' });
+            await ensureProjectTypes();
+            const pt = await SELECT.one.from(PROJECT_TYPE).columns('phases').where({ code: acc.p.projectType_code || 'OTHER' });
+            let phases = []; try { phases = JSON.parse((pt && pt.phases) || '[]') || []; } catch (_) {}
+            if (!phases.length) phases = ['Delivery'];   // default single milestone for non-phase types
+            // Spread phases evenly across the project window.
+            const start = acc.p.startDate ? new Date(acc.p.startDate) : new Date();
+            const end = acc.p.endDate ? new Date(acc.p.endDate) : new Date(start.getTime() + 90 * 86400000);
+            const span = Math.max(1, Math.round((end - start) / 86400000));
+            const step = Math.floor(span / phases.length);
+            let created = 0;
+            for (let i = 0; i < phases.length; i++) {
+                const ps = new Date(start.getTime() + i * step * 86400000);
+                const pe = (i === phases.length - 1) ? end : new Date(start.getTime() + ((i + 1) * step - 1) * 86400000);
+                await INSERT.into(MILESTONE).entries({
+                    milestoneId: `${req.data.projectId}-M-${String(i + 1).padStart(3, '0')}`, project_projectId: req.data.projectId,
+                    name: phases[i], sequence: i + 1, status: 'Not Started', progressPct: 0, progressMode: 'task',
+                    plannedStartDate: ps.toISOString().slice(0, 10), plannedEndDate: pe.toISOString().slice(0, 10),
+                    isBillable: true, plannedBudget: 0, approvalStatus: 'None'
+                });
+                // Finish-to-start dependency chain.
+                if (i > 0) await INSERT.into(MILESTONE_DEP).entries({ dependencyId: `${req.data.projectId}-M-${String(i + 1).padStart(3, '0')}-DEP`, milestone_milestoneId: `${req.data.projectId}-M-${String(i + 1).padStart(3, '0')}`, predecessor_milestoneId: `${req.data.projectId}-M-${String(i).padStart(3, '0')}` });
+                created++;
+            }
+            await projectAudit(req.data.projectId, c.name, 'Milestones Seeded', null, `${created} milestone(s)`);
+            return JSON.stringify({ ok: true, created });
+        });
+
+        // ── Create / update / delete ──────────────────────────────────────────────
+        const validateMilestoneBudget = async (projectId, execBudget, excludeId, newPlanned) => {
+            const rows = await SELECT.from(MILESTONE).columns('milestoneId', 'plannedBudget').where({ project_projectId: projectId });
+            const sum = rows.filter(r => r.milestoneId !== excludeId).reduce((s, r) => s + (Number(r.plannedBudget) || 0), 0) + (Number(newPlanned) || 0);
+            return sum <= execBudget ? null : `Milestone budgets (₹${sum.toLocaleString('en-IN')}) would exceed the project Execution Budget (₹${execBudget.toLocaleString('en-IN')}).`;
+        };
+        const datesWithinProject = (p, s, e) => {
+            if (s && p.startDate && String(s) < String(p.startDate).slice(0, 10)) return 'Milestone start cannot be before the project start.';
+            if (e && p.endDate && String(e) > String(p.endDate).slice(0, 10)) return 'Milestone end cannot be after the project end.';
+            if (s && e && String(e) < String(s)) return 'Milestone end cannot be before its start.';
+            return null;
+        };
+
+        this.on('createMilestone', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const acc = await msAccess(req, c, d.projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised to create milestones.' });
+            if (!String(d.name || '').trim()) return JSON.stringify({ error: 'Milestone name is required.' });
+            const dErr = datesWithinProject(acc.p, d.plannedStartDate, d.plannedEndDate);
+            if (dErr) return JSON.stringify({ error: dErr });
+            const execBudget = Number(acc.p.executionBudget) || Number(acc.p.budget) || 0;
+            if (Number(d.plannedBudget) > 0 && execBudget > 0) { const bErr = await validateMilestoneBudget(d.projectId, execBudget, null, d.plannedBudget); if (bErr) return JSON.stringify({ error: bErr }); }
+            const cnt = (await SELECT.from(MILESTONE).columns('milestoneId').where({ project_projectId: d.projectId })).length;
+            const milestoneId = await nextMilestoneId(d.projectId);
+            let ownerName = ''; if (d.ownerId) { const o = await SELECT.one.from(EMPLOYEE).columns('employeeName').where({ employeeId: d.ownerId }); ownerName = o ? o.employeeName : ''; }
+            await INSERT.into(MILESTONE).entries({
+                milestoneId, project_projectId: d.projectId, name: String(d.name).trim(), description: (d.description || '').trim(),
+                sequence: d.sequence != null ? Number(d.sequence) : cnt + 1, status: 'Not Started', progressPct: 0,
+                progressMode: d.progressMode || 'manual', plannedStartDate: d.plannedStartDate || null, plannedEndDate: d.plannedEndDate || null,
+                owner_employeeId: d.ownerId || null, ownerName, remarks: (d.remarks || '').trim(),
+                isCritical: d.isCritical === true, isBillable: d.isBillable !== false, plannedBudget: Number(d.plannedBudget) || 0, approvalStatus: 'None'
+            });
+            await projectAudit(d.projectId, c.name, 'Milestone Created', null, String(d.name).trim());
+            if (d.ownerId) await createNotification(d.ownerId, 'MILESTONE_CREATED', 'Milestone Assigned', `You own milestone "${String(d.name).trim()}" in project ${acc.p.projectName}.`, d.projectId);
+            return JSON.stringify({ ok: true, milestoneId });
+        });
+
+        this.on('updateMilestone', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const m = await SELECT.one.from(MILESTONE).where({ milestoneId: d.milestoneId });
+            if (!m) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, m.project_projectId);
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            const set = {};
+            if (d.name != null) set.name = String(d.name).trim();
+            if (d.description != null) set.description = String(d.description).trim();
+            if (d.remarks != null) set.remarks = String(d.remarks).trim();
+            if (d.isCritical != null) set.isCritical = d.isCritical === true;
+            if (d.isBillable != null) set.isBillable = d.isBillable === true;
+            if (d.progressMode != null) set.progressMode = d.progressMode;
+            if (d.sequence != null) set.sequence = Number(d.sequence);
+            if (d.plannedStartDate !== undefined) set.plannedStartDate = d.plannedStartDate || null;
+            if (d.plannedEndDate !== undefined) set.plannedEndDate = d.plannedEndDate || null;
+            const s = d.plannedStartDate !== undefined ? d.plannedStartDate : m.plannedStartDate;
+            const e = d.plannedEndDate !== undefined ? d.plannedEndDate : m.plannedEndDate;
+            const dErr = datesWithinProject(acc.p, s && String(s).slice(0, 10), e && String(e).slice(0, 10));
+            if (dErr) return JSON.stringify({ error: dErr });
+            if (d.plannedBudget != null) {
+                const execBudget = Number(acc.p.executionBudget) || Number(acc.p.budget) || 0;
+                if (execBudget > 0) { const bErr = await validateMilestoneBudget(m.project_projectId, execBudget, d.milestoneId, d.plannedBudget); if (bErr) return JSON.stringify({ error: bErr }); }
+                set.plannedBudget = Number(d.plannedBudget) || 0;
+            }
+            if (d.ownerId !== undefined) { set.owner_employeeId = d.ownerId || null; const o = d.ownerId ? await SELECT.one.from(EMPLOYEE).columns('employeeName').where({ employeeId: d.ownerId }) : null; set.ownerName = o ? o.employeeName : ''; }
+            await UPDATE(MILESTONE).set(set).where({ milestoneId: d.milestoneId });
+            await projectAudit(m.project_projectId, c.name, 'Milestone Updated', null, set.name || m.name);
+            return JSON.stringify({ ok: true });
+        });
+
+        this.on('deleteMilestone', async (req) => {
+            const c = await projectCaller(req);
+            const m = await SELECT.one.from(MILESTONE).where({ milestoneId: req.data.milestoneId });
+            if (!m) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, m.project_projectId);
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            // Detach (don't delete) resources/tasks → no data loss; they revert to project-level.
+            await UPDATE(PROJECT_RESOURCE).set({ milestone_milestoneId: null }).where({ milestone_milestoneId: req.data.milestoneId });
+            await UPDATE(PROJECT_TASK).set({ milestone_milestoneId: null }).where({ milestone_milestoneId: req.data.milestoneId });
+            await DELETE.from(MILESTONE_DEP).where({ milestone_milestoneId: req.data.milestoneId });
+            await DELETE.from(MILESTONE_DEP).where({ predecessor_milestoneId: req.data.milestoneId });
+            await DELETE.from(MILESTONE_APPROVAL).where({ milestone_milestoneId: req.data.milestoneId });
+            await DELETE.from(MILESTONE).where({ milestoneId: req.data.milestoneId });
+            await projectAudit(m.project_projectId, c.name, 'Milestone Deleted', m.name, null);
+            return JSON.stringify({ ok: true });
+        });
+
+        // ── Dependencies ──────────────────────────────────────────────────────────
+        this.on('setMilestoneDependency', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const m = await SELECT.one.from(MILESTONE).where({ milestoneId: d.milestoneId });
+            const pre = await SELECT.one.from(MILESTONE).where({ milestoneId: d.predecessorId });
+            if (!m || !pre) return JSON.stringify({ error: 'Milestone not found.' });
+            if (m.project_projectId !== pre.project_projectId) return JSON.stringify({ error: 'Milestones must belong to the same project.' });
+            if (d.milestoneId === d.predecessorId) return JSON.stringify({ error: 'A milestone cannot depend on itself.' });
+            const acc = await msAccess(req, c, m.project_projectId); if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            // Prevent a simple cycle (predecessor already depends on this milestone).
+            const reverse = await SELECT.one.from(MILESTONE_DEP).where({ milestone_milestoneId: d.predecessorId, predecessor_milestoneId: d.milestoneId });
+            if (reverse) return JSON.stringify({ error: 'That would create a circular dependency.' });
+            await UPSERT.into(MILESTONE_DEP).entries({ dependencyId: `${d.milestoneId}<-${d.predecessorId}`, milestone_milestoneId: d.milestoneId, predecessor_milestoneId: d.predecessorId });
+            return JSON.stringify({ ok: true });
+        });
+        this.on('removeMilestoneDependency', async (req) => {
+            const c = await projectCaller(req);
+            const dep = await SELECT.one.from(MILESTONE_DEP).where({ dependencyId: req.data.dependencyId });
+            if (!dep) return JSON.stringify({ error: 'Dependency not found.' });
+            const m = await SELECT.one.from(MILESTONE).columns('project_projectId').where({ milestoneId: dep.milestone_milestoneId });
+            const acc = await msAccess(req, c, m.project_projectId); if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            await DELETE.from(MILESTONE_DEP).where({ dependencyId: req.data.dependencyId });
+            return JSON.stringify({ ok: true });
+        });
+
+        // ── Progress + lifecycle (start / progress / complete) ────────────────────
+        // Predecessor gate: a milestone cannot START before its predecessors complete.
+        const predecessorsComplete = async (milestoneId) => {
+            const deps = await SELECT.from(MILESTONE_DEP).columns('predecessor_milestoneId').where({ milestone_milestoneId: milestoneId });
+            if (!deps.length) return true;
+            const preds = await SELECT.from(MILESTONE).columns('milestoneId', 'status').where({ milestoneId: { in: deps.map(d => d.predecessor_milestoneId) } });
+            return preds.every(p => MS_TERMINAL.includes(p.status));
+        };
+        this.on('startMilestone', async (req) => {
+            const c = await projectCaller(req);
+            const m = await SELECT.one.from(MILESTONE).where({ milestoneId: req.data.milestoneId });
+            if (!m) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, m.project_projectId); if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            if (!(await predecessorsComplete(req.data.milestoneId))) return JSON.stringify({ error: 'Cannot start — a predecessor milestone is not yet completed.' });
+            await UPDATE(MILESTONE).set({ status: 'In Progress', actualStartDate: m.actualStartDate || new Date().toISOString().slice(0, 10) }).where({ milestoneId: req.data.milestoneId });
+            await projectAudit(m.project_projectId, c.name, 'Milestone Started', null, m.name);
+            return JSON.stringify({ ok: true });
+        });
+        this.on('updateMilestoneProgress', async (req) => {
+            const c = await projectCaller(req);
+            const m = await SELECT.one.from(MILESTONE).where({ milestoneId: req.data.milestoneId });
+            if (!m) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, m.project_projectId); if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            const pct = Math.max(0, Math.min(100, Number(req.data.progressPct) || 0));
+            const set = { progressPct: pct, progressMode: 'manual' };
+            if (pct > 0 && !m.actualStartDate) set.actualStartDate = new Date().toISOString().slice(0, 10);
+            if (pct > 0 && m.status === 'Not Started') set.status = 'In Progress';
+            await UPDATE(MILESTONE).set(set).where({ milestoneId: req.data.milestoneId });
+            return JSON.stringify({ ok: true, progressPct: pct });
+        });
+
+        // ── Completion (rules + override) ─────────────────────────────────────────
+        this.on('completeMilestone', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const m = await SELECT.one.from(MILESTONE).where({ milestoneId: d.milestoneId });
+            if (!m) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, m.project_projectId); if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            const override = d.override === true;
+            if (!override) {
+                // Rule: all milestone tasks complete (when any tasks are assigned).
+                const open = await SELECT.from(PROJECT_TASK).columns('taskId').where({ milestone_milestoneId: d.milestoneId, status: { '<>': 'Completed' } });
+                if (open && open.length) return JSON.stringify({ error: `${open.length} task(s) in this milestone are not yet complete. Complete them or override.`, needsOverride: true });
+                // Rule: approval must be Approved when an approval was requested.
+                if (m.approvalStatus === 'Pending Approval') return JSON.stringify({ error: 'Milestone approval is still pending.', needsOverride: true });
+                if (m.approvalStatus === 'Rejected' || m.approvalStatus === 'Rework Required') return JSON.stringify({ error: `Milestone approval is "${m.approvalStatus}".`, needsOverride: true });
+            }
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const early = m.plannedEndDate && todayStr < String(m.plannedEndDate).slice(0, 10);
+            await UPDATE(MILESTONE).set({ status: early ? 'Completed Early' : 'Completed', progressPct: 100, actualEndDate: todayStr }).where({ milestoneId: d.milestoneId });
+            await projectAudit(m.project_projectId, c.name, override ? 'Milestone Completed (override)' : 'Milestone Completed', null, m.name);
+            if (acc.p.poc_employeeId) await createNotification(acc.p.poc_employeeId, 'MILESTONE_COMPLETED', 'Milestone Completed', `Milestone "${m.name}" was completed in project ${acc.p.projectName}.`, m.project_projectId);
+            return JSON.stringify({ ok: true, status: early ? 'Completed Early' : 'Completed' });
+        });
+
+        // ── Approval workflow ─────────────────────────────────────────────────────
+        this.on('requestMilestoneApproval', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const m = await SELECT.one.from(MILESTONE).where({ milestoneId: d.milestoneId });
+            if (!m) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, m.project_projectId); if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            const approverId = d.approverId || acc.p.poc_employeeId;
+            let approverName = ''; if (approverId) { const a = await SELECT.one.from(EMPLOYEE).columns('employeeName').where({ employeeId: approverId }); approverName = a ? a.employeeName : ''; }
+            await INSERT.into(MILESTONE_APPROVAL).entries({ approvalId: `${d.milestoneId}-APR-${Date.now()}`, milestone_milestoneId: d.milestoneId, approverRole: d.approverRole || 'Project Manager', approverId, approverName, status: 'Pending Approval', comments: (d.comments || '').trim() });
+            await UPDATE(MILESTONE).set({ approvalStatus: 'Pending Approval' }).where({ milestoneId: d.milestoneId });
+            if (approverId) await createNotification(approverId, 'MILESTONE_APPROVAL', 'Milestone Approval Requested', `Approval requested for milestone "${m.name}".`, m.project_projectId);
+            await projectAudit(m.project_projectId, c.name, 'Milestone Approval Requested', null, m.name);
+            return JSON.stringify({ ok: true });
+        });
+        this.on('decideMilestoneApproval', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const m = await SELECT.one.from(MILESTONE).where({ milestoneId: d.milestoneId });
+            if (!m) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, m.project_projectId); if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            const decision = d.decision;   // Approved | Rejected | Rework Required
+            if (!['Approved', 'Rejected', 'Rework Required'].includes(decision)) return JSON.stringify({ error: 'Invalid decision.' });
+            const apr = await SELECT.one.from(MILESTONE_APPROVAL).where({ milestone_milestoneId: d.milestoneId, status: 'Pending Approval' });
+            if (apr) await UPDATE(MILESTONE_APPROVAL).set({ status: decision, comments: (d.comments || '').trim(), decidedAt: new Date() }).where({ approvalId: apr.approvalId });
+            await UPDATE(MILESTONE).set({ approvalStatus: decision }).where({ milestoneId: d.milestoneId });
+            await projectAudit(m.project_projectId, c.name, `Milestone ${decision}`, null, m.name);
+            return JSON.stringify({ ok: true, status: decision });
+        });
+
+        // ── Resource transfer between milestones ──────────────────────────────────
+        this.on('transferMilestoneResource', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const from = await SELECT.one.from(MILESTONE).columns('project_projectId', 'name').where({ milestoneId: d.fromMilestoneId });
+            const to = await SELECT.one.from(MILESTONE).columns('project_projectId', 'name').where({ milestoneId: d.toMilestoneId });
+            if (!from || !to) return JSON.stringify({ error: 'Milestone not found.' });
+            if (from.project_projectId !== to.project_projectId) return JSON.stringify({ error: 'Milestones must be in the same project.' });
+            const acc = await msAccess(req, c, from.project_projectId); if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            const allocationId = `${from.project_projectId}-${d.employeeId}`;
+            const res = await SELECT.one.from(PROJECT_RESOURCE).where({ allocationId, milestone_milestoneId: d.fromMilestoneId });
+            if (!res) return JSON.stringify({ error: 'That resource is not allocated to the source milestone.' });
+            await UPDATE(PROJECT_RESOURCE).set({ milestone_milestoneId: d.toMilestoneId }).where({ allocationId });
+            await projectAudit(from.project_projectId, c.name, 'Resource Transferred', `${res.employeeName}: ${from.name}`, to.name);
+            return JSON.stringify({ ok: true });
+        });
+
+        // ── Phase 15: downloadable milestone reports (xlsx / pdf) ─────────────────
+        this.on('generateMilestoneReport', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const acc = await msAccess(req, c, d.projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const reportType = String(d.reportType || 'status').toLowerCase();
+            const format = String(d.format || 'xlsx').toLowerCase() === 'pdf' ? 'pdf' : 'xlsx';
+            const msReport = require('./services/milestone-report');
+            if (!msReport.REPORT_TYPES.includes(reportType)) return JSON.stringify({ error: `Unknown report type "${reportType}".` });
+            const rollup = await computeMilestoneRollups(d.projectId);
+            if (!rollup.milestones || !rollup.milestones.length) return JSON.stringify({ error: 'No milestones to report on.' });
+            try {
+                const file = await msReport.buildMilestoneReport({
+                    project: { projectId: acc.p.projectId, projectName: acc.p.projectName },
+                    rollup, reportType, format
+                });
+                return JSON.stringify({ ok: true, fileName: file.fileName, mime: file.mime, base64: file.buffer.toString('base64') });
+            } catch (e) {
+                cds.log('ms-report').error('Report generation failed:', e.message || e);
+                return JSON.stringify({ error: 'Could not generate the report.' });
+            }
+        });
+
+        // ── Phase 4: project resource requirements (demand side) ──────────────────
+        this.on('getResourceHierarchy', async () => {
+            try { return JSON.stringify(await buildResourceHierarchy()); }
+            catch (e) { return JSON.stringify({ error: 'Could not load resource hierarchy.' }); }
+        });
+
+        this.on('getResourceRequirements', async (req) => {
+            const c = await projectCaller(req);
+            const acc = await msAccess(req, c, req.data.projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const rows = await SELECT.from(PROJ_REQ).where({ project_projectId: req.data.projectId }).orderBy('createdAt asc');
+            return JSON.stringify({
+                requirements: rows.map(r => ({
+                    requirementId: r.requirementId, departmentId: r.department_deptId, departmentName: r.departmentName,
+                    roleCategoryId: r.roleCategory_roleId, roleCategoryName: r.roleCategoryName,
+                    specializationId: r.specialization_specId, specializationName: r.specializationName,
+                    requiredCount: r.requiredCount, requiredHours: r.requiredHours,
+                    startDate: r.startDate, endDate: r.endDate, notes: r.notes, status: r.status
+                })),
+                canManage: acc.canManage
+            });
+        });
+
+        this.on('createResourceRequirement', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const acc = await msAccess(req, c, d.projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised to define resource requirements.' });
+            if (!d.departmentId) return JSON.stringify({ error: 'Department is required.' });
+            // Resolve display names from the masters (denormalised for fast reads).
+            const dept = await SELECT.one.from(DEPT_MASTER).columns('name').where({ deptId: d.departmentId });
+            const role = d.roleCategoryId ? await SELECT.one.from(ROLE_MASTER).columns('name').where({ roleId: d.roleCategoryId }) : null;
+            const spec = d.specializationId ? await SELECT.one.from(SPEC_MASTER).columns('name').where({ specId: d.specializationId }) : null;
+            const cnt = (await SELECT.from(PROJ_REQ).columns('requirementId').where({ project_projectId: d.projectId })).length;
+            const requirementId = `${d.projectId}-REQ-${String(cnt + 1).padStart(3, '0')}`;
+            await INSERT.into(PROJ_REQ).entries({
+                requirementId, project_projectId: d.projectId,
+                department_deptId: d.departmentId, departmentName: dept ? dept.name : d.departmentId,
+                roleCategory_roleId: d.roleCategoryId || null, roleCategoryName: role ? role.name : null,
+                specialization_specId: d.specializationId || null, specializationName: spec ? spec.name : null,
+                requiredCount: Math.max(1, parseInt(d.requiredCount, 10) || 1),
+                requiredHours: Number(d.requiredHours) || 0,
+                startDate: d.startDate || null, endDate: d.endDate || null, notes: (d.notes || '').trim() || null, status: 'Open'
+            });
+            await projectAudit(d.projectId, c.name, 'Resource Requirement Added', null, `${dept ? dept.name : ''} ${role ? '· ' + role.name : ''} ${spec ? '· ' + spec.name : ''} ×${Math.max(1, parseInt(d.requiredCount, 10) || 1)}`);
+            return JSON.stringify({ ok: true, requirementId });
+        });
+
+        this.on('deleteResourceRequirement', async (req) => {
+            const c = await projectCaller(req);
+            const r = await SELECT.one.from(PROJ_REQ).columns('requirementId', 'project_projectId').where({ requirementId: req.data.requirementId });
+            if (!r) return JSON.stringify({ error: 'Requirement not found.' });
+            const acc = await msAccess(req, c, r.project_projectId);
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            await DELETE.from(PROJ_REQ).where({ requirementId: req.data.requirementId });
+            return JSON.stringify({ ok: true });
+        });
+
+        // ── Founder: create a project + assign POC ──────────────────────────────
+        this.on('createProject', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can create projects.' });
+            const d = req.data || {};
+            const name = (d.projectName || '').trim();
+            if (!name) return JSON.stringify({ error: 'Project Name is required.' });
+            if (!d.startDate) return JSON.stringify({ error: 'Start Date is required.' });
+            if (d.endDate && String(d.endDate) < String(d.startDate)) return JSON.stringify({ error: 'End Date cannot be before Start Date.' });
+            if (d.goLiveDate && d.endDate && String(d.goLiveDate) > String(d.endDate)) return JSON.stringify({ error: 'Go-Live Date must be on or before the End Date.' });
+            if (d.goLiveDate && String(d.goLiveDate) < String(d.startDate)) return JSON.stringify({ error: 'Go-Live Date cannot be before the Start Date.' });
+            const dup = await SELECT.one.from(PROJECT).columns('projectId').where('lower(projectName) =', name.toLowerCase());
+            if (dup) return JSON.stringify({ error: `A project named “${name}” already exists.` });
+            if (!d.pocEmployeeId) return JSON.stringify({ error: 'Please select a POC.' });
+            const poc = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email', 'isActive').where({ employeeId: d.pocEmployeeId });
+            if (!poc) return JSON.stringify({ error: 'Selected POC was not found.' });
+            if (poc.isActive === false) return JSON.stringify({ error: 'POC must be an active employee.' });
+            // Client assignment is mandatory — every project belongs to one client.
+            if (!d.clientId) return JSON.stringify({ error: 'Please select a Client for this project.' });
+            const client = await SELECT.one.from(CLIENT_MASTER).columns('clientId', 'clientName', 'status').where({ clientId: d.clientId });
+            if (!client) return JSON.stringify({ error: 'Selected client was not found.' });
+            if (String(client.status || '').toLowerCase() === 'inactive') return JSON.stringify({ error: 'Selected client is inactive.' });
+
+            // ── Project Type (mandatory) — drives all downstream planning/budgeting.
+            await ensureProjectTypes();
+            const typeCode = d.projectType || 'OTHER';
+            const ptype = await SELECT.one.from(PROJECT_TYPE).columns('code', 'name', 'hasRevenue').where({ code: typeCode, isActive: true });
+            if (!ptype) return JSON.stringify({ error: 'Please select a valid Project Type.' });
+
+            // ── Financial model: Contract Value → Profit Reserve → Execution Budget.
+            // Internal/cost-tracking types carry no revenue → reserve 0, execution = entered budget.
+            const contractValue = Math.max(0, Number(d.contractValue) || 0);
+            let marginPct = Math.max(0, Math.min(100, Number(d.profitMarginPct) || 0));
+            if (!ptype.hasRevenue) marginPct = 0;
+            const profitReserve = Math.round(contractValue * marginPct) / 100;
+            // Execution budget = contract − reserve (revenue types); else the contract value
+            // itself acts as the cost ceiling for internal projects.
+            const executionBudget = ptype.hasRevenue ? Math.round((contractValue - profitReserve) * 100) / 100 : contractValue;
+
+            const projectId = await nextProjectId();
+            await INSERT.into(PROJECT).entries({
+                projectId, projectName: name, customerName: (client.clientName || '').trim(),
+                description: (d.description || '').trim(), startDate: d.startDate || null, endDate: d.endDate || null,
+                status: 'Planning', priority: d.priority || 'Medium',
+                lifecycleStage: 'Planning',
+                poc_employeeId: poc.employeeId, pocName: poc.employeeName || '', createdByName: c.name || 'Founder',
+                client_clientId: client.clientId, clientName: client.clientName || '',
+                projectType_code: ptype.code, projectTypeName: ptype.name,
+                contractValue, profitMarginPct: marginPct, profitReserveAmount: profitReserve, executionBudget,
+                // budget kept in sync with executionBudget for back-compat with all existing readers.
+                budget: executionBudget, goLiveDate: d.goLiveDate || null, focusAreas: (d.focusAreas || '').trim()
+            });
+            await projectAudit(projectId, c.name, 'Project Created', null, name);
+            await projectAudit(projectId, c.name, 'Project Type Set', null, ptype.name);
+            if (contractValue > 0) await projectAudit(projectId, c.name, 'Financials Set', null,
+                `Contract ₹${contractValue.toLocaleString('en-IN')} · Margin ${marginPct}% · Reserve ₹${profitReserve.toLocaleString('en-IN')} · Execution ₹${executionBudget.toLocaleString('en-IN')}`);
+            await projectAudit(projectId, c.name, 'Client Assigned', null, client.clientName || client.clientId);
+            await projectAudit(projectId, c.name, 'POC Assigned', null, poc.employeeName || poc.employeeId);
+            await sendProjectMail(poc.employeeId, poc.email,
+                'Project POC Assignment',
+                `You have been assigned as Project POC for project ${name}.\n\nPlease login to access project details and allocate required resources.`,
+                projectId, 'PROJECT_POC');
+            founderEvents.ping('createProject');
+            return JSON.stringify({ ok: true, projectId, projectName: name, pocName: poc.employeeName });
+        });
+
+        // ── Founder: change project status ──────────────────────────────────────
+        this.on('updateProjectStatus', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can change project status.' });
+            const { projectId, status } = req.data;
+            const VALID = ['Planning', 'Active', 'On Hold', 'Completed', 'Cancelled'];
+            if (!VALID.includes(status)) return JSON.stringify({ error: 'Invalid status.' });
+            const p = await SELECT.one.from(PROJECT).columns('projectId', 'status').where({ projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            await UPDATE(PROJECT).set({ status }).where({ projectId });
+            await projectAudit(projectId, c.name, 'Status Changed', p.status, status);
+
+            // Cancelling (or completing) a project releases its committed bandwidth: all
+            // capacity/utilization calculations count only ACTIVE_PROJECT_STATUSES projects,
+            // so the allocations stop consuming capacity immediately while the roster is
+            // preserved (and automatically reinstated if the project is reactivated).
+            if (status === 'Cancelled' && p.status !== 'Cancelled') {
+                const allocs = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: projectId });
+                if ((allocs || []).length) await projectAudit(projectId, c.name, 'Resources Released', `${allocs.length} allocation(s)`, 'Project cancelled — capacity freed');
+            }
+            founderEvents.ping('updateProjectStatus');
+            return JSON.stringify({ ok: true, projectId, status });
+        });
+
+        // ── Founder: complete the planning meeting → advance lifecycle ──────────
+        this.on('completePlanningMeeting', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can complete the planning meeting.' });
+            const { projectId } = req.data;
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'planningMeetingId', 'lifecycleStage', 'status').where({ projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            if (project.status !== 'Planning') return JSON.stringify({ error: 'Project is not in Planning status.' });
+            if (!project.planningMeetingId) return JSON.stringify({ error: 'No planning meeting scheduled. Schedule a meeting first.' });
+            if (project.lifecycleStage !== 'MeetingScheduled') return JSON.stringify({ error: 'Planning meeting must be in Scheduled state.' });
+
+            await UPDATE(MEETING).set({ status: 'Completed' }).where({ meetingId: project.planningMeetingId });
+            await UPDATE(PROJECT).set({ lifecycleStage: 'MeetingCompleted' }).where({ projectId });
+            await projectAudit(projectId, c.name, 'Planning Meeting Completed', 'MeetingScheduled', 'MeetingCompleted');
+            return JSON.stringify({ ok: true, projectId, lifecycleStage: 'MeetingCompleted' });
+        });
+
+        // ── Founder: allocate project budget → advance lifecycle ─────────────────
+        this.on('saveBudgetAllocation', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can allocate the budget.' });
+            const { projectId, totalBudget, departmentBudgets, otherBudgets, categoryBudgets } = req.data;
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'lifecycleStage', 'status', 'executionBudget').where({ projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            if (project.status !== 'Planning') return JSON.stringify({ error: 'Budget can only be set for Planning projects.' });
+            if (project.lifecycleStage !== 'MeetingCompleted') return JSON.stringify({ error: 'Complete the planning meeting before allocating budget.' });
+
+            // The allocation ceiling is the EXECUTION BUDGET (contract − profit reserve),
+            // NOT the contract value. Fall back to the entered total when no execution
+            // budget was defined at creation (legacy projects).
+            const execBudget = Number(project.executionBudget) || 0;
+            const ceiling = execBudget > 0 ? execBudget : (Number(totalBudget) || 0);
+            if (!(ceiling > 0)) return JSON.stringify({ error: 'No Execution Budget is defined for this project. Set the contract value & margin first.' });
+
+            // Sum category allocation and enforce the ceiling server-side.
+            let catArr = [];
+            try { catArr = (typeof categoryBudgets === 'string') ? JSON.parse(categoryBudgets || '[]') : (categoryBudgets || []); } catch (_) { catArr = []; }
+            const catSum = catArr.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+            if (catSum > ceiling) {
+                return JSON.stringify({ error: `Allocated budget (₹${catSum.toLocaleString('en-IN')}) exceeds the Execution Budget (₹${ceiling.toLocaleString('en-IN')}) by ₹${(catSum - ceiling).toLocaleString('en-IN')}.` });
+            }
+
+            const budgetId = `${projectId}-BUDGET`;
+            await UPSERT.into(PROJECT_BUDGET).entries({
+                budgetId, project_projectId: projectId,
+                totalBudget: ceiling,
+                departmentBudgets: (typeof departmentBudgets === 'string') ? departmentBudgets : JSON.stringify(departmentBudgets || []),
+                otherBudgets: (typeof otherBudgets === 'string') ? otherBudgets : JSON.stringify(otherBudgets || []),
+                categoryBudgets: (typeof categoryBudgets === 'string') ? categoryBudgets : JSON.stringify(categoryBudgets || []),
+                allocatedAt: new Date(), allocatedByName: c.name || 'Founder'
+            });
+            await UPDATE(PROJECT).set({ lifecycleStage: 'BudgetAllocated' }).where({ projectId });
+            await projectAudit(projectId, c.name, 'Budget Allocated', null, `₹${catSum.toLocaleString('en-IN')} of ₹${ceiling.toLocaleString('en-IN')} execution budget`);
+
+            // Notify POC that resource allocation can begin.
+            if (project.poc_employeeId) {
+                const poc = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email').where({ employeeId: project.poc_employeeId });
+                if (poc) {
+                    await createNotification(poc.employeeId, 'PROJECT_BUDGET_ALLOCATED', 'Budget Approved — Allocate Resources',
+                        `Budget for project "${project.projectName}" has been approved. You can now allocate resources.`, projectId);
+                    await sendProjectMail(poc.employeeId, poc.email,
+                        'Budget Approved — Resource Allocation Can Begin',
+                        `The project budget for "${project.projectName}" has been approved (Execution Budget: ₹${ceiling.toLocaleString('en-IN')}).\n\nResource planning can now begin. Please login to allocate resources.`,
+                        projectId, 'PROJECT_BUDGET_ALLOCATED');
+                }
+            }
+            return JSON.stringify({ ok: true, projectId, lifecycleStage: 'BudgetAllocated' });
+        });
+
+        // ── Get saved budget allocation for a project ─────────────────────────────
+        this.on('getBudgetAllocation', async (req) => {
+            const c = await projectCaller(req);
+            const { projectId } = req.data;
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId', 'budget',
+                'projectType_code', 'projectTypeName', 'contractValue', 'profitMarginPct', 'profitReserveAmount', 'executionBudget').where({ projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            // Resource categories = ROLES derived DYNAMICALLY from active employees'
+            // designations in the project type's department(s). Never hardcoded.
+            // Empty type departments → UI falls back to departments (legacy).
+            await ensureProjectTypes();
+            const ptype = await SELECT.one.from(PROJECT_TYPE).columns('planningModel').where({ code: project.projectType_code || 'OTHER' });
+            const typeDepts = await typeDepartments(project.projectType_code);
+            const typeResourceCategories = typeDepts.length ? await rolesForDepartments(typeDepts) : [];
+            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: projectId });
+            const isAlloc = resources.some(r => r.employee_employeeId === c.employeeId);
+            if (!isFounderCaller(req, c) && project.poc_employeeId !== c.employeeId && !isAlloc)
+                return JSON.stringify({ error: 'Access denied.' });
+            const budget = await SELECT.one.from(PROJECT_BUDGET).where({ budgetId: `${projectId}-BUDGET` });
+            let deptBudgets = [], otherBdgs = [], catBudgets = [];
+            if (budget) {
+                try { deptBudgets = JSON.parse(budget.departmentBudgets || '[]'); } catch (_) {}
+                try { otherBdgs = JSON.parse(budget.otherBudgets || '[]'); } catch (_) {}
+                try { catBudgets = JSON.parse(budget.categoryBudgets || '[]'); } catch (_) {}
+            }
+            // The allocation ceiling is the EXECUTION BUDGET (contract − reserve).
+            // Falls back to Project.budget for legacy projects with no financial model.
+            const executionBudget = Number(project.executionBudget) || Number(project.budget) || 0;
+            const allocated = catBudgets.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+            return JSON.stringify({
+                found: !!budget,
+                budgetDefined: executionBudget > 0,
+                // Financial model (carried from project creation).
+                projectTypeName: project.projectTypeName || 'Other',
+                contractValue: Number(project.contractValue) || 0,
+                profitMarginPct: Number(project.profitMarginPct) || 0,
+                profitReserveAmount: Number(project.profitReserveAmount) || 0,
+                executionBudget,
+                // Legacy total kept = executionBudget for older readers.
+                totalBudget: executionBudget,
+                // Resource categories driven by Project Type (SAP roles / dev roles).
+                // Non-resource cost buckets are the standard COST_CATEGORIES minus the
+                // generic "Resource Cost" line (resources are now the type roles).
+                resourceCategories: typeResourceCategories,
+                planningModel: ptype ? ptype.planningModel : 'MonthlyCapacity',
+                costCategories: COST_CATEGORIES.filter(x => x !== 'Resource Cost'),
+                categories: COST_CATEGORIES,
+                categoryBudgets: catBudgets, allocatedAmount: allocated, remainingAmount: executionBudget - allocated,
+                departmentBudgets: deptBudgets, otherBudgets: otherBdgs,
+                allocatedAt: budget ? budget.allocatedAt : null,
+                allocatedByName: budget ? budget.allocatedByName : null
+            });
+        });
+
+        // ── Founder: per-project Budget vs Actual analysis (Founder ONLY) ─────────
+        // Actual cost = Σ(logged hours × active hourlyCost), grouped by department with
+        // drill-down to individual employee cost. Paired against allocated dept budgets.
+        this.on('getProjectBudgetAnalysis', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can view budget analysis.' });
+            const p = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'budget').where({ projectId: req.data.projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+
+            const resources = await SELECT.from(PROJECT_RESOURCE).where({ project_projectId: p.projectId });
+            const tasks = await SELECT.from(PROJECT_TASK).columns('taskId').where({ project_projectId: p.projectId });
+            const taskIds = tasks.map(t => t.taskId);
+            const entries = taskIds.length ? await SELECT.from(ENTRY).columns('timesheet_timesheetId', 'projectTask_taskId', 'hoursWorked').where({ projectTask_taskId: { in: taskIds } }) : [];
+            const tsIds = [...new Set(entries.map(e => e.timesheet_timesheetId))];
+            const headers = tsIds.length ? await SELECT.from(HEADER).columns('timesheetId', 'employee_employeeId').where({ timesheetId: { in: tsIds } }) : [];
+            const empOfTs = {}; headers.forEach(h => { empOfTs[h.timesheetId] = h.employee_employeeId; });
+            const salaries = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'hourlyCost', 'isActive');
+            const hourly = {}; salaries.forEach(s => { if (s.isActive !== false) hourly[s.employee_employeeId] = Number(s.hourlyCost) || 0; });
+
+            // Worked hours per employee.
+            const workedByEmp = {};
+            entries.forEach(e => { const emp = empOfTs[e.timesheet_timesheetId]; if (!emp) return; workedByEmp[emp] = (workedByEmp[emp] || 0) + (Number(e.hoursWorked) || 0); });
+
+            // Employee → department (allocated resources first; fall back to EmployeeMaster).
+            const deptOfEmp = {}, nameOfEmp = {};
+            resources.forEach(r => { deptOfEmp[r.employee_employeeId] = r.department || 'Unassigned'; nameOfEmp[r.employee_employeeId] = r.employeeName; });
+            const empIds = [...new Set([...Object.keys(workedByEmp), ...resources.map(r => r.employee_employeeId)])];
+            const missing = empIds.filter(id => !deptOfEmp[id] || !nameOfEmp[id]);
+            if (missing.length) {
+                const erows = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department').where({ employeeId: { in: missing } });
+                erows.forEach(e => { if (!deptOfEmp[e.employeeId]) deptOfEmp[e.employeeId] = e.department || 'Unassigned'; if (!nameOfEmp[e.employeeId]) nameOfEmp[e.employeeId] = e.employeeName; });
+            }
+
+            // Allocated department budgets from the saved ProjectBudget row.
+            const budgetRow = await SELECT.one.from(PROJECT_BUDGET).where({ budgetId: `${p.projectId}-BUDGET` });
+            let deptAlloc = [], otherAlloc = [];
+            if (budgetRow) {
+                try { deptAlloc = JSON.parse(budgetRow.departmentBudgets || '[]'); } catch (_) {}
+                try { otherAlloc = JSON.parse(budgetRow.otherBudgets || '[]'); } catch (_) {}
+            }
+            const totalBudget = budgetRow ? Number(budgetRow.totalBudget) || 0 : (Number(p.budget) || 0);
+            const allocByDept = {}; (deptAlloc || []).forEach(d => { allocByDept[d.department || d.name || 'Unassigned'] = Number(d.amount) || 0; });
+
+            // Aggregate actual cost + resources per department.
+            const deptMap = {};
+            empIds.forEach(id => {
+                const dept = deptOfEmp[id] || 'Unassigned';
+                const hrs = Math.round((workedByEmp[id] || 0) * 10) / 10;
+                const rate = hourly[id] || 0;
+                const cost = hrs * rate;
+                if (!deptMap[dept]) deptMap[dept] = { department: dept, actual: 0, resources: [] };
+                deptMap[dept].actual += cost;
+                deptMap[dept].resources.push({ employeeId: id, employeeName: nameOfEmp[id] || id, workedHours: hrs, hourlyCost: Math.round(rate * 100) / 100, cost: Math.round(cost) });
+            });
+            // Ensure departments with an allocation but no spend still appear.
+            Object.keys(allocByDept).forEach(d => { if (!deptMap[d]) deptMap[d] = { department: d, actual: 0, resources: [] }; });
+
+            const byDepartment = Object.keys(deptMap).map(d => {
+                const allocated = allocByDept[d] || 0;
+                const actual = Math.round(deptMap[d].actual);
+                return {
+                    department: d, allocated: allocated, actual: actual,
+                    remaining: Math.round(allocated - actual),
+                    variance: Math.round(allocated - actual),
+                    variancePct: allocated > 0 ? Math.round(((actual - allocated) / allocated) * 100) : (actual > 0 ? 100 : 0),
+                    resources: deptMap[d].resources.sort((a, b) => b.cost - a.cost)
+                };
+            }).sort((a, b) => b.actual - a.actual);
+
+            const totalActual = byDepartment.reduce((s, d) => s + d.actual, 0);
+            const prog = projectProgress(tasks);
+            const progFrac = Math.max(0.05, (Number(prog) || 0) / 100);
+            const forecast = Math.round(totalActual / progFrac);
+
+            // Allocated vs unallocated pool (derived from the budget JSON).
+            const sumDept = (deptAlloc || []).reduce((s, d) => s + (Number(d.amount) || 0), 0);
+            const sumOther = (otherAlloc || []).reduce((s, o) => s + (Number(o.amount) || 0), 0);
+            const allocatedBudget = Math.round(sumDept + sumOther);
+            const unallocatedBudget = Math.round(totalBudget - allocatedBudget);
+
+            // Additional-budget requests for this project, grouped by status.
+            const reqRows = await SELECT.from(PROJECT_BUDGET_REQUEST).where({ project_projectId: p.projectId }).orderBy('createdAt desc');
+            const mapReq = r => ({
+                requestId: r.requestId, department: r.department,
+                requestedAmount: Number(r.requestedAmount) || 0, approvedAmount: Number(r.approvedAmount) || 0,
+                justification: r.justification || '', businessImpact: r.businessImpact || '',
+                requestedByName: r.requestedByName, utilizationSnapshot: Number(r.utilizationSnapshot) || 0,
+                founderComments: r.founderComments || '', status: r.status,
+                requestDate: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '',
+                decidedAt: r.decidedAt ? new Date(r.decidedAt).toLocaleDateString() : ''
+            });
+            const requests = {
+                pending: reqRows.filter(r => r.status === 'Pending Founder Approval').map(mapReq),
+                approved: reqRows.filter(r => r.status === 'Approved').map(mapReq),
+                rejected: reqRows.filter(r => r.status === 'Rejected' || r.status === 'Withdrawn').map(mapReq)
+            };
+
+            return JSON.stringify({
+                projectId: p.projectId, projectName: p.projectName,
+                totalBudget: totalBudget, totalActual: totalActual,
+                totalRemaining: Math.round(totalBudget - totalActual),
+                allocatedBudget: allocatedBudget, unallocatedBudget: unallocatedBudget,
+                utilizationPct: totalBudget > 0 ? Math.round((totalActual / totalBudget) * 100) : 0,
+                forecastAtCompletion: forecast, progressPct: Number(prog) || 0,
+                byDepartment: byDepartment,
+                otherBudgets: (otherAlloc || []).map(o => ({ category: o.category || o.name || 'Other', amount: Number(o.amount) || 0 })),
+                requests: requests,
+                hasBudget: !!budgetRow
+            });
+        });
+
+        // ── POC operational resource-planning indicators (NO financial data) ──────
+        // Capacity / utilization in hours & FTE %. Founder, POC or allocated employee.
+        this.on('getProjectResourcePlanning', async (req) => {
+            const c = await projectCaller(req);
+            const p = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId').where({ projectId: req.data.projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            const resources = await SELECT.from(PROJECT_RESOURCE).where({ project_projectId: p.projectId }).orderBy('department asc', 'employeeName asc');
+            const isPoc = p.poc_employeeId === c.employeeId;
+            const isAllocated = resources.some(r => r.employee_employeeId === c.employeeId);
+            if (!isFounderCaller(req, c) && !isPoc && !isAllocated) return JSON.stringify({ error: 'You do not have access to this project.' });
+
+            // Single source of truth: utilization/capacity come from the central
+            // engine (effective capacity = capacity − holidays/events − leave −
+            // training − internal − reserve), NOT a flat 160h × bandwidth estimate.
+            const empIds = resources.map(r => r.employee_employeeId);
+            const profiles = await rp.computeProfiles(empIds);
+            const allocPctByEmp = {}; resources.forEach(r => { allocPctByEmp[r.employee_employeeId] = Number(r.bandwidth) || 0; });
+
+            const rows = resources.map(r => {
+                const prof = profiles.get(r.employee_employeeId);
+                const eff = prof ? prof.effectiveCapacityHours : rp.DEFAULT_MONTHLY_CAPACITY;
+                const used = prof ? prof.allocatedHours : 0;
+                return {
+                    employeeId: r.employee_employeeId, employeeName: r.employeeName,
+                    department: r.department || 'Unassigned',
+                    utilizationPct: prof ? prof.utilizationPct : 0,
+                    utilizedHours: used,
+                    availableHours: prof ? prof.freeHours : eff,
+                    standardHours: eff,
+                    status: prof ? prof.status : 'Available',
+                    projectAllocationPct: allocPctByEmp[r.employee_employeeId] || 0
+                };
+            });
+
+            // Department roll-up (averaged engine utilization).
+            const deptAgg = {};
+            rows.forEach(r => { (deptAgg[r.department] = deptAgg[r.department] || []).push(r.utilizationPct); });
+            const departments = Object.keys(deptAgg).map(d => {
+                const arr = deptAgg[d]; const avg = Math.round(arr.reduce((s, v) => s + v, 0) / arr.length);
+                return { department: d, utilizationPct: avg, capacityAvailablePct: Math.max(0, 100 - avg), memberCount: arr.length };
+            }).sort((a, b) => b.utilizationPct - a.utilizationPct);
+
+            return JSON.stringify({ projectId: p.projectId, standardHours: rp.DEFAULT_MONTHLY_CAPACITY, departments: departments, resources: rows });
+        });
+
+        // ══════════════════════════════════════════════════════════════════════
+        // RESOURCE PLANNING & RECOMMENDATION (Phase 1 backend)
+        // All calculation is bulk-computed in resource-planning.js — no per-row
+        // DB round-trips, no frontend loops. Visible to Project Managers / Founder.
+        // ══════════════════════════════════════════════════════════════════════
+        const canPlanResources = (req, c) => isFounderCaller(req, c) || c.role === 'manager' || c.role === 'founder';
+
+        // Resource Allocation screen feed: every active employee's utilization,
+        // skills, current projects, free hours, availability + status, plus KPIs.
+        // Server-side filtering keeps it performant for large directories.
+        this.on('getResourcePool', async (req) => {
+            const c = await projectCaller(req);
+            if (!canPlanResources(req, c)) return JSON.stringify({ error: 'Only Project Managers can view the resource pool.' });
+            const d = req.data || {};
+            const profiles = await rp.computeProfiles(null);
+            const all = [...profiles.values()];
+            let rows = all;
+            if (d.department) rows = rows.filter(r => (r.department || '').toLowerCase() === String(d.department).toLowerCase());
+            if (d.skill) { const sk = String(d.skill).toLowerCase(); rows = rows.filter(r => r.skills.some(s => s.includes(sk))); }
+            if (d.nameSearch) {
+                const q = String(d.nameSearch).toLowerCase();
+                rows = rows.filter(r => (r.employeeName || '').toLowerCase().includes(q) || (r.employeeId || '').toLowerCase().includes(q));
+            }
+            if (d.minUtil != null && d.minUtil !== '') rows = rows.filter(r => r.utilizationPct >= Number(d.minUtil));
+            if (d.maxUtil != null && d.maxUtil !== '') rows = rows.filter(r => r.utilizationPct <= Number(d.maxUtil));
+            if (d.availabilityDate) rows = rows.filter(r => r.nextAvailableDate != null && r.nextAvailableDate <= String(d.availabilityDate));
+            if (d.status) rows = rows.filter(r => r.status === d.status);
+            rows.sort((a, b) => a.utilizationPct - b.utilizationPct || (a.employeeName || '').localeCompare(b.employeeName || ''));
+            // KPIs always reflect the full pool, not the filtered subset.
+            return JSON.stringify({ resources: rows, kpis: rp.computeKpis(all), total: rows.length, poolSize: all.length });
+        });
+
+        // Dashboard KPI tiles (full active workforce).
+        this.on('getResourcePlanningKPIs', async (req) => {
+            const c = await projectCaller(req);
+            if (!canPlanResources(req, c)) return JSON.stringify({ error: 'Not authorised.' });
+            const profiles = await rp.computeProfiles(null);
+            return JSON.stringify({ kpis: rp.computeKpis([...profiles.values()]) });
+        });
+
+        // Founder/Manager: over-utilized employees + override audit trail.
+        // Powers the "Over-Utilized Employees" section + Resource Utilization
+        // Overview cards on the resource dashboard.
+        this.on('getOverUtilizedResources', async (req) => {
+            const c = await projectCaller(req);
+            if (!canPlanResources(req, c)) return JSON.stringify({ error: 'Not authorised.' });
+            const profiles = [...(await rp.computeProfiles(null)).values()];
+            const kpis = rp.computeKpis(profiles);
+
+            // Which employees have at least one overridden allocation.
+            const overriddenRows = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'isOverridden').where({ isOverridden: true });
+            const overriddenEmps = new Set((overriddenRows || []).map(r => r.employee_employeeId));
+
+            const overUtilized = profiles
+                .filter(p => p.totalBandwidth > 100)
+                .sort((a, b) => b.totalBandwidth - a.totalBandwidth)
+                .map(p => ({
+                    employeeId: p.employeeId, employeeName: p.employeeName, department: p.department,
+                    utilizationPct: p.totalBandwidth,            // FTE allocation %
+                    band: p.band.band, color: p.band.color,
+                    projects: p.currentProjects.map(x => x.projectName),
+                    status: overriddenEmps.has(p.employeeId) ? 'Overridden' : 'Over-allocated'
+                }));
+
+            const audit = await SELECT.from(RESOURCE_OVERRIDE).orderBy('overriddenAt desc');
+            const overrides = (audit || []).slice(0, 100).map(o => ({
+                employeeName: o.employeeName, projectName: o.projectName,
+                utilizationBefore: o.utilizationBefore, utilizationAfter: o.utilizationAfter,
+                reason: o.reason, overriddenByName: o.overriddenByName,
+                overriddenAt: o.overriddenAt ? new Date(o.overriddenAt).toLocaleString('en-IN') : ''
+            }));
+            return JSON.stringify({ kpis, overUtilized, overrides });
+        });
+
+        // Upcoming capacity risks + projects with resource shortages (engine-driven).
+        this.on('getResourceCapacityRisks', async (req) => {
+            const c = await projectCaller(req);
+            if (!canPlanResources(req, c)) return JSON.stringify({ error: 'Not authorised.' });
+            const profiles = [...(await rp.computeProfiles(null)).values()];
+            const byId = {}; profiles.forEach(p => { byId[p.employeeId] = p; });
+
+            // Capacity risks: overallocated now, or fully booked but freeing soon (bench risk).
+            const soon = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+            const risks = [];
+            profiles.forEach(p => {
+                if (p.status === 'Overallocated') risks.push({ type: 'Overallocated', employeeName: p.employeeName, detail: `${p.utilizationPct}% utilized`, severity: 'high' });
+                else if (p.totalBandwidth >= 100 && p.nextAvailableDate && p.nextAvailableDate <= soon) risks.push({ type: 'Rolling off soon', employeeName: p.employeeName, detail: `frees up ${p.nextAvailableDate}`, severity: 'medium' });
+            });
+
+            // Resource shortages: ACTIVE projects with no resources, or whose required
+            // skills aren't covered by the allocated team.
+            const projects = await SELECT.from(PROJECT).columns('projectId', 'projectName', 'status', 'requiredSkills').where({ status: { in: ACTIVE_PROJECT_STATUSES } });
+            const allocs = await SELECT.from(PROJECT_RESOURCE).columns('project_projectId', 'employee_employeeId');
+            const teamByProj = {}; (allocs || []).forEach(a => { (teamByProj[a.project_projectId] = teamByProj[a.project_projectId] || []).push(a.employee_employeeId); });
+            const shortages = [];
+            (projects || []).forEach(pr => {
+                const team = teamByProj[pr.projectId] || [];
+                if (!team.length) { shortages.push({ projectId: pr.projectId, projectName: pr.projectName, reason: 'No resources allocated' }); return; }
+                const req = rp.parseSkills(pr.requiredSkills);
+                if (req.length) {
+                    const have = new Set();
+                    team.forEach(id => (byId[id] ? byId[id].skills : []).forEach(s => have.add(s)));
+                    const missing = req.filter(s => !have.has(s));
+                    if (missing.length) shortages.push({ projectId: pr.projectId, projectName: pr.projectName, reason: `Missing skills: ${missing.join(', ')}` });
+                }
+            });
+            return JSON.stringify({ risks, shortages });
+        });
+
+        // Project Health — Budget / Resource / Schedule / Profitability (green/yellow/red)
+        // + the full cost forecast. Founder, POC or allocated employee.
+        this.on('getProjectHealth', async (req) => {
+            const c = await projectCaller(req);
+            const p = await SELECT.one.from(PROJECT).where({ projectId: req.data.projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: p.projectId });
+            const isPoc = p.poc_employeeId === c.employeeId;
+            const isAlloc = resources.some(r => r.employee_employeeId === c.employeeId);
+            if (!isFounderCaller(req, c) && !isPoc && !isAlloc) return JSON.stringify({ error: 'You do not have access to this project.' });
+
+            const { actualCost, actualHours, hourly } = await projectActualCost(p.projectId);
+            const fin = await projectFinancials(p, hourly);
+            const tasks = await SELECT.from(PROJECT_TASK).where({ project_projectId: p.projectId });
+            const progress = projectProgress(tasks);
+
+            // ── Schedule: progress vs elapsed time ───────────────────────────────
+            const today = new Date();
+            let elapsedPct = 0;
+            if (p.startDate && p.endDate) {
+                const s = new Date(p.startDate), e = new Date(p.endDate);
+                elapsedPct = e > s ? Math.max(0, Math.min(100, Math.round((today - s) / (e - s) * 100))) : 100;
+            }
+            const overdue = tasks.filter(t => String(t.status || '').toLowerCase() !== 'completed' && t.dueDate && String(t.dueDate).slice(0, 10) < today.toISOString().slice(0, 10)).length;
+            const scheduleHealth = (p.status === 'Completed') ? 'Green'
+                : (progress >= elapsedPct - 10 && overdue === 0) ? 'Green'
+                    : (progress >= elapsedPct - 25) ? 'Yellow' : 'Red';
+
+            // ── Budget: projected total cost vs execution budget ─────────────────
+            const budgetRatio = fin.executionBudget > 0 ? fin.projectedTotalCost / fin.executionBudget : 0;
+            const budgetHealth = fin.executionBudget <= 0 ? 'Yellow' : healthColor(budgetRatio, 0.9, 1.0001);
+
+            // ── Profitability: projected margin% vs expected margin% ─────────────
+            const profitabilityHealth = fin.contractValue <= 0 ? 'Green'
+                : (fin.projectedMarginPct >= fin.expectedMarginPct) ? 'Green'
+                    : (fin.projectedMarginPct >= fin.expectedMarginPct - 5) ? 'Yellow' : 'Red';
+
+            // ── Resource: team utilization + skill shortage (engine) ─────────────
+            let resourceHealth = 'Green';
+            if (!resources.length) resourceHealth = 'Red';
+            else {
+                const profiles = [...(await rp.computeProfiles(resources.map(r => r.employee_employeeId))).values()];
+                const over = profiles.filter(x => x.status === 'Overallocated').length;
+                const nearly = profiles.filter(x => x.status === 'Nearly Full').length;
+                resourceHealth = over > 0 ? 'Red' : nearly > 0 ? 'Yellow' : 'Green';
+            }
+
+            return JSON.stringify({
+                projectId: p.projectId, projectName: p.projectName, projectTypeName: p.projectTypeName || 'Other',
+                progress, elapsedPct, overdueTasks: overdue, actualCost, actualHours,
+                ...fin,
+                expectedProfit: fin.profitReserve,
+                health: { budget: budgetHealth, resource: resourceHealth, schedule: scheduleHealth, profitability: profitabilityHealth }
+            });
+        });
+
+        // Founder Financial Dashboard — per-project + portfolio rollup. Founder only.
+        this.on('getFounderFinancials', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can view financials.' });
+            const projects = await SELECT.from(PROJECT).where({ status: { '<>': 'Cancelled' } }).orderBy('createdAt desc');
+            const rows = [];
+            const portfolio = { contractValue: 0, profitReserve: 0, executionBudget: 0, currentSpend: 0, forecastedSpend: 0, expectedProfit: 0, projectedProfit: 0 };
+            for (const p of (projects || [])) {
+                const { actualCost, hourly } = await projectActualCost(p.projectId);
+                const fin = await projectFinancials(p, hourly);
+                const actualMarginPct = fin.contractValue > 0 ? Math.round((fin.contractValue - actualCost) / fin.contractValue * 100) : 0;
+                rows.push({
+                    projectId: p.projectId, projectName: p.projectName, projectTypeName: p.projectTypeName || 'Other', status: p.status,
+                    contractValue: fin.contractValue, profitReserve: fin.profitReserve, executionBudget: fin.executionBudget,
+                    currentSpend: actualCost, forecastedSpend: fin.projectedTotalCost,
+                    expectedMarginPct: fin.expectedMarginPct, projectedMarginPct: fin.projectedMarginPct, actualMarginPct,
+                    expectedProfit: fin.profitReserve, projectedProfit: fin.projectedMargin,
+                    budgetVariance: fin.budgetVariance, profitVariance: fin.profitVariance
+                });
+                portfolio.contractValue += fin.contractValue;
+                portfolio.profitReserve += fin.profitReserve;
+                portfolio.executionBudget += fin.executionBudget;
+                portfolio.currentSpend += actualCost;
+                portfolio.forecastedSpend += fin.projectedTotalCost;
+                portfolio.expectedProfit += fin.profitReserve;
+                portfolio.projectedProfit += fin.projectedMargin;
+            }
+            portfolio.budgetVariance = portfolio.executionBudget - portfolio.forecastedSpend;
+            portfolio.profitVariance = portfolio.projectedProfit - portfolio.expectedProfit;
+            portfolio.expectedMarginPct = portfolio.contractValue > 0 ? Math.round(portfolio.expectedProfit / portfolio.contractValue * 100) : 0;
+            portfolio.projectedMarginPct = portfolio.contractValue > 0 ? Math.round(portfolio.projectedProfit / portfolio.contractValue * 100) : 0;
+            return JSON.stringify({ portfolio, projects: rows });
+        });
+
+        // Multi-month capacity timeline for ONE employee (range optional).
+        this.on('getCapacityForecast', async (req) => {
+            const c = await projectCaller(req);
+            if (!canPlanResources(req, c)) return JSON.stringify({ error: 'Not authorised.' });
+            const d = req.data || {};
+            const from = d.fromDate || new Date().toISOString().slice(0, 10);
+            const to = d.toDate || new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+            const tl = await rp.computeCapacityTimeline([d.employeeId], from, to);
+            const row = tl.get(d.employeeId);
+            return JSON.stringify(row || { months: [] });
+        });
+
+        // Per-project month-by-month capacity forecast for every allocated resource,
+        // over the project's own duration. Flags the months a commitment breaks.
+        this.on('getProjectCapacityForecast', async (req) => {
+            const c = await projectCaller(req);
+            const p = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'startDate', 'endDate').where({ projectId: req.data.projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'employeeName', 'department', 'bandwidth').where({ project_projectId: p.projectId });
+            const isAllocated = resources.some(r => r.employee_employeeId === c.employeeId);
+            if (!isFounderCaller(req, c) && p.poc_employeeId !== c.employeeId && !isAllocated)
+                return JSON.stringify({ error: 'You do not have access to this project.' });
+            if (!resources.length) return JSON.stringify({ projectId: p.projectId, months: [], resources: [] });
+
+            const today = new Date().toISOString().slice(0, 10);
+            const from = (p.startDate && String(p.startDate) > today) ? String(p.startDate).slice(0, 10) : today;
+            const to = p.endDate ? String(p.endDate).slice(0, 10) : new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+            const tl = await rp.computeCapacityTimeline(resources.map(r => r.employee_employeeId), from, to);
+            const first = tl.values().next().value;
+            const monthLabels = first ? first.months.map(m => m.label) : [];
+            const rows = resources.map(r => {
+                const row = tl.get(r.employee_employeeId) || { months: [], breachMonths: [], peakUtilization: 0 };
+                return {
+                    employeeId: r.employee_employeeId, employeeName: r.employeeName, department: r.department,
+                    thisProjectPct: Number(r.bandwidth) || 0,
+                    months: row.months, breachMonths: row.breachMonths, peakUtilization: row.peakUtilization
+                };
+            });
+            return JSON.stringify({ projectId: p.projectId, projectName: p.projectName, monthLabels, resources: rows });
+        });
+
+        // ── Resource Planning admin config (weights/threshold/working basis) ──────
+        // Read is open to planners; write is Founder/HR only. Drives the engine.
+        this.on('getResourcePlanningConfig', async (req) => {
+            const c = await projectCaller(req);
+            if (!canPlanResources(req, c) && c.role !== 'hr') return JSON.stringify({ error: 'Not authorised.' });
+            const cfg = await rp.loadConfig();
+            const canEdit = isFounderCaller(req, c) || c.role === 'founder' || c.role === 'hr';
+            return JSON.stringify({ config: cfg, canEdit });
+        });
+
+        this.on('saveResourcePlanningConfig', async (req) => {
+            const c = await projectCaller(req);
+            if (!(isFounderCaller(req, c) || c.role === 'founder' || c.role === 'hr'))
+                return JSON.stringify({ error: 'Only the Founder or HR can change resource planning settings.' });
+            const d = req.data || {};
+            const num = (v, dft) => (v == null || v === '' || isNaN(Number(v))) ? dft : Number(v);
+            const entry = {
+                configId: 'GLOBAL',
+                skillWeight: num(d.skillWeight, 60), availabilityWeight: num(d.availabilityWeight, 20),
+                utilizationWeight: num(d.utilizationWeight, 10), experienceWeight: num(d.experienceWeight, 10),
+                maxUtilizationThreshold: num(d.maxUtilizationThreshold, 100),
+                standardDailyHours: num(d.standardDailyHours, 8), standardWorkingDays: num(d.standardWorkingDays, 20),
+                nonBillablePct: num(d.nonBillablePct, 0),
+                monthlyOverhead: num(d.monthlyOverhead, 10000)
+            };
+            if (entry.skillWeight + entry.availabilityWeight + entry.utilizationWeight + entry.experienceWeight <= 0)
+                return JSON.stringify({ error: 'Recommendation weights cannot all be zero.' });
+            await UPSERT.into(RP_CONFIG).entries(entry);
+            return JSON.stringify({ ok: true, config: entry });
+        });
+
+        // ── Company events (non-working time that reduces capacity for everyone) ──
+        this.on('getCompanyEvents', async (req) => {
+            const c = await projectCaller(req);
+            if (!canPlanResources(req, c) && c.role !== 'hr') return JSON.stringify({ error: 'Not authorised.' });
+            const rows = await SELECT.from(COMPANY_EVENT).orderBy('fromDate desc');
+            return JSON.stringify({
+                events: (rows || []).map(e => ({ eventId: e.eventId, eventName: e.eventName,
+                    fromDate: e.fromDate, toDate: e.toDate, description: e.description })),
+                canEdit: isFounderCaller(req, c) || c.role === 'founder' || c.role === 'hr'
+            });
+        });
+
+        this.on('saveCompanyEvent', async (req) => {
+            const c = await projectCaller(req);
+            if (!(isFounderCaller(req, c) || c.role === 'founder' || c.role === 'hr'))
+                return JSON.stringify({ error: 'Only the Founder or HR can manage company events.' });
+            const d = req.data || {};
+            if (!String(d.eventName || '').trim()) return JSON.stringify({ error: 'Event name is required.' });
+            if (!d.fromDate) return JSON.stringify({ error: 'Start date is required.' });
+            if (d.toDate && String(d.toDate) < String(d.fromDate)) return JSON.stringify({ error: 'End date cannot be before start date.' });
+            const eventId = d.eventId || `EVT-${Date.now()}`;
+            await UPSERT.into(COMPANY_EVENT).entries({
+                eventId, eventName: String(d.eventName).trim(), fromDate: d.fromDate,
+                toDate: d.toDate || d.fromDate, description: (d.description || '').trim()
+            });
+            return JSON.stringify({ ok: true, eventId });
+        });
+
+        this.on('deleteCompanyEvent', async (req) => {
+            const c = await projectCaller(req);
+            if (!(isFounderCaller(req, c) || c.role === 'founder' || c.role === 'hr'))
+                return JSON.stringify({ error: 'Only the Founder or HR can manage company events.' });
+            await DELETE.from(COMPANY_EVENT).where({ eventId: req.data.eventId });
+            return JSON.stringify({ ok: true });
+        });
+
+        // Recommend & rank employees for a project allocation. Skill weight 70% +
+        // capacity weight 30%. requiredSkills override the project's stored skills
+        // when provided (lets the PM tune the search live).
+        this.on('recommendResources', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            let requiredSkills = d.requiredSkills;
+            let requiredRole = (d.requiredRole || '').trim();
+            let projectTypeName = '';
+            let excludeIds = new Set();
+            let isPoc = false;
+            if (d.projectId) {
+                const p = await SELECT.one.from(PROJECT).columns('projectId', 'requiredSkills', 'poc_employeeId', 'projectTypeName').where({ projectId: d.projectId });
+                if (!p) return JSON.stringify({ error: 'Project not found.' });
+                isPoc = p.poc_employeeId === c.employeeId;
+                if (requiredSkills == null || requiredSkills === '') requiredSkills = p.requiredSkills;
+                projectTypeName = p.projectTypeName || '';
+                // Don't recommend employees already allocated to this project.
+                const existing = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: d.projectId });
+                excludeIds = new Set((existing || []).map(r => r.employee_employeeId));
+            }
+            if (!canPlanResources(req, c) && !isPoc) {
+                return JSON.stringify({ error: 'Not authorised to recommend resources.' });
+            }
+            const neededBandwidth = Number(d.neededBandwidth) || 0;
+            // Single source of truth: same engine + same configurable weights.
+            const config = await rp.loadConfig();
+            const overhead = Number(config.monthlyOverhead) || 0;
+            const profiles = await rp.computeProfiles(null, { config });
+            // Role-match needs the employee's designation — fetch once, in bulk.
+            const desigRows = await SELECT.from(EMPLOYEE).columns('employeeId', 'designation');
+            const desigById = {}; (desigRows || []).forEach(r => { desigById[r.employeeId] = String(r.designation || '').toLowerCase(); });
+            // PM-safe cost rates (no salary). Estimate = rate × needed hrs over project months.
+            const salaryRows = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'monthlySalary', 'hourlyCost', 'isActive').where({ isActive: true });
+            const salaryByEmp = {}; (salaryRows || []).forEach(s => { salaryByEmp[s.employee_employeeId] = s; });
+            let recoMonths = 1;
+            if (d.projectId) { const pr = await SELECT.one.from(PROJECT).columns('startDate', 'endDate').where({ projectId: d.projectId }); if (pr) recoMonths = monthsBetweenInclusive(pr.startDate, pr.endDate); }
+            const roleLc = requiredRole.toLowerCase();
+            const roleTokens = roleLc.split(/[\s,/]+/).filter(t => t.length > 2);
+            const ranked = [...profiles.values()]
+                .filter(p => !excludeIds.has(p.employeeId))
+                .map(p => {
+                    const sc = rp.scoreProfile(p, requiredSkills, config);
+                    // Role match: does the employee's designation (or skills) contain the
+                    // required role tokens? Acts as a tie-break + visible signal.
+                    const hay = (desigById[p.employeeId] || '') + ' ' + (p.skills || []).join(' ');
+                    const roleMatched = roleLc && (hay.indexOf(roleLc) !== -1 || roleTokens.some(t => hay.indexOf(t) !== -1));
+                    const fitsBandwidth = neededBandwidth <= 0 || (p.totalBandwidth + neededBandwidth) <= 100;
+                    // Blend a small role bonus into the score so a role match ranks higher.
+                    const blended = roleLc ? Math.min(100, sc.score + (roleMatched ? 8 : 0)) : sc.score;
+                    // Budget-aware: PM-safe cost rate + estimated cost for needed bandwidth.
+                    const costRatePerHour = rp.loadedHourlyRate(salaryByEmp[p.employeeId], p.monthlyCapacityHours, overhead);
+                    const estHours = (neededBandwidth > 0 ? neededBandwidth : 100) / 100 * (p.monthlyCapacityHours || rp.DEFAULT_MONTHLY_CAPACITY) * recoMonths;
+                    const estimatedAllocationCost = Math.round(costRatePerHour * estHours);
+                    return { ...p, ...sc, score: blended, roleMatched: !!roleMatched, requiredRole,
+                        costRatePerHour, estimatedAllocationCost,
+                        fitsBandwidth, recommended: sc.skillMatchPct >= 50 && p.freeHours > 0 && fitsBandwidth && (!roleLc || roleMatched) };
+                })
+                .sort((a, b) => (b.roleMatched - a.roleMatched)
+                    || b.score - a.score
+                    || b.skillMatchPct - a.skillMatchPct
+                    || b.freeHours - a.freeHours
+                    || (a.employeeName || '').localeCompare(b.employeeName || ''));
+            return JSON.stringify({
+                requiredSkills: rp.parseSkills(requiredSkills),
+                requiredRole, projectTypeName,
+                neededBandwidth,
+                recommendations: ranked.slice(0, Number(d.limit) > 0 ? Number(d.limit) : 25)
+            });
+        });
+
+        // ── POC: request additional department budget (→ Founder approval) ────────
+        this.on('requestAdditionalBudget', async (req) => {
+            const c = await projectCaller(req);
+            const { projectId, department, requestedAmount, justification, businessImpact } = req.data;
+            const p = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId').where({ projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            if (p.poc_employeeId !== c.employeeId) return JSON.stringify({ error: 'Only the project POC can request additional budget.' });
+            // Validate against the organisation's real departments (+ 'Other').
+            const deptRows = await SELECT.from(EMPLOYEE).columns('department').where({ isActive: true });
+            const validDepts = new Set(['Other']);
+            (deptRows || []).forEach(r => { const dd = String(r.department || '').trim(); if (dd) validDepts.add(dd); });
+            if (!validDepts.has(department)) return JSON.stringify({ error: 'Please select a valid department.' });
+            const amount = Number(requestedAmount) || 0;
+            if (!(amount > 0)) return JSON.stringify({ error: 'Requested amount must be greater than 0.' });
+            if (!String(justification || '').trim()) return JSON.stringify({ error: 'Justification is required.' });
+            if (!String(businessImpact || '').trim()) return JSON.stringify({ error: 'Business impact is required.' });
+
+            const dup = await SELECT.one.from(PROJECT_BUDGET_REQUEST).columns('requestId')
+                .where({ project_projectId: projectId, department, status: 'Pending Founder Approval' });
+            if (dup) return JSON.stringify({ error: `A ${department} budget request is already pending Founder approval.` });
+
+            const util = await deptUtilizationPct(projectId, department);
+            const requestId = await nextBudgetRequestId(projectId);
+            await INSERT.into(PROJECT_BUDGET_REQUEST).entries({
+                requestId, project_projectId: projectId, department,
+                requestedAmount: amount, justification: String(justification).trim(), businessImpact: String(businessImpact).trim(),
+                requestedById: c.employeeId, requestedByName: c.name || '',
+                status: 'Pending Founder Approval', approvedAmount: 0, utilizationSnapshot: util
+            });
+            await projectAudit(projectId, c.name, 'Budget Request Created', null, `${department}: ₹${amount.toLocaleString('en-IN')}`);
+
+            // Notify all active founders.
+            const founders = await SELECT.from(EMPLOYEE).columns('employeeId', 'email').where({ role: 'founder', isActive: true });
+            for (const f of (founders || [])) {
+                await sendProjectMail(f.employeeId, f.email, 'Additional Budget Request',
+                    `Project "${p.projectName}" has requested additional ${department} budget (₹${amount.toLocaleString('en-IN')}).\n\nJustification: ${String(justification).trim()}\n\nPlease review and approve/reject in the project's Budget Analysis.`,
+                    projectId, 'BUDGET_REQUEST');
+            }
+            return JSON.stringify({ ok: true, requestId });
+        });
+
+        // ── POC: withdraw a still-pending request ─────────────────────────────────
+        this.on('withdrawBudgetRequest', async (req) => {
+            const c = await projectCaller(req);
+            const r = await SELECT.one.from(PROJECT_BUDGET_REQUEST).where({ requestId: req.data.requestId });
+            if (!r) return JSON.stringify({ error: 'Request not found.' });
+            const p = await SELECT.one.from(PROJECT).columns('poc_employeeId').where({ projectId: r.project_projectId });
+            if (!p || p.poc_employeeId !== c.employeeId) return JSON.stringify({ error: 'Only the requesting POC can withdraw this request.' });
+            if (r.status !== 'Pending Founder Approval') return JSON.stringify({ error: 'Only pending requests can be withdrawn.' });
+            await UPDATE(PROJECT_BUDGET_REQUEST).set({ status: 'Withdrawn', decidedAt: new Date() }).where({ requestId: r.requestId });
+            await projectAudit(r.project_projectId, c.name, 'Budget Request Withdrawn', 'Pending Founder Approval', 'Withdrawn');
+            return JSON.stringify({ ok: true });
+        });
+
+        // ── List budget requests for a project (POC sees own amounts; no project budget) ──
+        this.on('getMyBudgetRequests', async (req) => {
+            const c = await projectCaller(req);
+            const projectId = req.data.projectId;
+            const p = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId').where({ projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: projectId });
+            const isPoc = p.poc_employeeId === c.employeeId;
+            const isAllocated = resources.some(r => r.employee_employeeId === c.employeeId);
+            if (!isFounderCaller(req, c) && !isPoc && !isAllocated) return JSON.stringify({ error: 'You do not have access to this project.' });
+            const rows = await SELECT.from(PROJECT_BUDGET_REQUEST).where({ project_projectId: projectId }).orderBy('createdAt desc');
+            return JSON.stringify({
+                isPoc,
+                requests: (rows || []).map(r => ({
+                    requestId: r.requestId, department: r.department,
+                    requestedAmount: Number(r.requestedAmount) || 0,
+                    approvedAmount: Number(r.approvedAmount) || 0,
+                    status: r.status, founderComments: r.founderComments || '',
+                    requestedByName: r.requestedByName,
+                    requestDate: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '',
+                    decidedAt: r.decidedAt ? new Date(r.decidedAt).toLocaleDateString() : ''
+                }))
+            });
+        });
+
+        // ── Founder: approve (full/partial) or reject a budget request ────────────
+        this.on('decideBudgetRequest', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can decide budget requests.' });
+            const { requestId, decision, approvedAmount, comments } = req.data;
+            const r = await SELECT.one.from(PROJECT_BUDGET_REQUEST).where({ requestId });
+            if (!r) return JSON.stringify({ error: 'Request not found.' });
+            if (r.status !== 'Pending Founder Approval') return JSON.stringify({ error: 'This request has already been decided.' });
+            const projectId = r.project_projectId;
+            const p = await SELECT.one.from(PROJECT).columns('projectId', 'projectName').where({ projectId });
+
+            if (decision === 'reject') {
+                if (!String(comments || '').trim()) return JSON.stringify({ error: 'Rejection comments are required.' });
+                await UPDATE(PROJECT_BUDGET_REQUEST).set({ status: 'Rejected', founderComments: String(comments).trim(), decidedByName: c.name || 'Founder', decidedAt: new Date() }).where({ requestId });
+                await projectAudit(projectId, c.name, 'Budget Request Rejected', `${r.department}: ₹${Number(r.requestedAmount).toLocaleString('en-IN')}`, String(comments).trim());
+                const poc = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'email').where({ employeeId: r.requestedById });
+                if (poc) await sendProjectMail(poc.employeeId, poc.email, 'Additional Budget Request Rejected',
+                    `Your additional ${r.department} budget request for "${p.projectName}" has been rejected.\n\nFounder comments: ${String(comments).trim()}`,
+                    projectId, 'BUDGET_REQUEST_DECISION');
+                return JSON.stringify({ ok: true, status: 'Rejected' });
+            }
+
+            if (decision !== 'approve') return JSON.stringify({ error: 'Invalid decision.' });
+            const approve = (approvedAmount == null || Number(approvedAmount) === 0) ? Number(r.requestedAmount) || 0 : Number(approvedAmount);
+            if (!(approve > 0)) return JSON.stringify({ error: 'Approved amount must be greater than 0.' });
+            if (approve > (Number(r.requestedAmount) || 0)) return JSON.stringify({ error: 'Approved amount cannot exceed the requested amount.' });
+
+            const b = await readProjectBudget(projectId);
+            if (!b.row) return JSON.stringify({ error: 'No budget has been allocated for this project yet.' });
+            if (approve > b.unallocated) return JSON.stringify({ error: 'Insufficient unallocated budget available.' });
+
+            // Add to the department allocation (create the entry if absent).
+            const deptArr = b.deptArr.slice();
+            let entry = deptArr.find(d => (d.department || d.name) === r.department);
+            const deptBefore = entry ? Number(entry.amount) || 0 : 0;
+            if (entry) entry.amount = deptBefore + approve;
+            else deptArr.push({ department: r.department, amount: approve });
+            const deptAfter = deptBefore + approve;
+
+            await UPDATE(PROJECT_BUDGET).set({ departmentBudgets: JSON.stringify(deptArr) }).where({ budgetId: `${projectId}-BUDGET` });
+            await UPDATE(PROJECT_BUDGET_REQUEST).set({
+                status: 'Approved', approvedAmount: approve, founderComments: String(comments || '').trim(),
+                decidedByName: c.name || 'Founder', decidedAt: new Date(),
+                deptBudgetBefore: deptBefore, deptBudgetAfter: deptAfter,
+                unallocatedBefore: b.unallocated, unallocatedAfter: Math.round((b.unallocated - approve) * 100) / 100
+            }).where({ requestId });
+            await projectAudit(projectId, c.name, 'Budget Request Approved',
+                `${r.department}: ₹${deptBefore.toLocaleString('en-IN')}`,
+                `${r.department}: ₹${deptAfter.toLocaleString('en-IN')} (+₹${approve.toLocaleString('en-IN')})`);
+
+            const poc = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'email').where({ employeeId: r.requestedById });
+            if (poc) {
+                const partial = approve < (Number(r.requestedAmount) || 0);
+                await sendProjectMail(poc.employeeId, poc.email, 'Additional Budget Request Approved',
+                    `Your additional ${r.department} budget request for "${p.projectName}" has been ${partial ? 'partially ' : ''}approved (₹${approve.toLocaleString('en-IN')}).` +
+                    (String(comments || '').trim() ? `\n\nFounder comments: ${String(comments).trim()}` : ''),
+                    projectId, 'BUDGET_REQUEST_DECISION');
+            }
+            return JSON.stringify({ ok: true, status: 'Approved', approvedAmount: approve, deptBudgetAfter: deptAfter, unallocated: Math.round((b.unallocated - approve) * 100) / 100 });
+        });
+
+        // ── Distinct organisation departments (drives budget department pickers) ──
+        this.on('getDepartments', async (req) => {
+            const rows = await SELECT.from(EMPLOYEE).columns('department').where({ isActive: true });
+            const set = new Set();
+            (rows || []).forEach(r => { const d = String(r.department || '').trim(); if (d) set.add(d); });
+            return JSON.stringify({ departments: [...set].sort((a, b) => a.localeCompare(b)) });
+        });
+
+        // ── List active managers for planning-meeting participant picker ───────────
+        this.on('getManagersForMeeting', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can view managers.' });
+            const managers = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'designation', 'email')
+                .where({ role: 'manager', isActive: true }).orderBy('department asc', 'employeeName asc');
+            return JSON.stringify({ managers: managers || [] });
+        });
+
+        // ── Founder: create + assign a project task ─────────────────────────────
+        this.on('createProjectTask', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId').where({ projectId: d.projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            // Only the Founder or the assigned project POC can create/assign tasks.
+            if (!(isFounderCaller(req, c) || project.poc_employeeId === c.employeeId))
+                return JSON.stringify({ error: 'Only the Founder or the project POC can assign tasks.' });
+            if (!(d.taskName || '').trim()) return JSON.stringify({ error: 'Task Name is required.' });
+            if (!d.assignedToId) return JSON.stringify({ error: 'Please assign the task to an allocated employee.' });
+            // Estimated hours drive the weighted progress calc → must be > 0.
+            if (!(Number(d.estimatedHours) > 0)) return JSON.stringify({ error: 'Estimated Hours must be greater than 0.' });
+            // Assignee MUST be allocated to this project.
+            const alloc = await SELECT.one.from(PROJECT_RESOURCE).columns('allocationId').where({ project_projectId: d.projectId, employee_employeeId: d.assignedToId });
+            if (!alloc) return JSON.stringify({ error: 'You can only assign tasks to employees allocated to this project.' });
+            if (d.dueDate && d.startDate && String(d.dueDate) < String(d.startDate)) return JSON.stringify({ error: 'Due Date cannot be before Start Date.' });
+            const assignee = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email').where({ employeeId: d.assignedToId });
+
+            const taskId = await nextProjectTaskId(d.projectId);
+            await INSERT.into(PROJECT_TASK).entries({
+                taskId, project_projectId: d.projectId, taskName: d.taskName.trim(),
+                description: (d.description || '').trim(), assignedTo_employeeId: d.assignedToId,
+                assignedToName: assignee ? assignee.employeeName : d.assignedToId,
+                priority: d.priority || 'Medium', status: 'Not Started',
+                startDate: d.startDate || null, dueDate: d.dueDate || null,
+                estimatedHours: Number(d.estimatedHours) || 0, actualHours: 0,
+                milestone_milestoneId: d.milestoneId || null   // optional milestone scope
+            });
+            await projectAudit(d.projectId, c.name, 'Task Created', null, d.taskName.trim());
+            await projectAudit(d.projectId, c.name, 'Task Assigned', null, (assignee && assignee.employeeName) || d.assignedToId);
+            if (assignee) await sendProjectMail(assignee.employeeId, assignee.email,
+                'New Project Task Assigned',
+                `You have been assigned the task “${d.taskName.trim()}” in project ${project.projectName}.`,
+                taskId, 'PROJECT_TASK_ASSIGNED');
+            founderEvents.ping('createProjectTask');
+            return JSON.stringify({ ok: true, taskId });
+        });
+
+        // ── POC (or Founder): employees available to allocate, grouped by dept ──
+        this.on('getAllocatableEmployees', async (req) => {
+            const c = await projectCaller(req);
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId', 'projectType_code', 'executionBudget', 'budget', 'startDate', 'endDate').where({ projectId: req.data.projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            const allowed = isFounderCaller(req, c) || project.poc_employeeId === c.employeeId;
+            if (!allowed) return JSON.stringify({ error: 'Only the project POC can allocate resources.' });
+
+            // PM-safe cost rates (fully-loaded, no salary exposed) + budget consumption.
+            const config = await rp.loadConfig();
+            const overhead = Number(config.monthlyOverhead) || 0;
+            const projMonths = monthsBetweenInclusive(project.startDate, project.endDate);
+            const salaryRows = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'monthlySalary', 'hourlyCost', 'isActive').where({ isActive: true });
+            const salaryByEmp = {}; (salaryRows || []).forEach(s => { salaryByEmp[s.employee_employeeId] = s; });
+            const executionBudget = Number(project.executionBudget) || Number(project.budget) || 0;
+
+            // Roles are derived DYNAMICALLY from active employees' designations in the
+            // project type's department(s). Type with departments configured → role-driven
+            // (eligible = active employees in those depts); type OTHER → legacy funded-dept gate.
+            await ensureProjectTypes();
+            const ptype = await SELECT.one.from(PROJECT_TYPE).columns('planningModel', 'phases', 'modules').where({ code: project.projectType_code || 'OTHER' });
+            const parseJ = s => { try { return JSON.parse(s || '[]') || []; } catch (_) { return []; } };
+            const typeDepts = await typeDepartments(project.projectType_code);
+            const typeDeptSet = new Set(typeDepts.map(x => String(x).trim().toLowerCase()));
+            const typeAware = typeDepts.length > 0;        // department-driven (SAP / Dev / …)
+            const typeCategories = typeAware ? await rolesForDepartments(typeDepts) : [];
+
+            const funded = typeAware ? null : await fundedDepartments(req.data.projectId);
+            // Funded roles = dynamic roles that received budget (>0); else all dynamic roles.
+            let fundedCategories = typeCategories;
+            if (typeAware) {
+                const b = await readProjectBudget(req.data.projectId);
+                let catArr = []; try { catArr = JSON.parse((b.row && b.row.categoryBudgets) || '[]') || []; } catch (_) {}
+                const fundedSet = new Set(catArr.filter(x => (Number(x.amount) || 0) > 0).map(x => String(x.category)));
+                const funcats = typeCategories.filter(cat => fundedSet.has(cat));
+                if (funcats.length) fundedCategories = funcats;
+            }
+
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'isActive', 'role', 'designation', 'monthlyCapacityHours', 'status', 'roleCategory_roleId', 'specialization_specId', 'yearsOfExperience', 'certifications', 'baseAvailabilityPct').where({ isActive: true });
+            // Master name maps for the hierarchical (Dept → Role → Spec) grid.
+            const roleNameRows = await SELECT.from(ROLE_MASTER).columns('roleId', 'name');
+            const specNameRows = await SELECT.from(SPEC_MASTER).columns('specId', 'name');
+            const roleNameById = {}; roleNameRows.forEach(r => { roleNameById[r.roleId] = r.name; });
+            const specNameById = {}; specNameRows.forEach(s => { specNameById[s.specId] = s.name; });
+            const existing = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'bandwidth', 'role', 'phase', 'module', 'totalAllocationCost').where({ project_projectId: req.data.projectId });
+            const onProject = {}; existing.forEach(r => { onProject[r.employee_employeeId] = r; });
+            const allocatedResourceCost = (existing || []).reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0);
+
+            const list = [];
+            for (const e of (emps || [])) {
+                // Exclude the designated POC (the POC is a distinct role, never a
+                // resource) and any executive/high-authority user (org-wide access).
+                if (e.employeeId === project.poc_employeeId) continue;
+                if (isExecutiveEmployee(e)) continue;
+                const st = String(e.status || 'Active').toLowerCase();
+                if (st === 'inactive' || st === 'resigned') continue;
+                if (typeAware) {
+                    // Role-driven: only employees in the project type's department(s).
+                    if (!typeDeptSet.has(String(e.department || '').trim().toLowerCase())) continue;
+                } else if (!funded.set.has(String(e.department || '').trim().toLowerCase())) {
+                    continue;   // legacy: restrict to budget-approved departments
+                }
+                const usedElsewhere = await usedBandwidth(e.employeeId, req.data.projectId); // excludes this project
+                const ex = onProject[e.employeeId];
+                const here = ex ? (ex.bandwidth || 0) : 0;
+                const capacity = Number(e.monthlyCapacityHours) > 0 ? Number(e.monthlyCapacityHours) : rp.DEFAULT_MONTHLY_CAPACITY;
+                const costRatePerHour = rp.loadedHourlyRate(salaryByEmp[e.employeeId], capacity, overhead);
+                // Salary-only Cost Per Hour (overhead shown separately as flat misc).
+                const costPerHour = rp.baseHourlyRate(salaryByEmp[e.employeeId], capacity);
+                list.push({
+                    employeeId: e.employeeId, employeeName: e.employeeName, department: e.department || 'Others',
+                    designation: e.designation || '',
+                    currentAllocation: usedElsewhere + here,            // total incl this project
+                    available: Math.max(0, 100 - usedElsewhere - here), // remaining after current
+                    allocatedHere: here,
+                    role: ex ? (ex.role || '') : '', phase: ex ? (ex.phase || '') : '', module: ex ? (ex.module || '') : '',
+                    // ── Hierarchical classification + profile (for the Dept→Role→Spec grid) ──
+                    roleCategoryId: e.roleCategory_roleId || '', roleCategoryName: roleNameById[e.roleCategory_roleId] || '',
+                    specializationId: e.specialization_specId || '', specializationName: specNameById[e.specialization_specId] || '',
+                    yearsOfExperience: Number(e.yearsOfExperience) || 0,
+                    certifications: e.certifications || '',
+                    baseAvailabilityPct: (e.baseAvailabilityPct != null ? e.baseAvailabilityPct : 100),
+                    // PM-safe cost: rate only (never salary). Monthly hours = capacity;
+                    // total project months drive the full estimated allocation cost.
+                    costRatePerHour, costPerHour, monthlyCapacityHours: capacity
+                });
+            }
+            // Recommendation ordering (Phase 8): within each group the best candidates
+            // float up — higher availability, lower utilization, more experience, then
+            // certified, then name. The hierarchical grid preserves this order per spec.
+            list.sort((a, b) =>
+                (b.available - a.available) ||
+                (a.currentAllocation - b.currentAllocation) ||
+                ((Number(b.yearsOfExperience) || 0) - (Number(a.yearsOfExperience) || 0)) ||
+                (((b.certifications ? 1 : 0)) - ((a.certifications ? 1 : 0))) ||
+                (a.employeeName || '').localeCompare(b.employeeName || '')
+            );
+            // Group by ROLE (designation) for role-driven projects, else by department.
+            const groups = {};
+            list.forEach(x => { const key = typeAware ? (x.designation || 'Unassigned Role') : x.department; (groups[key] = groups[key] || []).push(x); });
+            const departments = Object.keys(groups).sort().map(g => ({ department: g, employees: groups[g] }));
+
+            // ── Data-driven Department → Role → Employees structure (authoritative) ──
+            // Built entirely from employee master classification; the frontend renders
+            // whatever this returns, so new departments/roles appear with no code change.
+            // Roles with no employees never appear (only present employees create groups).
+            // showModule is data-derived: a role shows the Module column when any of its
+            // employees carries a specialization — no hardcoded "Functional" check.
+            const deptRoleMap = {};
+            list.forEach(e => {
+                const dep = e.department || 'Others';
+                const role = e.roleCategoryName || e.designation || 'Unclassified';
+                deptRoleMap[dep] = deptRoleMap[dep] || {};
+                (deptRoleMap[dep][role] = deptRoleMap[dep][role] || []).push(e);
+            });
+            const grouped = Object.keys(deptRoleMap).sort().map(dep => ({
+                department: dep,
+                roles: Object.keys(deptRoleMap[dep]).sort().map(role => {
+                    const employees = deptRoleMap[dep][role];
+                    return { roleName: role, showModule: employees.some(x => x.specializationName), employees };
+                })
+            }));
+            return JSON.stringify({
+                projectId: req.data.projectId, departments, grouped,
+                typeAware,
+                // Type-aware → eligible "categories" (roles); legacy → eligible departments.
+                eligibleCategories: typeAware ? fundedCategories : [],
+                eligibleDepartments: typeAware ? [] : funded.names,
+                budgetDefined: typeAware ? true : funded.names.length > 0,
+                // Type-driven planning config for the allocation UI.
+                planningModel: ptype ? ptype.planningModel : 'MonthlyCapacity',
+                roleOptions: typeAware ? fundedCategories : [],
+                phaseOptions: ptype ? parseJ(ptype.phases) : [],
+                moduleOptions: ptype ? parseJ(ptype.modules) : [],
+                // Cost / budget consumption (PM-safe — rates only, no salary).
+                executionBudget,
+                allocatedResourceCost: Math.round(allocatedResourceCost),
+                remainingBudget: Math.round(executionBudget - allocatedResourceCost),
+                projectMonths: projMonths,
+                // Monthly overhead (already folded into costRatePerHour) — surfaced so
+                // the UI can DECOMPOSE the estimate into Base + Misc without changing totals.
+                monthlyOverhead: Math.round(overhead)
+            });
+        });
+
+        // ── POC (or Founder): allocate resources (FTE bandwidth validated) ──────
+        this.on('allocateResources', async (req) => {
+            const c = await projectCaller(req);
+            const { projectId } = req.data;
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'pocName', 'status', 'lifecycleStage', 'projectType_code', 'executionBudget', 'budget', 'startDate', 'endDate').where({ projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            const allowed = isFounderCaller(req, c) || project.poc_employeeId === c.employeeId;
+            if (!allowed) return JSON.stringify({ error: 'Only the project POC can allocate resources.' });
+            // Block resource allocation for Planning projects until budget is allocated.
+            if (project.status === 'Planning' && project.lifecycleStage !== 'BudgetAllocated')
+                return JSON.stringify({ error: 'Budget must be allocated before resources can be assigned. Complete the planning meeting and budget allocation first.' });
+
+            const allocations = (req.data.allocations || []).filter(a => a && a.employeeId);
+            if (!allocations.length) return JSON.stringify({ error: 'No allocations provided.' });
+
+            // ── Cost context (PM-safe, fully-loaded rate snapshots) ──────────────────
+            const costConfig = await rp.loadConfig();
+            const monthlyOverhead = Number(costConfig.monthlyOverhead) || 0;
+            const projMonths = monthsBetweenInclusive(project.startDate, project.endDate);
+            const executionBudget = Number(project.executionBudget) || Number(project.budget) || 0;
+            const salaryRows = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'monthlySalary', 'hourlyCost', 'isActive').where({ isActive: true });
+            const salaryByEmp = {}; (salaryRows || []).forEach(s => { salaryByEmp[s.employee_employeeId] = s; });
+            const empCapRows = await SELECT.from(EMPLOYEE).columns('employeeId', 'monthlyCapacityHours').where({ employeeId: { in: allocations.map(a => a.employeeId) } });
+            const capByEmp = {}; (empCapRows || []).forEach(e => { capByEmp[e.employeeId] = Number(e.monthlyCapacityHours) > 0 ? Number(e.monthlyCapacityHours) : rp.DEFAULT_MONTHLY_CAPACITY; });
+            // Computes the frozen cost snapshot for one allocation line.
+            // Estimated Cost = (allocatedHours × Cost Per Hour) + (projectMonths × misc).
+            // Cost Per Hour is salary-only (no overhead); the ₹/month overhead is added as
+            // a flat miscellaneous line per allocated resource (matches the UI estimate).
+            const costFor = (empId, bw) => {
+                const cap = capByEmp[empId] || rp.DEFAULT_MONTHLY_CAPACITY;
+                const rate = rp.baseHourlyRate(salaryByEmp[empId], cap);
+                const hours = (Number(bw) || 0) / 100 * cap * projMonths;   // total hours over the project
+                const misc = projMonths * monthlyOverhead;                  // flat misc per resource
+                return { rate, total: Math.round(rate * hours + misc) };
+            };
+
+            // Eligibility model (mirrors getAllocatableEmployees):
+            //  • Type-aware projects (SAP/Dev) → any active employee; role must be one
+            //    of the project type's resource categories (backend-enforced).
+            //  • Type = OTHER → legacy "funded departments" gate.
+            // Role-driven if the project type maps to department(s); roles + eligible
+            // employees both come dynamically from those departments' active staff.
+            await ensureProjectTypes();
+            const allocTypeDepts = await typeDepartments(project.projectType_code);
+            const allocTypeDeptSet = new Set(allocTypeDepts.map(x => String(x).trim().toLowerCase()));
+            const typeAware = allocTypeDepts.length > 0;
+            const typeCatSet = new Set((typeAware ? await rolesForDepartments(allocTypeDepts) : []).map(x => String(x).toLowerCase()));
+            const funded = typeAware ? null : await fundedDepartments(projectId);
+
+            // Override is a privileged action — only the Founder may knowingly create
+            // an overallocation (>100% FTE). POCs always get a hard block + warning.
+            const wantsOverride = req.data.allowOverride === true;
+            // The project POC (and the Founder) may override capacity limits when
+            // business need demands it — every override is tracked + audited.
+            const canOverride = isFounderCaller(req, c) || project.poc_employeeId === c.employeeId;
+            const overrideReason = String(req.data.overrideReason || '').trim();
+            if (wantsOverride && !canOverride) {
+                return JSON.stringify({ error: 'Only the project POC or Founder can override allocation capacity limits.' });
+            }
+
+            // Validate ALL first (atomic-ish: block the whole save on any violation).
+            // Hard errors (bad bandwidth / inactive employee) always block. Capacity
+            // overflows are collected; if any exist and override isn't granted, return
+            // a structured warning so the UI can prompt for confirmation.
+            const overallocations = [];
+            for (const a of allocations) {
+                const bw = Number(a.bandwidth) || 0;
+                if (!VALID_BANDWIDTH.has(bw)) return JSON.stringify({ error: `Bandwidth must be 25, 50, 75 or 100 (got ${a.bandwidth}).` });
+                const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'isActive', 'employeeName', 'role', 'designation', 'department').where({ employeeId: a.employeeId });
+                if (!emp) return JSON.stringify({ error: `Employee '${a.employeeId}' not found.` });
+                if (emp.isActive === false) return JSON.stringify({ error: `Employee '${emp.employeeName}' is inactive.` });
+                // The POC is never a resource; executives are never allocated.
+                if (a.employeeId === project.poc_employeeId) return JSON.stringify({ error: `${emp.employeeName} is the project POC and cannot also be assigned as a resource.` });
+                if (isExecutiveEmployee(emp)) return JSON.stringify({ error: `${emp.employeeName} is an executive/high-authority user and cannot be assigned as a project resource.` });
+                if (typeAware) {
+                    // Employee must belong to one of the type's departments, and the role
+                    // (if given) must be a real designation in those departments. Both
+                    // backend-enforced — defeats UI manipulation.
+                    if (!allocTypeDeptSet.has(String(emp.department || '').trim().toLowerCase())) {
+                        return JSON.stringify({ error: `${emp.employeeName} is not in a department mapped to this project type (${allocTypeDepts.join(', ')}).` });
+                    }
+                    const roleVal = String(a.role || '').trim();
+                    if (roleVal && !typeCatSet.has(roleVal.toLowerCase())) {
+                        return JSON.stringify({ error: `"${roleVal}" is not a valid role for this project type's departments.` });
+                    }
+                } else {
+                    // Legacy: department must have an approved budget allocation.
+                    if (!funded.set.has(String(emp.department || '').trim().toLowerCase())) {
+                        return JSON.stringify({ error: 'Resources can only be assigned from departments that have approved budget allocations for this project.' });
+                    }
+                }
+                const usedElsewhere = await usedBandwidth(a.employeeId, projectId);
+                if (usedElsewhere + bw > 100) {
+                    overallocations.push({
+                        employeeId: a.employeeId, employeeName: emp.employeeName,
+                        usedElsewhere, requested: bw, total: usedElsewhere + bw
+                    });
+                }
+            }
+            if (overallocations.length && !(wantsOverride && canOverride)) {
+                return JSON.stringify({
+                    warning: true,
+                    overallocations,
+                    canOverride,
+                    requiresReason: true,
+                    message: canOverride
+                        ? 'One or more allocations exceed 100% capacity. Provide a reason to override and continue.'
+                        : 'One or more allocations exceed 100% capacity. Reduce the bandwidth, or ask the POC/Founder to override.'
+                });
+            }
+            // A reason is mandatory whenever an override is actually performed.
+            if (overallocations.length && wantsOverride && !overrideReason) {
+                return JSON.stringify({ warning: true, overallocations, canOverride, requiresReason: true,
+                    message: 'A reason is required to override utilization limits.' });
+            }
+            const overrodeIds = new Set(overallocations.map(o => o.employeeId));
+
+            // ── Budget cost validation ───────────────────────────────────────────────
+            // Projected resource cost AFTER this save = existing allocations not in this
+            // batch + the batch's cost. Reject if it exceeds the Execution Budget.
+            if (executionBudget > 0) {
+                const batchEmpIds = new Set(allocations.map(a => a.employeeId));
+                const others = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'totalAllocationCost').where({ project_projectId: projectId });
+                let projectedCost = (others || []).filter(r => !batchEmpIds.has(r.employee_employeeId)).reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0);
+                for (const a of allocations) projectedCost += costFor(a.employeeId, a.bandwidth).total;
+                if (projectedCost > executionBudget) {
+                    return JSON.stringify({ error: `This allocation costs ₹${Math.round(projectedCost).toLocaleString('en-IN')} which exceeds the Execution Budget of ₹${executionBudget.toLocaleString('en-IN')} by ₹${Math.round(projectedCost - executionBudget).toLocaleString('en-IN')}. Reduce the allocation.` });
+                }
+            }
+
+            const newlyAdded = [];
+            for (const a of allocations) {
+                const bw = Number(a.bandwidth);
+                const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'email', 'monthlyCapacityHours').where({ employeeId: a.employeeId });
+                const allocationId = `${projectId}-${a.employeeId}`;
+                const prev = await SELECT.one.from(PROJECT_RESOURCE).columns('bandwidth', 'status', 'role', 'phase', 'module', 'milestone_milestoneId').where({ allocationId });
+                // Derived & persisted for fast dashboard reads (recomputed every save).
+                const capacity = Number(emp.monthlyCapacityHours) > 0 ? Number(emp.monthlyCapacityHours) : 160;
+                const allocatedHours = Math.round(bw / 100 * capacity * 100) / 100;
+                const isOverride = overrodeIds.has(a.employeeId);
+                // Cost snapshots — frozen at allocation time for historical accuracy.
+                const cst = costFor(a.employeeId, bw);
+                await UPSERT.into(PROJECT_RESOURCE).entries({
+                    allocationId, project_projectId: projectId, employee_employeeId: a.employeeId,
+                    employeeName: emp.employeeName || '', department: emp.department || 'Others', bandwidth: bw,
+                    startDate: a.startDate || null, endDate: a.endDate || null, allocatedHours,
+                    role: (a.role != null ? String(a.role).trim() : (prev ? prev.role : null)) || null,
+                    phase: (a.phase != null ? String(a.phase).trim() : (prev ? prev.phase : null)) || null,
+                    module: (a.module != null ? String(a.module).trim() : (prev ? prev.module : null)) || null,
+                    milestone_milestoneId: (a.milestoneId != null ? (a.milestoneId || null) : (prev ? prev.milestone_milestoneId : null)),
+                    status: prev ? (prev.status || 'Active') : 'Active',   // preserve historical status
+                    hourlyCostSnapshot: cst.rate, overheadSnapshot: monthlyOverhead, totalAllocationCost: cst.total,
+                    isOverridden: isOverride, overrideReason: isOverride ? overrideReason : null
+                });
+                if (isOverride) {
+                    const o = overallocations.find(x => x.employeeId === a.employeeId);
+                    // Immutable override audit record (Founder-visible).
+                    await INSERT.into(RESOURCE_OVERRIDE).entries({
+                        overrideId: `${projectId}-OVR-${a.employeeId}-${Date.now()}`,
+                        project_projectId: projectId, projectName: project.projectName || projectId,
+                        employee_employeeId: a.employeeId, employeeName: emp.employeeName || '',
+                        utilizationBefore: o.usedElsewhere, utilizationAfter: o.total,
+                        reason: overrideReason, overriddenById: c.employeeId, overriddenByName: c.name || '',
+                        overriddenAt: new Date()
+                    });
+                    await projectAudit(projectId, c.name, 'Utilization Override',
+                        `${o.usedElsewhere}% → ${o.total}%`, `${emp.employeeName}: ${overrideReason}`);
+                }
+                if (prev) {
+                    if (Number(prev.bandwidth) !== bw) await projectAudit(projectId, c.name, 'Allocation Changed', prev.bandwidth + '%', bw + '%');
+                } else {
+                    await projectAudit(projectId, c.name, 'Resource Added', null, `${emp.employeeName} @ ${bw}%`);
+                    newlyAdded.push(emp);
+                    await sendProjectMail(emp.employeeId, emp.email,
+                        'Project Resource Allocation',
+                        `You have been allocated to project ${project.projectName}.\n\nAllocated Bandwidth: ${bw}%\nProject POC: ${project.pocName || ''}`,
+                        projectId, 'PROJECT_ALLOCATION');
+                }
+            }
+            // Auto-activate Planning project on first resource allocation.
+            if (project.status === 'Planning') {
+                await UPDATE(PROJECT).set({ status: 'Active', lifecycleStage: 'Active' }).where({ projectId });
+                await projectAudit(projectId, c.name, 'Status Changed', 'Planning', 'Active');
+            }
+            founderEvents.ping('allocateResources');
+            return JSON.stringify({ ok: true, projectId, allocated: allocations.length, notified: newlyAdded.length, activated: project.status === 'Planning', overridden: overallocations.length });
+        });
+
+        // ── POC (or Founder): remove a resource ─────────────────────────────────
+        this.on('removeResource', async (req) => {
+            const c = await projectCaller(req);
+            const { projectId, employeeId } = req.data;
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'pocName').where({ projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            const allowed = isFounderCaller(req, c) || project.poc_employeeId === c.employeeId;
+            if (!allowed) return JSON.stringify({ error: 'Only the project POC can remove resources.' });
+            const row = await SELECT.one.from(PROJECT_RESOURCE).columns('employeeName', 'employee_employeeId')
+                .where({ allocationId: `${projectId}-${employeeId}` });
+            if (!row) return JSON.stringify({ error: 'This employee is not allocated to the project.' });
+
+            // ── Deallocation validation ─────────────────────────────────────────
+            // Block if the employee still owns open (non-completed) tasks in this project.
+            const openTasks = await SELECT.from(PROJECT_TASK).columns('taskId', 'taskName', 'status')
+                .where({ project_projectId: projectId, assignedTo_employeeId: employeeId, status: { '<>': 'Completed' } });
+            if (openTasks && openTasks.length) {
+                return JSON.stringify({
+                    error: `Cannot deallocate ${row.employeeName}: ${openTasks.length} open task(s) are still assigned in this project. Reassign or complete them first.`,
+                    blocked: true, openTasks: openTasks.map(t => ({ taskId: t.taskId, taskName: t.taskName, status: t.status }))
+                });
+            }
+            // Block if there are pending (Draft/Submitted) project timesheet entries.
+            const projTaskRows = await SELECT.from(PROJECT_TASK).columns('taskId').where({ project_projectId: projectId, assignedTo_employeeId: employeeId });
+            const projTaskIds = projTaskRows.map(t => t.taskId);
+            if (projTaskIds.length) {
+                const entries = await SELECT.from(ENTRY).columns('timesheet_timesheetId')
+                    .where({ projectTask_taskId: { in: projTaskIds } });
+                const tsIds = [...new Set(entries.map(e => e.timesheet_timesheetId))];
+                if (tsIds.length) {
+                    const pendingHdrs = await SELECT.from(HEADER).columns('timesheetId')
+                        .where({ timesheetId: { in: tsIds }, status: { in: ['Pending', 'Submitted'] } });
+                    if (pendingHdrs && pendingHdrs.length) {
+                        return JSON.stringify({
+                            error: `Cannot deallocate ${row.employeeName}: there are pending (unapproved) project timesheet entries. Wait for approval before deallocating.`,
+                            blocked: true
+                        });
+                    }
+                }
+            }
+
+            await DELETE.from(PROJECT_RESOURCE).where({ allocationId: `${projectId}-${employeeId}` });
+            await projectAudit(projectId, c.name, 'Resource Removed', row.employeeName, null);
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'email').where({ employeeId: employeeId });
+            if (emp) await sendProjectMail(emp.employeeId, emp.email,
+                'Project Deallocation',
+                `You have been deallocated from project ${project.projectName} by ${project.pocName || c.name}.`,
+                projectId, 'PROJECT_DEALLOCATION');
+            founderEvents.ping('removeResource');
+            return JSON.stringify({ ok: true });
+        });
+
+        // ── Assigned employee (or Founder): update task status / actual hours ───
+        this.on('updateProjectTaskStatus', async (req) => {
+            const c = await projectCaller(req);
+            const { taskId, status, actualHours } = req.data;
+            const VALID = ['Not Started', 'In Progress', 'In Review', 'Completed', 'Blocked'];
+            if (!VALID.includes(status)) return JSON.stringify({ error: 'Invalid status.' });
+            const task = await SELECT.one.from(PROJECT_TASK).where({ taskId });
+            if (!task) return JSON.stringify({ error: 'Task not found.' });
+            if (!isFounderCaller(req, c) && task.assignedTo_employeeId !== c.employeeId) {
+                return JSON.stringify({ error: 'You can only update tasks assigned to you.' });
+            }
+            const patch = { status };
+            if (actualHours !== undefined && actualHours !== null && actualHours !== '') patch.actualHours = Number(actualHours) || 0;
+            patch.completedAt = (status === 'Completed') ? new Date() : null;
+            await UPDATE(PROJECT_TASK).set(patch).where({ taskId });
+            await projectAudit(task.project_projectId, c.name, 'Status Changed', task.status, status);
+            founderEvents.ping('updateProjectTaskStatus');
+            return JSON.stringify({ ok: true, taskId, status });
+        });
+
+        // ── Scoped project list (Founder: all · POC: assigned · Employee: allocated)
+        this.on('getProjects', async (req) => {
+            const c = await projectCaller(req);
+            let projects = await SELECT.from(PROJECT).orderBy('createdAt desc');
+            if (!isFounderCaller(req, c)) {
+                const myAlloc = await SELECT.from(PROJECT_RESOURCE).columns('project_projectId').where({ employee_employeeId: c.employeeId });
+                const allowedIds = new Set(myAlloc.map(r => r.project_projectId));
+                projects = (projects || []).filter(p => {
+                    if (p.poc_employeeId === c.employeeId) return true;          // POC sees all their projects
+                    if (allowedIds.has(p.projectId) && p.status !== 'Planning') return true; // Employees only see Active+ allocated projects
+                    return false;
+                });
+            }
+            const ids = projects.map(p => p.projectId);
+            const tasks = ids.length ? await SELECT.from(PROJECT_TASK).columns('taskId', 'project_projectId', 'status', 'estimatedHours', 'actualHours').where({ project_projectId: { in: ids } }) : [];
+            const byProj = {}; tasks.forEach(t => { (byProj[t.project_projectId] = byProj[t.project_projectId] || []).push(t); });
+
+            // ── Budget utilization per project (consumed = hourlyCost × logged hours) ──
+            const taskProj = {}; tasks.forEach(t => { taskProj[t.taskId] = t.project_projectId; });
+            const allTaskIds = tasks.map(t => t.taskId);
+            const entries = allTaskIds.length ? await SELECT.from(ENTRY).columns('timesheet_timesheetId', 'projectTask_taskId', 'hoursWorked').where({ projectTask_taskId: { in: allTaskIds } }) : [];
+            const tsIds = [...new Set(entries.map(e => e.timesheet_timesheetId))];
+            const headers = tsIds.length ? await SELECT.from(HEADER).columns('timesheetId', 'employee_employeeId').where({ timesheetId: { in: tsIds } }) : [];
+            const empOfTs = {}; headers.forEach(h => { empOfTs[h.timesheetId] = h.employee_employeeId; });
+            const salaries = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'hourlyCost', 'isActive');
+            const hourly = {}; salaries.forEach(s => { if (s.isActive !== false) hourly[s.employee_employeeId] = Number(s.hourlyCost) || 0; });
+            const consumedByProj = {};
+            entries.forEach(e => {
+                const pid = taskProj[e.projectTask_taskId]; const emp = empOfTs[e.timesheet_timesheetId];
+                if (!pid || !emp) return;
+                consumedByProj[pid] = (consumedByProj[pid] || 0) + (Number(e.hoursWorked) || 0) * (hourly[emp] || 0);
+            });
+
+            const rows = projects.map(p => {
+                const allocated = Number(p.budget) || 0;
+                const consumed = Math.round(consumedByProj[p.projectId] || 0);
+                return {
+                    projectId: p.projectId, projectName: p.projectName, customerName: p.customerName,
+                    status: p.status, priority: p.priority, startDate: p.startDate, endDate: p.endDate,
+                    pocName: p.pocName, progress: projectProgress(byProj[p.projectId] || []),
+                    taskCount: (byProj[p.projectId] || []).length,
+                    budgetAllocated: allocated, budgetConsumed: consumed,
+                    budgetPct: allocated > 0 ? Math.round((consumed / allocated) * 100) : 0,
+                    lifecycleStage: p.lifecycleStage || 'Planning'
+                };
+            });
+            return JSON.stringify({ projects: rows, isFounder: isFounderCaller(req, c), isPocOf: projects.filter(p => p.poc_employeeId === c.employeeId).map(p => p.projectId) });
+        });
+
+        // ── Project detail (access-checked): project + resources + tasks + progress
+        this.on('getProjectDetail', async (req) => {
+            const c = await projectCaller(req);
+            const p = await SELECT.one.from(PROJECT).where({ projectId: req.data.projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            const resources = await SELECT.from(PROJECT_RESOURCE).where({ project_projectId: p.projectId }).orderBy('department asc', 'employeeName asc');
+            const tasks = await SELECT.from(PROJECT_TASK).where({ project_projectId: p.projectId }).orderBy('taskId asc');
+            const isPoc = p.poc_employeeId === c.employeeId;
+            const isAllocated = resources.some(r => r.employee_employeeId === c.employeeId);
+            if (!isFounderCaller(req, c) && !isPoc && !isAllocated) return JSON.stringify({ error: 'You do not have access to this project.' });
+            // Task counts for the progress / dashboard cards.
+            const today = new Date().toISOString().slice(0, 10);
+            const norm = s => String(s || '').toLowerCase().trim();
+            const taskStats = { total: tasks.length, completed: 0, ongoing: 0, pending: 0, blocked: 0, inReview: 0, overdue: 0 };
+            tasks.forEach(t => {
+                const s = norm(t.status);
+                if (s === 'completed') taskStats.completed++;
+                else if (s === 'in progress' || s === 'inprogress') taskStats.ongoing++;
+                else if (s === 'in review' || s === 'review') taskStats.inReview++;
+                else if (s === 'blocked') taskStats.blocked++;
+                else taskStats.pending++;
+                if (s !== 'completed' && t.dueDate && String(t.dueDate).slice(0, 10) < today) taskStats.overdue++;
+            });
+            // Total committed FTE per resource (across all active projects) → utilization badge.
+            const resUtil = await committedBandwidthByEmployee(resources.map(r => r.employee_employeeId));
+            // Milestone id → name map for the optional milestone tag on each allocation.
+            const projMilestones = await SELECT.from(MILESTONE).columns('milestoneId', 'name', 'sequence').where({ project_projectId: p.projectId }).orderBy('sequence asc');
+            const msNameById = {}; projMilestones.forEach(m => { msNameById[m.milestoneId] = m.name; });
+            return JSON.stringify({
+                project: {
+                    projectId: p.projectId, projectName: p.projectName, customerName: p.customerName,
+                    description: p.description, startDate: p.startDate, endDate: p.endDate,
+                    status: p.status, priority: p.priority, pocName: p.pocName, createdByName: p.createdByName,
+                    lifecycleStage: p.lifecycleStage || 'Planning', planningMeetingId: p.planningMeetingId || null,
+                    poc_employeeId: p.poc_employeeId,
+                    // Project-type-driven planning + financial model.
+                    projectType: p.projectType_code || 'OTHER', projectTypeName: p.projectTypeName || 'Other',
+                    contractValue: Number(p.contractValue) || 0, profitMarginPct: Number(p.profitMarginPct) || 0,
+                    profitReserveAmount: Number(p.profitReserveAmount) || 0, executionBudget: Number(p.executionBudget) || 0
+                },
+                progress: projectProgress(tasks),
+                taskStats: taskStats,
+                canManage: isFounderCaller(req, c), isPoc,
+                resources: resources.map(r => {
+                    const totalUtil = resUtil[r.employee_employeeId] || 0;
+                    return { employeeId: r.employee_employeeId, employeeName: r.employeeName, department: r.department,
+                        bandwidth: r.bandwidth, utilizationPct: totalUtil, isOverridden: r.isOverridden === true,
+                        role: r.role || '', phase: r.phase || '', module: r.module || '',
+                        milestoneId: r.milestone_milestoneId || '', milestoneName: msNameById[r.milestone_milestoneId] || '' };
+                }),
+                milestones: projMilestones.map(m => ({ milestoneId: m.milestoneId, name: m.name, sequence: m.sequence })),
+                tasks: (tasks || []).map(t => ({
+                    taskId: t.taskId, taskName: t.taskName, description: t.description, assignedTo: t.assignedTo_employeeId,
+                    assignedToName: t.assignedToName, priority: t.priority, status: t.status, startDate: t.startDate,
+                    dueDate: t.dueDate, estimatedHours: t.estimatedHours, actualHours: t.actualHours,
+                    mine: t.assignedTo_employeeId === c.employeeId
+                }))
+            });
+        });
+
+        // ── Founder: project dashboard ──────────────────────────────────────────
+        this.on('getProjectDashboard', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can view the project dashboard.' });
+            const [projects, tasks, resources] = await Promise.all([
+                SELECT.from(PROJECT).columns('projectId', 'status', 'endDate'),
+                SELECT.from(PROJECT_TASK).columns('project_projectId', 'status'),
+                SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'project_projectId')
+            ]);
+            const today = new Date().toISOString().slice(0, 10);
+            const isDone = s => String(s || '').toLowerCase() === 'completed';
+            const completedProjects = projects.filter(p => p.status === 'Completed').length;
+            const activeProjects = projects.filter(p => ACTIVE_PROJECT_STATUSES.includes(p.status)).length;
+            const delayed = projects.filter(p => p.status !== 'Completed' && p.status !== 'Cancelled' && p.endDate && String(p.endDate).slice(0, 10) < today).length;
+            const openTasks = tasks.filter(t => !isDone(t.status)).length;
+            const completedTasks = tasks.filter(t => isDone(t.status)).length;
+            // Active resource headcount counts only employees on capacity-consuming projects.
+            const activeProjIds = new Set(projects.filter(p => ACTIVE_PROJECT_STATUSES.includes(p.status)).map(p => p.projectId));
+            const activeResourceEmps = new Set(resources.filter(r => activeProjIds.has(r.project_projectId)).map(r => r.employee_employeeId));
+            return JSON.stringify({
+                totalProjects: projects.length, activeProjects, completedProjects, delayedProjects: delayed,
+                resourceCount: activeResourceEmps.size,
+                openTasks, completedTasks
+            });
+        });
+
+        // ── Audit log (Founder or the project POC) ──────────────────────────────
+        this.on('getProjectAuditLog', async (req) => {
+            const c = await projectCaller(req);
+            const p = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId').where({ projectId: req.data.projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            if (!isFounderCaller(req, c) && p.poc_employeeId !== c.employeeId) return JSON.stringify({ error: 'You do not have access to this audit log.' });
+            const rows = await SELECT.from(PROJECT_AUDIT).where({ project_projectId: p.projectId }).orderBy('at desc');
+            return JSON.stringify({
+                entries: (rows || []).map(r => ({
+                    userName: r.userName, action: r.action, oldValue: r.oldValue, newValue: r.newValue,
+                    at: r.at ? new Date(r.at).toLocaleString() : ''
+                }))
+            });
+        });
+
+        // ── Executive dashboard: budget, effort, issues, AI summary ─────────────
+        this.on('getProjectExecutive', async (req) => {
+            const c = await projectCaller(req);
+            const p = await SELECT.one.from(PROJECT).where({ projectId: req.data.projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            const resources = await SELECT.from(PROJECT_RESOURCE).where({ project_projectId: p.projectId });
+            const isPoc = p.poc_employeeId === c.employeeId;
+            const isAllocated = resources.some(r => r.employee_employeeId === c.employeeId);
+            if (!isFounderCaller(req, c) && !isPoc && !isAllocated) return JSON.stringify({ error: 'You do not have access to this project.' });
+
+            // Dashboard / execution metrics are hidden until the project is Active.
+            // While in Planning, only the lifecycle/planning screens are available.
+            if (p.status === 'Planning') {
+                return JSON.stringify({ planning: true, status: p.status, lifecycleStage: p.lifecycleStage || 'Planning',
+                    message: 'The project dashboard becomes available once the Planning Phase is complete and the project is Active.' });
+            }
+
+            const tasks = await SELECT.from(PROJECT_TASK).where({ project_projectId: p.projectId });
+            const issues = await SELECT.from(PROJECT_ISSUE).where({ project_projectId: p.projectId }).orderBy('createdAt desc');
+
+            // ── Worked hours from APPROVED-or-saved timesheets linked to this project ──
+            const taskIds = tasks.map(t => t.taskId);
+            const entries = taskIds.length
+                ? await SELECT.from(ENTRY).columns('timesheet_timesheetId', 'projectTask_taskId', 'hoursWorked').where({ projectTask_taskId: { in: taskIds } })
+                : [];
+            const tsIds = [...new Set(entries.map(e => e.timesheet_timesheetId))];
+            const headers = tsIds.length ? await SELECT.from(HEADER).columns('timesheetId', 'employee_employeeId').where({ timesheetId: { in: tsIds } }) : [];
+            const empOfTs = {}; headers.forEach(h => { empOfTs[h.timesheetId] = h.employee_employeeId; });
+
+            // Active hourly cost per employee.
+            const salaries = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'hourlyCost', 'isActive');
+            const hourly = {}; salaries.forEach(s => { if (s.isActive !== false) hourly[s.employee_employeeId] = Number(s.hourlyCost) || 0; });
+
+            // Worked hours per employee + total consumed cost.
+            const workedByEmp = {};
+            entries.forEach(e => { const emp = empOfTs[e.timesheet_timesheetId]; if (!emp) return; workedByEmp[emp] = (workedByEmp[emp] || 0) + (Number(e.hoursWorked) || 0); });
+            let totalConsumed = 0, totalWorked = 0;
+            Object.keys(workedByEmp).forEach(emp => { totalWorked += workedByEmp[emp]; totalConsumed += workedByEmp[emp] * (hourly[emp] || 0); });
+
+            // Assigned (estimated) hours per employee.
+            const assignedByEmp = {}; let totalAssignedHours = 0;
+            tasks.forEach(t => { const a = t.assignedTo_employeeId, est = Number(t.estimatedHours) || 0; if (a) assignedByEmp[a] = (assignedByEmp[a] || 0) + est; totalAssignedHours += est; });
+
+            // Names (resources + any assigned/worked employee not in resources).
+            const empIds = new Set([...Object.keys(assignedByEmp), ...Object.keys(workedByEmp), ...resources.map(r => r.employee_employeeId)]);
+            if (p.poc_employeeId) empIds.add(p.poc_employeeId);   // ensure manager card resolves
+            const nameMap = {}; resources.forEach(r => { nameMap[r.employee_employeeId] = r.employeeName; });
+            const empRows = empIds.size ? await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'designation', 'email').where({ employeeId: { in: [...empIds] } }) : [];
+            const desig = {}, emailOf = {}; empRows.forEach(e => { nameMap[e.employeeId] = e.employeeName; desig[e.employeeId] = e.designation; emailOf[e.employeeId] = e.email; });
+
+            // Manager (POC) profile photo as a data URL for the manager card.
+            let pocPhoto = '';
+            if (p.poc_employeeId) {
+                const pocRow = await SELECT.one.from(EMPLOYEE).columns('profilePhoto', 'profilePhotoMimeType').where({ employeeId: p.poc_employeeId });
+                if (pocRow && pocRow.profilePhoto) {
+                    const b64 = await binaryToBase64(pocRow.profilePhoto);
+                    if (b64) pocPhoto = (String(b64).indexOf('data:') === 0) ? b64 : ('data:' + (pocRow.profilePhotoMimeType || 'image/jpeg') + ';base64,' + b64);
+                }
+            }
+
+            // Assigned-vs-worked effort comparison (dual bar).
+            const effort = [...empIds].map(id => ({
+                employeeId: id, employeeName: nameMap[id] || id,
+                assignedHours: Math.round((assignedByEmp[id] || 0) * 10) / 10,
+                workedHours: Math.round((workedByEmp[id] || 0) * 10) / 10
+            })).sort((a, b) => b.assignedHours - a.assignedHours);
+
+            // Task stats.
+            const today = new Date().toISOString().slice(0, 10);
+            const norm = s => String(s || '').toLowerCase().trim();
+            const taskStats = { total: tasks.length, completed: 0, ongoing: 0, pending: 0, blocked: 0, inReview: 0, overdue: 0 };
+            tasks.forEach(t => {
+                const s = norm(t.status);
+                if (s === 'completed') taskStats.completed++;
+                else if (s === 'in progress' || s === 'inprogress') taskStats.ongoing++;
+                else if (s === 'in review' || s === 'review') taskStats.inReview++;
+                else if (s === 'blocked') taskStats.blocked++;
+                else taskStats.pending++;
+                if (s !== 'completed' && t.dueDate && String(t.dueDate).slice(0, 10) < today) taskStats.overdue++;
+            });
+
+            // Issues.
+            const issueCounts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
+            const openIssues = issues.filter(i => i.status !== 'Closed' && i.status !== 'Resolved');
+            openIssues.forEach(i => { if (issueCounts[i.severity] !== undefined) issueCounts[i.severity]++; });
+
+            const progress = projectProgress(tasks);
+            const budget = Number(p.budget) || 0;
+            const budgetPct = budget > 0 ? Math.round((totalConsumed / budget) * 100) : 0;
+            const workedPct = totalAssignedHours > 0 ? Math.round((totalWorked / totalAssignedHours) * 100) : 0;
+            const ai = projectHealthSummary({ progress, status: p.status, budget, budgetPct, openHigh: issueCounts.High, openCritical: issueCounts.Critical, plannedHours: totalAssignedHours, workedPct });
+
+            // Financial figures are Founder-only. POC / allocated employees get operational
+            // hours but never budget or cost amounts.
+            const isFounder = isFounderCaller(req, c);
+            const budgetBlock = isFounder
+                ? { allocated: budget, consumed: Math.round(totalConsumed), remaining: Math.round(Math.max(0, budget - totalConsumed)), utilizationPct: budgetPct }
+                : { allocated: 0, consumed: 0, remaining: 0, utilizationPct: 0 };
+            const resourceSummary = isFounder
+                ? { totalAssigned: resources.length, active: resources.filter(r => workedByEmp[r.employee_employeeId] > 0).length, costConsumed: Math.round(totalConsumed), costRemaining: Math.round(Math.max(0, budget - totalConsumed)), totalWorkedHours: Math.round(totalWorked * 10) / 10, totalAssignedHours: Math.round(totalAssignedHours * 10) / 10 }
+                : { totalAssigned: resources.length, active: resources.filter(r => workedByEmp[r.employee_employeeId] > 0).length, totalWorkedHours: Math.round(totalWorked * 10) / 10, totalAssignedHours: Math.round(totalAssignedHours * 10) / 10 };
+
+            return JSON.stringify({
+                project: { projectId: p.projectId, projectName: p.projectName, customerName: p.customerName, description: p.description, status: p.status, priority: p.priority },
+                badge: ai.health, progress, aiSummary: ai.text,
+                dates: { start: p.startDate, end: p.endDate, goLive: p.goLiveDate },
+                financialAccess: isFounder,
+                budget: budgetBlock,
+                manager: { employeeId: p.poc_employeeId, name: p.pocName, designation: desig[p.poc_employeeId] || '', email: emailOf[p.poc_employeeId] || '', photo: pocPhoto },
+                taskStats,
+                resourceSummary: resourceSummary,
+                effort,
+                focusAreas: String(p.focusAreas || '').split(',').map(x => x.trim()).filter(Boolean),
+                issueCounts,
+                issues: issues.map(i => ({ issueId: i.issueId, title: i.title, severity: i.severity, ownerName: i.ownerName, status: i.status, createdAt: i.createdAt ? new Date(i.createdAt).toLocaleDateString() : '' })),
+                canManage: isFounder
+            });
+        });
+
+        // ── Issues ──────────────────────────────────────────────────────────────
+        this.on('createProjectIssue', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId').where({ projectId: d.projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            const isPoc = project.poc_employeeId === c.employeeId;
+            if (!isFounderCaller(req, c) && !isPoc) return JSON.stringify({ error: 'Only the Founder or project POC can raise issues.' });
+            if (!(d.title || '').trim()) return JSON.stringify({ error: 'Issue title is required.' });
+            const SEV = ['Critical', 'High', 'Medium', 'Low'];
+            const severity = SEV.includes(d.severity) ? d.severity : 'Medium';
+            const owner = d.ownerId ? await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ employeeId: d.ownerId }) : null;
+            const existing = await SELECT.from(PROJECT_ISSUE).columns('issueId').where({ project_projectId: d.projectId });
+            const issueId = `${d.projectId}-ISS-${String(existing.length + 1).padStart(3, '0')}`;
+            await INSERT.into(PROJECT_ISSUE).entries({
+                issueId, project_projectId: d.projectId, title: d.title.trim(), description: (d.description || '').trim(),
+                severity, owner_employeeId: owner ? owner.employeeId : null, ownerName: owner ? owner.employeeName : '', status: 'Open'
+            });
+            await projectAudit(d.projectId, c.name, 'Issue Raised', null, `${severity}: ${d.title.trim()}`);
+            founderEvents.ping('createProjectIssue');
+            return JSON.stringify({ ok: true, issueId });
+        });
+        this.on('updateProjectIssue', async (req) => {
+            const c = await projectCaller(req);
+            const { issueId, status } = req.data;
+            const STAT = ['Open', 'In Progress', 'Resolved', 'Closed'];
+            if (!STAT.includes(status)) return JSON.stringify({ error: 'Invalid issue status.' });
+            const iss = await SELECT.one.from(PROJECT_ISSUE).where({ issueId });
+            if (!iss) return JSON.stringify({ error: 'Issue not found.' });
+            const project = await SELECT.one.from(PROJECT).columns('poc_employeeId').where({ projectId: iss.project_projectId });
+            if (!isFounderCaller(req, c) && !(project && project.poc_employeeId === c.employeeId)) return JSON.stringify({ error: 'Not authorised.' });
+            await UPDATE(PROJECT_ISSUE).set({ status }).where({ issueId });
+            await projectAudit(iss.project_projectId, c.name, 'Issue Updated', iss.status, status);
+            founderEvents.ping('updateProjectIssue');
+            return JSON.stringify({ ok: true });
+        });
+
+        // ── Employee salary master (Founder/HR) ─────────────────────────────────
+        this.on('upsertEmployeeSalary', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c) && c.role !== 'hr') return JSON.stringify({ error: 'Only Founder or HR can manage salaries.' });
+            const d = req.data || {};
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ employeeId: d.employeeId });
+            if (!emp) return JSON.stringify({ error: 'Employee not found.' });
+            const annual = Number(d.annualSalary) || 0;
+            const hourly = Number(d.hourlyCost) || (annual > 0 ? Math.round((annual / 2080) * 100) / 100 : 0);   // 52 weeks × 40 hrs = 2080 standard annual hours
+            const eff = d.effectiveFrom || new Date().toISOString().slice(0, 10);
+            const salaryId = `${emp.employeeId}-${eff}`;
+            // Deactivate prior active rows, then upsert the new active one.
+            await UPDATE(SALARY_MASTER).set({ isActive: false }).where({ employee_employeeId: emp.employeeId });
+            await UPSERT.into(SALARY_MASTER).entries({
+                salaryId, employee_employeeId: emp.employeeId, employeeName: emp.employeeName,
+                annualSalary: annual, monthlySalary: annual > 0 ? Math.round((annual / 12) * 100) / 100 : 0,
+                hourlyCost: hourly, effectiveFrom: eff, effectiveTo: null, isActive: true
+            });
+            return JSON.stringify({ ok: true, salaryId, hourlyCost: hourly });
+        });
+        this.on('getEmployeeSalaries', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c) && c.role !== 'hr') return JSON.stringify({ error: 'Not authorised.' });
+            const rows = await SELECT.from(SALARY_MASTER).where({ isActive: true }).orderBy('employeeName asc');
+            return JSON.stringify({ salaries: rows.map(r => ({ employeeId: r.employee_employeeId, employeeName: r.employeeName, annualSalary: r.annualSalary, hourlyCost: r.hourlyCost, effectiveFrom: r.effectiveFrom })) });
+        });
+
+        // ────────────────────────────────────────────────────────────────────────────
+        // Microsoft Teams Meeting handlers
+        // Authorization: Founder or project POC can schedule/edit/cancel.
+        //                All project members can view (via getProjectMeetings).
+        // ────────────────────────────────────────────────────────────────────────────
+
+        const { createMeeting: teamsMkMeeting, updateMeeting: teamsUpdMeeting,
+                cancelMeeting: teamsCxlMeeting, formatMeetingForDisplay: fmtMtg, MOCK_MODE } = require('./services/teams-service');
+
+        // ── Helper: generate next meeting ID ──────────────────────────────────────
+        async function nextMeetingId(projectId) {
+            const rows = await SELECT.from(MEETING).columns('meetingId').where({ project_projectId: projectId });
+            const max = rows.reduce((n, r) => {
+                const m = r.meetingId.match(/-(\d+)$/);
+                return m ? Math.max(n, parseInt(m[1], 10)) : n;
+            }, 0);
+            return `MTG-${projectId}-${String(max + 1).padStart(3, '0')}`;
+        }
+
+        // ── Schedule a Teams meeting ──────────────────────────────────────────────
+        this.on('scheduleMeeting', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'status', 'lifecycleStage', 'planningMeetingId').where({ projectId: d.projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            if (!(isFounderCaller(req, c) || project.poc_employeeId === c.employeeId))
+                return JSON.stringify({ error: 'Only the project POC or Founder can schedule meetings.' });
+
+            // Validation.
+            if (!(d.title || '').trim()) return JSON.stringify({ error: 'Meeting title is required.' });
+            if (!d.startDateTime)        return JSON.stringify({ error: 'Start date/time is required.' });
+            if (!d.endDateTime)          return JSON.stringify({ error: 'End date/time is required.' });
+            if (d.endDateTime <= d.startDateTime) return JSON.stringify({ error: 'End time must be after start time.' });
+            if (new Date(d.startDateTime) < new Date()) return JSON.stringify({ error: 'Cannot schedule a meeting in the past.' });
+            // The POC is auto-included in every project meeting and de-duplicated —
+            // even if the client also sent them. A Set guarantees one record per
+            // employee regardless of how the request was built.
+            const partSet = new Set((d.participantIds || []).filter(Boolean));
+            if (project.poc_employeeId) partSet.add(project.poc_employeeId);
+            const participantIds = [...partSet];
+            if (!participantIds.length)  return JSON.stringify({ error: 'At least one participant is required.' });
+
+            // Resolve participants.
+            const partEmps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email')
+                .where({ employeeId: { in: participantIds }, isActive: true });
+            if (!partEmps.length) return JSON.stringify({ error: 'No valid participants found.' });
+
+            const organizerEmail = c.email || '';
+            // Call Teams Graph API (or mock).
+            let teamsData;
+            try {
+                teamsData = await teamsMkMeeting({
+                    title: d.title.trim(), agenda: (d.agenda || '').trim(),
+                    startDateTime: d.startDateTime, endDateTime: d.endDateTime,
+                    organizerEmail,
+                    participants: partEmps.map(e => ({ email: e.email, name: e.employeeName }))
+                });
+            } catch (e) {
+                cds.log('teams').error('Graph API createMeeting failed:', e.message);
+                return JSON.stringify({ error: `Could not create Teams meeting: ${e.message}` });
+            }
+
+            const meetingId = await nextMeetingId(d.projectId);
+            await INSERT.into(MEETING).entries({
+                meetingId, project_projectId: d.projectId,
+                title: d.title.trim(), agenda: (d.agenda || '').trim(),
+                startDateTime: d.startDateTime, endDateTime: d.endDateTime,
+                organizerEmail, organizerName: c.name || '',
+                organizer_employeeId: c.employeeId,
+                status: 'Scheduled',
+                teamsMeetingId: teamsData.teamsMeetingId,
+                teamsJoinUrl:   teamsData.teamsJoinUrl,
+                teamsDialIn:    teamsData.teamsDialIn || null
+            });
+            // Insert participants.
+            for (const emp of partEmps) {
+                const participantId = `${meetingId}-${emp.employeeId}`;
+                await INSERT.into(MEETING_PARTICIPANT).entries({
+                    participantId, meeting_meetingId: meetingId,
+                    employee_employeeId: emp.employeeId,
+                    employeeName: emp.employeeName, employeeEmail: emp.email,
+                    attendanceStatus: 'Invited'
+                });
+                // In-app notification.
+                await createNotification(emp.employeeId, 'MEETING_CREATED',
+                    'Meeting Scheduled',
+                    `You are invited to "${d.title.trim()}" on ${new Date(d.startDateTime).toLocaleString('en-IN')}.`,
+                    meetingId);
+            }
+            // Advance planning lifecycle: first meeting on a Planning project → MeetingScheduled.
+            if (project.status === 'Planning' && (!project.lifecycleStage || project.lifecycleStage === 'Planning') && !project.planningMeetingId) {
+                await UPDATE(PROJECT).set({ lifecycleStage: 'MeetingScheduled', planningMeetingId: meetingId }).where({ projectId: d.projectId });
+                await projectAudit(d.projectId, c.name, 'Planning Meeting Scheduled', 'Planning', d.title.trim());
+            }
+            founderEvents.ping('scheduleMeeting');
+            return JSON.stringify({ ok: true, meetingId, teamsJoinUrl: teamsData.teamsJoinUrl,
+                isMock: MOCK_MODE, message: MOCK_MODE ? 'Meeting created (dev mock mode — no real Teams meeting).' : 'Teams meeting created successfully.' });
+        });
+
+        // ── Update a scheduled meeting ────────────────────────────────────────────
+        this.on('updateMeetingDetails', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const mtg = await SELECT.one.from(MEETING).where({ meetingId: d.meetingId });
+            if (!mtg) return JSON.stringify({ error: 'Meeting not found.' });
+            const project = await SELECT.one.from(PROJECT).columns('poc_employeeId').where({ projectId: mtg.project_projectId });
+            if (!(isFounderCaller(req, c) || (project && project.poc_employeeId === c.employeeId)))
+                return JSON.stringify({ error: 'Only the project POC or Founder can edit meetings.' });
+            if (mtg.status === 'Cancelled') return JSON.stringify({ error: 'Cannot edit a cancelled meeting.' });
+            if (!(d.title || '').trim()) return JSON.stringify({ error: 'Title is required.' });
+            if (d.endDateTime && d.startDateTime && d.endDateTime <= d.startDateTime)
+                return JSON.stringify({ error: 'End time must be after start time.' });
+
+            try {
+                await teamsUpdMeeting({
+                    teamsMeetingId: mtg.teamsMeetingId, organizerEmail: mtg.organizerEmail,
+                    title: d.title.trim(), agenda: (d.agenda || '').trim(),
+                    startDateTime: d.startDateTime || mtg.startDateTime,
+                    endDateTime:   d.endDateTime   || mtg.endDateTime
+                });
+            } catch (e) {
+                cds.log('teams').error('Graph API updateMeeting failed:', e.message);
+                return JSON.stringify({ error: `Could not update Teams meeting: ${e.message}` });
+            }
+
+            await UPDATE(MEETING).set({
+                title: d.title.trim(), agenda: (d.agenda || '').trim(),
+                startDateTime: d.startDateTime || mtg.startDateTime,
+                endDateTime:   d.endDateTime   || mtg.endDateTime
+            }).where({ meetingId: d.meetingId });
+
+            // Notify participants of the change.
+            const parts = await SELECT.from(MEETING_PARTICIPANT).where({ meeting_meetingId: d.meetingId });
+            for (const p of parts) {
+                await createNotification(p.employee_employeeId, 'MEETING_UPDATED',
+                    'Meeting Updated',
+                    `Meeting "${d.title.trim()}" has been updated. New time: ${new Date(d.startDateTime || mtg.startDateTime).toLocaleString('en-IN')}.`,
+                    d.meetingId);
+            }
+            founderEvents.ping('updateMeeting');
+            return JSON.stringify({ ok: true });
+        });
+
+        // ── Cancel a meeting ──────────────────────────────────────────────────────
+        this.on('cancelProjectMeeting', async (req) => {
+            const c = await projectCaller(req);
+            const { meetingId } = req.data;
+            const mtg = await SELECT.one.from(MEETING).where({ meetingId });
+            if (!mtg) return JSON.stringify({ error: 'Meeting not found.' });
+            const project = await SELECT.one.from(PROJECT).columns('poc_employeeId').where({ projectId: mtg.project_projectId });
+            if (!(isFounderCaller(req, c) || (project && project.poc_employeeId === c.employeeId)))
+                return JSON.stringify({ error: 'Only the project POC or Founder can cancel meetings.' });
+            if (mtg.status === 'Cancelled') return JSON.stringify({ error: 'Meeting is already cancelled.' });
+
+            try {
+                await teamsCxlMeeting({ teamsMeetingId: mtg.teamsMeetingId, organizerEmail: mtg.organizerEmail });
+            } catch (e) {
+                cds.log('teams').warn('Graph API cancelMeeting failed (marking cancelled anyway):', e.message);
+            }
+
+            await UPDATE(MEETING).set({ status: 'Cancelled' }).where({ meetingId });
+            const parts = await SELECT.from(MEETING_PARTICIPANT).where({ meeting_meetingId: meetingId });
+            for (const p of parts) {
+                await createNotification(p.employee_employeeId, 'MEETING_CANCELLED',
+                    'Meeting Cancelled',
+                    `Meeting "${mtg.title}" has been cancelled.`,
+                    meetingId);
+            }
+            founderEvents.ping('cancelMeeting');
+            return JSON.stringify({ ok: true });
+        });
+
+        // ── Get all meetings for a project ────────────────────────────────────────
+        this.on('getProjectMeetings', async (req) => {
+            const c = await projectCaller(req);
+            const { projectId } = req.data;
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId').where({ projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: projectId });
+            const isAlloc = resources.some(r => r.employee_employeeId === c.employeeId);
+            if (!isFounderCaller(req, c) && project.poc_employeeId !== c.employeeId && !isAlloc)
+                return JSON.stringify({ error: 'You do not have access to this project.' });
+
+            const mtgs = await SELECT.from(MEETING)
+                .where({ project_projectId: projectId })
+                .orderBy('startDateTime asc');
+            const isPocCaller = project.poc_employeeId === c.employeeId;
+            const result = [];
+            for (const m of mtgs) {
+                const parts = await SELECT.from(MEETING_PARTICIPANT).where({ meeting_meetingId: m.meetingId });
+                // Join is allowed only for selected participants, the organizer, or
+                // the POC (Founder also permitted). Everyone else may view details only.
+                const isParticipant = parts.some(p => p.employee_employeeId === c.employeeId);
+                const isOrganizer = m.organizer_employeeId === c.employeeId;
+                const canJoin = isFounderCaller(req, c) || isPocCaller || isOrganizer || isParticipant;
+                result.push({ ...fmtMtg(m), canJoin,
+                    participants: parts.map(p => ({ employeeId: p.employee_employeeId, employeeName: p.employeeName, employeeEmail: p.employeeEmail, attendanceStatus: p.attendanceStatus })) });
+            }
+            const canManage = isFounderCaller(req, c) || isPocCaller;
+            return JSON.stringify({ meetings: result, canManage });
+        });
+
+        // ── Project Chat ────────────────────────────────────────────────────────────
+        // Access: Founder, project POC, or any allocated resource can read/write.
+        // Reuses the same coalesced-notification + soft-delete patterns as group chat.
+
+        const _projChatAccess = async (req, projectId) => {
+            const c = await projectCaller(req);
+            const project = await SELECT.one.from(PROJECT)
+                .columns('projectId', 'projectName', 'poc_employeeId', 'pinnedMessageId', 'pinnedByName')
+                .where({ projectId });
+            if (!project) return { ok: false, error: 'Project not found.' };
+            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: projectId });
+            const isAlloc = resources.some(r => r.employee_employeeId === c.employeeId);
+            const canAccess = isFounderCaller(req, c) || project.poc_employeeId === c.employeeId || isAlloc;
+            if (!canAccess) return { ok: false, error: 'You do not have access to this project chat.' };
+            const recipientIds = [...new Set([project.poc_employeeId, ...resources.map(r => r.employee_employeeId)].filter(Boolean))];
+            return { ok: true, c, project, recipientIds };
+        };
+
+        this.on('getProjectMessages', async (req) => {
+            const { projectId } = req.data;
+            const page = Math.max(1, parseInt(req.data.page, 10) || 1);
+            const pageSize = Math.min(100, Math.max(1, parseInt(req.data.pageSize, 10) || 50));
+            const acc = await _projChatAccess(req, projectId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+
+            const all = await SELECT.from(PROJECT_MESSAGE)
+                .where({ project_projectId: projectId })
+                .orderBy('sentAt desc', 'messageId desc');
+            const total = all.length;
+            const start = (page - 1) * pageSize;
+            const slice = all.slice(start, start + pageSize);
+
+            const msgIds = slice.map(m => m.messageId);
+            let atts = [];
+            if (msgIds.length) {
+                atts = await SELECT.from(PROJECT_ATTACHMENT)
+                    .columns('attachmentId', 'message_messageId', 'fileName', 'mimeType', 'fileSize')
+                    .where({ message_messageId: { in: msgIds } });
+            }
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName');
+            const nameMap = {}; emps.forEach(e => nameMap[e.employeeId] = e.employeeName);
+
+            const messages = slice.slice().reverse().map(m => ({
+                messageId: m.messageId,
+                senderId: m.sender_employeeId,
+                senderName: nameMap[m.sender_employeeId] || m.sender_employeeId,
+                message: m.isDeleted ? '' : (m.message || ''),
+                sentAt: m.sentAt,
+                editedAt: m.isDeleted ? null : (m.editedAt || null),
+                isDeleted: !!m.isDeleted,
+                attachments: m.isDeleted ? [] : atts.filter(a => a.message_messageId === m.messageId).map(a => ({
+                    attachmentId: a.attachmentId, fileName: a.fileName, mimeType: a.mimeType, fileSize: a.fileSize
+                }))
+            }));
+
+            let pinned = null;
+            if (acc.project.pinnedMessageId) {
+                const pm = all.find(x => x.messageId === acc.project.pinnedMessageId);
+                if (pm && !pm.isDeleted) {
+                    pinned = {
+                        messageId: pm.messageId,
+                        senderName: nameMap[pm.sender_employeeId] || pm.sender_employeeId,
+                        pinnedByName: acc.project.pinnedByName || '',
+                        message: pm.message || ''
+                    };
+                }
+            }
+
+            await markProjectChatReadFn(projectId, acc.c.employeeId);
+            return JSON.stringify({ messages, pinned, hasMore: total > start + pageSize, total, page, pageSize });
+        });
+
+        this.on('sendProjectMessage', async (req) => {
+            const { projectId } = req.data;
+            const sMsg = (req.data.message || '').trim();
+            const atts = req.data.attachments || [];
+            const acc = await _projChatAccess(req, projectId);
+            if (!acc.ok) return req.error(403, acc.error);
+            if (!sMsg && !atts.length) return req.error(400, 'A message or an attachment is required.');
+
+            const messageId = `${projectId}-PMSG-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+            await INSERT.into(PROJECT_MESSAGE).entries({
+                messageId, project_projectId: projectId, sender_employeeId: acc.c.employeeId,
+                message: sMsg || null, sentAt: new Date()
+            });
+
+            let n = 0;
+            for (const a of atts) {
+                if (!a || !a.dataBase64) continue;
+                let buf;
+                try { buf = Buffer.from(String(a.dataBase64).replace(/^data:[^;]+;base64,/, ''), 'base64'); }
+                catch (e) { continue; }
+                if (buf.length > 10 * 1024 * 1024) return req.error(400, `Attachment "${a.fileName || 'file'}" exceeds the 10 MB limit.`);
+                n++;
+                await INSERT.into(PROJECT_ATTACHMENT).entries({
+                    attachmentId: `${messageId}-PATT-${n}`,
+                    message_messageId: messageId,
+                    fileName: a.fileName || 'file',
+                    mimeType: a.mimeType || 'application/octet-stream',
+                    fileSize: buf.length,
+                    content: buf
+                });
+            }
+
+            try {
+                await notifyProjectChat(projectId, acc.project.projectName, acc.c.employeeId, acc.recipientIds);
+            } catch (e) { cds.log('project').warn('project chat notify failed:', e.message || e); }
+
+            return { messageId };
+        });
+
+        this.on('getProjectChatAttachment', async (req) => {
+            const { attachmentId } = req.data;
+            if (!attachmentId) return req.error(400, 'attachmentId is required.');
+            const att = await SELECT.one.from(PROJECT_ATTACHMENT).where({ attachmentId });
+            if (!att) return req.error(404, 'Attachment not found.');
+            const msg = await SELECT.one.from(PROJECT_MESSAGE).columns('project_projectId').where({ messageId: att.message_messageId });
+            if (msg) {
+                const acc = await _projChatAccess(req, msg.project_projectId);
+                if (!acc.ok) return req.error(403, acc.error);
+            }
+            const dataBase64 = await binaryToBase64(att.content);
+            if (!dataBase64) return req.error(404, 'Attachment has no content.');
+            return { fileName: att.fileName, mimeType: att.mimeType || 'application/octet-stream', dataBase64 };
+        });
+
+        this.on('markProjectChatRead', async (req) => {
+            const c = await projectCaller(req);
+            await markProjectChatReadFn(req.data.projectId, c.employeeId);
+            return { ok: true };
+        });
+
+        this.on('editProjectMessage', async (req) => {
+            const { messageId } = req.data;
+            const newText = (req.data.message || '').trim();
+            if (!messageId) return JSON.stringify({ error: 'messageId is required.' });
+            if (!newText) return JSON.stringify({ error: 'Message cannot be empty.' });
+            const msg = await SELECT.one.from(PROJECT_MESSAGE).where({ messageId });
+            if (!msg) return JSON.stringify({ error: 'Message not found.' });
+            if (msg.isDeleted) return JSON.stringify({ error: 'A deleted message cannot be edited.' });
+            const c = await projectCaller(req);
+            if (msg.sender_employeeId !== c.employeeId) return JSON.stringify({ error: 'You can only edit your own messages.' });
+            await UPDATE(PROJECT_MESSAGE).set({ message: newText, editedAt: new Date() }).where({ messageId });
+            return JSON.stringify({ ok: true, messageId });
+        });
+
+        this.on('deleteProjectMessage', async (req) => {
+            const { messageId } = req.data;
+            if (!messageId) return JSON.stringify({ error: 'messageId is required.' });
+            const msg = await SELECT.one.from(PROJECT_MESSAGE).where({ messageId });
+            if (!msg) return JSON.stringify({ error: 'Message not found.' });
+            const c = await projectCaller(req);
+            if (msg.sender_employeeId !== c.employeeId) return JSON.stringify({ error: 'You can only delete your own messages.' });
+            await UPDATE(PROJECT_MESSAGE).set({ isDeleted: true, message: null, editedAt: new Date() }).where({ messageId });
+            await DELETE.from(PROJECT_ATTACHMENT).where({ message_messageId: messageId });
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'pinnedMessageId').where({ projectId: msg.project_projectId });
+            if (project && project.pinnedMessageId === messageId) {
+                await UPDATE(PROJECT).set({ pinnedMessageId: null, pinnedByName: null }).where({ projectId: msg.project_projectId });
+            }
+            return JSON.stringify({ ok: true, messageId });
+        });
+
+        this.on('pinProjectMessage', async (req) => {
+            const { projectId, messageId } = req.data;
+            if (!projectId || !messageId) return JSON.stringify({ error: 'projectId and messageId are required.' });
+            const acc = await _projChatAccess(req, projectId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const msg = await SELECT.one.from(PROJECT_MESSAGE).columns('messageId', 'project_projectId', 'isDeleted').where({ messageId });
+            if (!msg || msg.project_projectId !== projectId) return JSON.stringify({ error: 'Message not found in this project.' });
+            if (msg.isDeleted) return JSON.stringify({ error: 'A deleted message cannot be pinned.' });
+            const pinnedBy = (acc.c.emp && acc.c.emp.employeeName) || acc.c.name || acc.c.employeeId || '';
+            await UPDATE(PROJECT).set({ pinnedMessageId: messageId, pinnedByName: pinnedBy }).where({ projectId });
+            return JSON.stringify({ ok: true, messageId, pinnedByName: pinnedBy });
+        });
+
+        this.on('unpinProjectMessage', async (req) => {
+            const { projectId } = req.data;
+            if (!projectId) return JSON.stringify({ error: 'projectId is required.' });
+            const acc = await _projChatAccess(req, projectId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            await UPDATE(PROJECT).set({ pinnedMessageId: null, pinnedByName: null }).where({ projectId });
+            return JSON.stringify({ ok: true });
+        });
+
+        // ════════════════════════════════════════════════════════════════════════
+        // CLIENT MASTER MANAGEMENT (Founder)
+        // ════════════════════════════════════════════════════════════════════════
+        this.on('getClientMasters', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can manage clients.' });
+            const rows = await SELECT.from(CLIENT_MASTER).orderBy('clientName asc');
+            // Attach a project count per client.
+            const projs = await SELECT.from(PROJECT).columns('projectId', 'client_clientId');
+            const countBy = {}; (projs || []).forEach(p => { if (p.client_clientId) countBy[p.client_clientId] = (countBy[p.client_clientId] || 0) + 1; });
+            return JSON.stringify({
+                clients: (rows || []).map(r => ({
+                    clientId: r.clientId, clientName: r.clientName, companyName: r.companyName,
+                    contactPerson: r.contactPerson, email: r.email, phoneNumber: r.phoneNumber,
+                    status: r.status, lastLogin: r.lastLogin, notes: r.notes,
+                    projectCount: countBy[r.clientId] || 0, createdAt: r.createdAt
+                }))
+            });
+        });
+
+        this.on('createClientMaster', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can create clients.' });
+            const d = req.data || {};
+            const name = (d.clientName || '').trim();
+            const email = (d.email || '').trim().toLowerCase();
+            if (!name) return JSON.stringify({ error: 'Client Name is required.' });
+            if (!email) return JSON.stringify({ error: 'Email is required (it is the client login identity).' });
+            const dupE = await SELECT.one.from(CLIENT_MASTER).columns('clientId').where('lower(email) =', email);
+            if (dupE) return JSON.stringify({ error: `A client with email ${email} already exists.` });
+            const rows = await SELECT.from(CLIENT_MASTER).columns('clientId');
+            let max = 0; (rows || []).forEach(r => { const m = /CLT-(\d+)/.exec(r.clientId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+            const clientId = 'CLT-' + String(max + 1).padStart(4, '0');
+            await INSERT.into(CLIENT_MASTER).entries({
+                clientId, clientName: name, companyName: (d.companyName || '').trim(),
+                contactPerson: (d.contactPerson || '').trim(), email,
+                phoneNumber: (d.phoneNumber || '').trim(), status: 'Active', notes: (d.notes || '').trim()
+            });
+            return JSON.stringify({ ok: true, clientId, clientName: name });
+        });
+
+        this.on('updateClientMaster', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can update clients.' });
+            const d = req.data || {};
+            const existing = await SELECT.one.from(CLIENT_MASTER).where({ clientId: d.clientId });
+            if (!existing) return JSON.stringify({ error: 'Client not found.' });
+            const set = {};
+            if (d.clientName != null) set.clientName = d.clientName.trim();
+            if (d.companyName != null) set.companyName = d.companyName.trim();
+            if (d.contactPerson != null) set.contactPerson = d.contactPerson.trim();
+            if (d.phoneNumber != null) set.phoneNumber = d.phoneNumber.trim();
+            if (d.status && ['Active', 'Inactive'].includes(d.status)) set.status = d.status;
+            if (d.notes != null) set.notes = d.notes.trim();
+            await UPDATE(CLIENT_MASTER).set(set).where({ clientId: d.clientId });
+            // Keep denormalised clientName on projects in sync.
+            if (set.clientName) await UPDATE(PROJECT).set({ clientName: set.clientName }).where({ client_clientId: d.clientId });
+            return JSON.stringify({ ok: true });
+        });
+
+        // ════════════════════════════════════════════════════════════════════════
+        // REQUIREMENTS — internal visibility & handling (Founder / POC / employee)
+        // ════════════════════════════════════════════════════════════════════════
+
+        // Resolve a requirement and whether THIS caller may act on it.
+        const _reqAccess = async (req, requirementId) => {
+            const c = await projectCaller(req);
+            const reqRow = await SELECT.one.from(REQUIREMENT).where({ requirementId });
+            if (!reqRow) return { ok: false, error: 'Requirement not found.' };
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId').where({ projectId: reqRow.project_projectId });
+            const isFounder = isFounderCaller(req, c);
+            const isPoc = project && project.poc_employeeId === c.employeeId;
+            const isAssignee = reqRow.assignedTo_employeeId && reqRow.assignedTo_employeeId === c.employeeId;
+            if (!isFounder && !isPoc && !isAssignee) return { ok: false, error: 'You do not have access to this requirement.' };
+            return { ok: true, c, reqRow, project, isFounder, isPoc, isAssignee };
+        };
+
+        this.on('getRequirementsInbox', async (req) => {
+            const c = await projectCaller(req);
+            const isFounder = isFounderCaller(req, c);
+            const filter = (req.data.filter || 'all').toLowerCase();
+            // Scope: founder = all; otherwise requirements where caller is POC or assignee.
+            let reqs = await SELECT.from(REQUIREMENT).orderBy('createdAt desc');
+            if (!isFounder) {
+                const pocProjects = await SELECT.from(PROJECT).columns('projectId').where({ poc_employeeId: c.employeeId });
+                const pocSet = new Set((pocProjects || []).map(p => p.projectId));
+                reqs = (reqs || []).filter(r => pocSet.has(r.project_projectId) || r.assignedTo_employeeId === c.employeeId);
+            }
+            const now = Date.now();
+            const list = (reqs || []).map(r => {
+                const ageDays = r.createdAt ? Math.floor((now - new Date(r.createdAt).getTime()) / 86400000) : 0;
+                const open = !['Approved', 'Closed', 'Rejected'].includes(r.status);
+                const overdue = open && r.expectedDeliveryDate && String(r.expectedDeliveryDate) < new Date().toISOString().slice(0, 10);
+                return {
+                    requirementId: r.requirementId, projectId: r.project_projectId, title: r.title,
+                    clientName: r.clientName || '', priority: r.priority, status: r.status,
+                    category: r.category, module: r.module,
+                    assignedToId: r.assignedTo_employeeId || '', assignedToName: r.assignedToName || '',
+                    expectedDeliveryDate: r.expectedDeliveryDate, createdAt: r.createdAt, ageDays, open, overdue
+                };
+            });
+            let filtered = list;
+            if (filter === 'pending') filtered = list.filter(r => r.open);
+            else if (filter === 'mine') filtered = list.filter(r => r.assignedToId === c.employeeId);
+            else if (filter === 'awaiting-review') filtered = list.filter(r => r.status === 'Awaiting Client Review');
+            else if (filter === 'overdue') filtered = list.filter(r => r.overdue);
+            const counts = {
+                all: list.length, pending: list.filter(r => r.open).length,
+                mine: list.filter(r => r.assignedToId === c.employeeId).length,
+                awaitingReview: list.filter(r => r.status === 'Awaiting Client Review').length,
+                overdue: list.filter(r => r.overdue).length
+            };
+            return JSON.stringify({ requirements: filtered, counts, isFounder });
+        });
+
+        this.on('getProjectRequirements', async (req) => {
+            const c = await projectCaller(req);
+            const { projectId } = req.data;
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId').where({ projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            if (!isFounderCaller(req, c) && project.poc_employeeId !== c.employeeId) {
+                // allow allocated employees to see the project's requirements they're assigned
+                const reqs0 = await SELECT.from(REQUIREMENT).where({ project_projectId: projectId, assignedTo_employeeId: c.employeeId });
+                return JSON.stringify({ requirements: (reqs0 || []).map(r => ({ requirementId: r.requirementId, title: r.title, status: r.status, priority: r.priority, assignedToName: r.assignedToName })) });
+            }
+            const reqs = await SELECT.from(REQUIREMENT).where({ project_projectId: projectId }).orderBy('createdAt desc');
+            return JSON.stringify({
+                requirements: (reqs || []).map(r => ({
+                    requirementId: r.requirementId, title: r.title, status: r.status, priority: r.priority,
+                    assignedToId: r.assignedTo_employeeId || '', assignedToName: r.assignedToName || '',
+                    category: r.category, expectedDeliveryDate: r.expectedDeliveryDate, createdAt: r.createdAt
+                }))
+            });
+        });
+
+        this.on('getRequirementDetail', async (req) => {
+            const acc = await _reqAccess(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const detail = await buildRequirementDetailJSON(acc.reqRow);
+            detail.canAssign = acc.isFounder || acc.isPoc;
+            detail.canUpdateStatus = acc.isFounder || acc.isPoc || acc.isAssignee;
+            return JSON.stringify(detail);
+        });
+
+        this.on('assignRequirement', async (req) => {
+            const acc = await _reqAccess(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            if (!acc.isFounder && !acc.isPoc) return JSON.stringify({ error: 'Only the Founder or project POC can assign requirements.' });
+            const employeeId = req.data.employeeId;
+            const alloc = await SELECT.one.from(PROJECT_RESOURCE).columns('allocationId').where({ project_projectId: acc.reqRow.project_projectId, employee_employeeId: employeeId });
+            const isProjectPoc = acc.project && acc.project.poc_employeeId === employeeId;
+            if (!alloc && !isProjectPoc) return JSON.stringify({ error: 'You can only assign to the POC or an employee allocated to this project.' });
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email').where({ employeeId });
+            if (!emp) return JSON.stringify({ error: 'Employee not found.' });
+            const newStatus = ['New', 'Assigned'].includes(acc.reqRow.status) ? 'Assigned' : acc.reqRow.status;
+            await UPDATE(REQUIREMENT).set({
+                assignedTo_employeeId: employeeId, assignedToName: emp.employeeName || employeeId,
+                assignedByName: acc.c.name || 'Internal', assignedDate: new Date(), status: newStatus
+            }).where({ requirementId: acc.reqRow.requirementId });
+            await reqAudit(acc.reqRow.requirementId, acc.c.name, 'Assigned', acc.reqRow.assignedToName || '—', emp.employeeName);
+            const clientRow = await SELECT.one.from(CLIENT_MASTER).where({ clientId: acc.reqRow.client_clientId });
+            await notifyRequirement({ ...acc.reqRow, assignedTo_employeeId: employeeId }, acc.project, clientRow,
+                'Requirement Assigned', `Requirement "${acc.reqRow.title}" has been assigned to ${emp.employeeName}.`, 'REQUIREMENT_ASSIGNED');
+            return JSON.stringify({ ok: true });
+        });
+
+        this.on('updateRequirementStatus', async (req) => {
+            const acc = await _reqAccess(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const status = req.data.status;
+            // Internal users drive the workflow up to "Awaiting Client Review".
+            // Approved / Rejected are client-only decisions (reviewRequirement).
+            const INTERNAL_ALLOWED = ['Assigned', 'Under Analysis', 'In Development', 'Under Testing', 'Awaiting Client Review'];
+            if (!INTERNAL_ALLOWED.includes(status)) return JSON.stringify({ error: 'That status cannot be set here. Approval/closure is decided by the client.' });
+            const old = acc.reqRow.status;
+            await UPDATE(REQUIREMENT).set({ status }).where({ requirementId: acc.reqRow.requirementId });
+            await reqAudit(acc.reqRow.requirementId, acc.c.name, 'Status Changed', old, status);
+            const clientRow = await SELECT.one.from(CLIENT_MASTER).where({ clientId: acc.reqRow.client_clientId });
+            await notifyRequirement(acc.reqRow, acc.project, clientRow,
+                'Requirement Status Updated', `Requirement "${acc.reqRow.title}" is now "${status}".`, 'REQUIREMENT_STATUS');
+            return JSON.stringify({ ok: true, status });
+        });
+
+        this.on('addRequirementComment', async (req) => {
+            const acc = await _reqAccess(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const role = acc.isFounder ? 'founder' : (acc.isPoc ? 'poc' : 'employee');
+            try {
+                const commentId = await addRequirementCommentRow(acc.reqRow.requirementId, {
+                    authorName: acc.c.name, authorRole: role, authorEmployeeId: acc.c.employeeId,
+                    message: req.data.message, fileName: req.data.fileName, mimeType: req.data.mimeType, dataBase64: req.data.dataBase64
+                });
+                await reqAudit(acc.reqRow.requirementId, acc.c.name, 'Comment Added', null, null);
+                const clientRow = await SELECT.one.from(CLIENT_MASTER).where({ clientId: acc.reqRow.client_clientId });
+                await notifyRequirement(acc.reqRow, acc.project, clientRow,
+                    'New Requirement Comment', `${acc.c.name} commented on "${acc.reqRow.title}".`, 'REQUIREMENT_COMMENT');
+                return JSON.stringify({ ok: true, commentId });
+            } catch (e) { return JSON.stringify({ error: e.message }); }
+        });
+
+        this.on('getRequirementCommentAttachment', async (req) => {
+            const cmt = await SELECT.one.from(REQUIREMENT_COMMENT).where({ commentId: req.data.commentId });
+            if (!cmt) return req.error(404, 'Comment not found.');
+            const acc = await _reqAccess(req, cmt.requirement_requirementId);
+            if (!acc.ok) return req.error(403, acc.error);
+            const dataBase64 = await binaryToBase64(cmt.attachment);
+            if (!dataBase64) return req.error(404, 'No attachment.');
+            return { fileName: cmt.attachmentName, mimeType: cmt.attachmentMimeType || 'application/octet-stream', dataBase64 };
+        });
+
+        this.on('getRequirementAttachment', async (req) => {
+            const att = await SELECT.one.from(REQUIREMENT_ATTACHMENT).where({ attachmentId: req.data.attachmentId });
+            if (!att) return req.error(404, 'Attachment not found.');
+            const acc = await _reqAccess(req, att.requirement_requirementId);
+            if (!acc.ok) return req.error(403, acc.error);
+            const dataBase64 = await binaryToBase64(att.content);
+            if (!dataBase64) return req.error(404, 'No content.');
+            return { fileName: att.fileName, mimeType: att.mimeType || 'application/octet-stream', dataBase64 };
+        });
+
+        return super.init();
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CLIENT SERVICE — external customer portal. Every handler resolves the caller's
+// clientId and refuses any data that does not belong to it (backend isolation).
+// ════════════════════════════════════════════════════════════════════════════
+class ClientService extends cds.ApplicationService {
+    async init() {
+        // Load the requirement + verify it belongs to the calling client.
+        const _ownReq = async (req, requirementId) => {
+            const cc = await clientCaller(req);
+            if (!cc.clientId) return { ok: false, error: 'Client account not recognised.' };
+            if (!cc.active) return { ok: false, error: 'Your client account is inactive.' };
+            const reqRow = await SELECT.one.from(REQUIREMENT).where({ requirementId });
+            if (!reqRow) return { ok: false, error: 'Requirement not found.' };
+            if (reqRow.client_clientId !== cc.clientId) return { ok: false, error: 'You do not have access to this requirement.' };
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId').where({ projectId: reqRow.project_projectId });
+            return { ok: true, cc, reqRow, project };
+        };
+        // Verify a project belongs to the calling client.
+        const _ownProject = async (req, projectId) => {
+            const cc = await clientCaller(req);
+            if (!cc.clientId) return { ok: false, error: 'Client account not recognised.' };
+            if (!cc.active) return { ok: false, error: 'Your client account is inactive.' };
+            const project = await SELECT.one.from(PROJECT).where({ projectId });
+            if (!project) return { ok: false, error: 'Project not found.' };
+            if (project.client_clientId !== cc.clientId) return { ok: false, error: 'You do not have access to this project.' };
+            return { ok: true, cc, project };
+        };
+
+        // ── Dashboard ───────────────────────────────────────────────────────────
+        this.on('getClientDashboard', async (req) => {
+            const cc = await clientCaller(req);
+            if (!cc.clientId) return JSON.stringify({ error: 'Client account not recognised.' });
+            const projects = await SELECT.from(PROJECT).where({ client_clientId: cc.clientId }).orderBy('createdAt desc');
+            const pids = (projects || []).map(p => p.projectId);
+            // Progress per project (weighted task progress — reuse projectProgress).
+            const projOut = [];
+            let pendingReqs = 0, openChanges = 0;
+            const allReqs = pids.length ? await SELECT.from(REQUIREMENT).where({ project_projectId: { in: pids } }) : [];
+            for (const p of (projects || [])) {
+                const tasks = await SELECT.from(PROJECT_TASK).columns('status', 'estimatedHours').where({ project_projectId: p.projectId });
+                projOut.push({
+                    projectId: p.projectId, projectName: p.projectName,
+                    currentPhase: p.currentPhase || p.status, status: p.status,
+                    progress: projectProgress(tasks), pocName: p.pocName || '—',
+                    updatedAt: p.modifiedAt || p.createdAt
+                });
+            }
+            (allReqs || []).forEach(r => {
+                if (!['Approved', 'Closed', 'Rejected'].includes(r.status)) pendingReqs++;
+                if (r.status === 'Awaiting Client Review') openChanges++;
+            });
+            const tiles = {
+                totalProjects: projects.length,
+                activeProjects: (projects || []).filter(p => p.status === 'Active').length,
+                completedProjects: (projects || []).filter(p => p.status === 'Completed').length,
+                pendingRequirements: pendingReqs,
+                awaitingReview: openChanges
+            };
+            return JSON.stringify({ clientName: cc.clientName, contactPerson: cc.contactPerson, tiles, projects: projOut });
+        });
+
+        // ── Project detail (overview + read-only team) ────────────────────────────
+        this.on('getClientProjectDetail', async (req) => {
+            const acc = await _ownProject(req, req.data.projectId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const p = acc.project;
+            const tasks = await SELECT.from(PROJECT_TASK).columns('status', 'estimatedHours').where({ project_projectId: p.projectId });
+            // Read-only team list (name + designation + project role). NO bandwidth,
+            // NO cost, NO internal data is exposed to the client.
+            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'employeeName', 'department').where({ project_projectId: p.projectId });
+            const empIds = (resources || []).map(r => r.employee_employeeId);
+            const emps = empIds.length ? await SELECT.from(EMPLOYEE).columns('employeeId', 'designation').where({ employeeId: { in: empIds } }) : [];
+            const desgBy = {}; (emps || []).forEach(e => desgBy[e.employeeId] = e.designation);
+            const team = (resources || []).map(r => ({
+                employeeName: r.employeeName,
+                designation: desgBy[r.employee_employeeId] || '',
+                roleInProject: r.employee_employeeId === p.poc_employeeId ? 'Project POC' : 'Team Member'
+            }));
+            if (p.poc_employeeId && !team.some(t => t.roleInProject === 'Project POC')) {
+                const pocEmp = await SELECT.one.from(EMPLOYEE).columns('designation').where({ employeeId: p.poc_employeeId });
+                team.unshift({ employeeName: p.pocName || 'POC', designation: pocEmp ? pocEmp.designation : '', roleInProject: 'Project POC' });
+            }
+            // Assignable people (id + name) for the client's requirement dropdown —
+            // the POC plus allocated employees of THIS project only.
+            const assignables = [];
+            if (p.poc_employeeId) assignables.push({ employeeId: p.poc_employeeId, employeeName: (p.pocName || 'POC') + ' (POC)' });
+            (resources || []).forEach(r => {
+                if (r.employee_employeeId !== p.poc_employeeId) assignables.push({ employeeId: r.employee_employeeId, employeeName: r.employeeName });
+            });
+            return JSON.stringify({
+                project: {
+                    projectId: p.projectId, projectName: p.projectName, description: p.description,
+                    currentPhase: p.currentPhase || p.status, status: p.status,
+                    startDate: p.startDate, endDate: p.endDate, progress: projectProgress(tasks), pocName: p.pocName || '—'
+                },
+                team, assignables
+            });
+        });
+
+        // ── Requirements list ─────────────────────────────────────────────────────
+        this.on('getClientRequirements', async (req) => {
+            const acc = await _ownProject(req, req.data.projectId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const filter = (req.data.filter || 'all').toLowerCase();
+            const reqs = await SELECT.from(REQUIREMENT).where({ project_projectId: acc.project.projectId }).orderBy('createdAt desc');
+            const list = (reqs || []).map(r => ({
+                requirementId: r.requirementId, title: r.title, priority: r.priority, status: r.status,
+                category: r.category, module: r.module, assignedToName: r.assignedToName || '—',
+                expectedDeliveryDate: r.expectedDeliveryDate, createdAt: r.createdAt
+            }));
+            let filtered = list;
+            if (filter === 'open') filtered = list.filter(r => !['Approved', 'Closed', 'Rejected'].includes(r.status));
+            else if (filter === 'awaiting-review') filtered = list.filter(r => r.status === 'Awaiting Client Review');
+            else if (filter === 'approved') filtered = list.filter(r => r.status === 'Approved' || r.status === 'Closed');
+            return JSON.stringify({ requirements: filtered, projectName: acc.project.projectName });
+        });
+
+        this.on('getClientRequirementDetail', async (req) => {
+            const acc = await _ownReq(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const detail = await buildRequirementDetailJSON(acc.reqRow);
+            detail.canReview = acc.reqRow.status === 'Awaiting Client Review';
+            return JSON.stringify(detail);
+        });
+
+        // ── Create requirement (optionally assign immediately) ──────────────────────
+        this.on('createRequirement', async (req) => {
+            const acc = await _ownProject(req, req.data.projectId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const d = req.data || {};
+            const title = (d.title || '').trim();
+            if (!title) return JSON.stringify({ error: 'Requirement Title is required.' });
+            if (!(d.description || '').trim()) return JSON.stringify({ error: 'Requirement Description is required.' });
+            const requirementId = await nextRequirementId(acc.project.projectId);
+
+            // Optional immediate assignment — must be the POC or an allocated employee.
+            let assignedToId = null, assignedToName = null, status = 'New';
+            if (d.assignedToId) {
+                const alloc = await SELECT.one.from(PROJECT_RESOURCE).columns('allocationId').where({ project_projectId: acc.project.projectId, employee_employeeId: d.assignedToId });
+                const isProjectPoc = acc.project.poc_employeeId === d.assignedToId;
+                if (!alloc && !isProjectPoc) return JSON.stringify({ error: 'You can only assign to the POC or an employee on this project.' });
+                const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ employeeId: d.assignedToId });
+                if (emp) { assignedToId = emp.employeeId; assignedToName = emp.employeeName; status = 'Assigned'; }
+            }
+            await INSERT.into(REQUIREMENT).entries({
+                requirementId, project_projectId: acc.project.projectId, client_clientId: acc.cc.clientId,
+                title, description: (d.description || '').trim(),
+                businessJustification: (d.businessJustification || '').trim(),
+                priority: ['Critical', 'High', 'Medium', 'Low'].includes(d.priority) ? d.priority : 'Medium',
+                expectedDeliveryDate: d.expectedDeliveryDate || null,
+                category: (d.category || '').trim(), module: (d.module || '').trim(), remarks: (d.remarks || '').trim(),
+                clientName: acc.cc.clientName,
+                assignedTo_employeeId: assignedToId, assignedToName,
+                assignedByName: assignedToId ? acc.cc.contactPerson || acc.cc.clientName : null,
+                assignedDate: assignedToId ? new Date() : null,
+                status
+            });
+            await reqAudit(requirementId, acc.cc.contactPerson || acc.cc.clientName, 'Created', null, title);
+            if (assignedToId) await reqAudit(requirementId, acc.cc.contactPerson || acc.cc.clientName, 'Assigned', null, assignedToName);
+            // Notify POC (+ assignee if any).
+            const reqRow = { requirementId, assignedTo_employeeId: assignedToId, title };
+            await notifyRequirement(reqRow, acc.project, null,
+                'New Client Requirement', `${acc.cc.clientName} raised a requirement "${title}" on ${acc.project.projectName}.`, 'REQUIREMENT_CREATED');
+            return JSON.stringify({ ok: true, requirementId });
+        });
+
+        this.on('assignClientRequirement', async (req) => {
+            const acc = await _ownReq(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const employeeId = req.data.employeeId;
+            const alloc = await SELECT.one.from(PROJECT_RESOURCE).columns('allocationId').where({ project_projectId: acc.reqRow.project_projectId, employee_employeeId: employeeId });
+            const isProjectPoc = acc.project && acc.project.poc_employeeId === employeeId;
+            if (!alloc && !isProjectPoc) return JSON.stringify({ error: 'You can only assign to the POC or an employee on this project.' });
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName').where({ employeeId });
+            if (!emp) return JSON.stringify({ error: 'Employee not found.' });
+            const newStatus = ['New'].includes(acc.reqRow.status) ? 'Assigned' : acc.reqRow.status;
+            await UPDATE(REQUIREMENT).set({
+                assignedTo_employeeId: employeeId, assignedToName: emp.employeeName,
+                assignedByName: acc.cc.contactPerson || acc.cc.clientName, assignedDate: new Date(), status: newStatus
+            }).where({ requirementId: acc.reqRow.requirementId });
+            await reqAudit(acc.reqRow.requirementId, acc.cc.contactPerson || acc.cc.clientName, 'Assigned', acc.reqRow.assignedToName || '—', emp.employeeName);
+            await notifyRequirement({ ...acc.reqRow, assignedTo_employeeId: employeeId }, acc.project, null,
+                'Requirement Assigned', `${acc.cc.clientName} assigned "${acc.reqRow.title}" to ${emp.employeeName}.`, 'REQUIREMENT_ASSIGNED');
+            return JSON.stringify({ ok: true });
+        });
+
+        // ── Attachments ─────────────────────────────────────────────────────────────
+        this.on('uploadRequirementAttachment', async (req) => {
+            const acc = await _ownReq(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const d = req.data || {};
+            if (!d.dataBase64) return JSON.stringify({ error: 'No file content.' });
+            let buf;
+            try { buf = Buffer.from(String(d.dataBase64).replace(/^data:[^;]+;base64,/, ''), 'base64'); }
+            catch (e) { return JSON.stringify({ error: 'Invalid file content.' }); }
+            if (buf.length > 10 * 1024 * 1024) return JSON.stringify({ error: 'Attachment exceeds the 10 MB limit.' });
+            const existing = await SELECT.from(REQUIREMENT_ATTACHMENT).columns('attachmentId').where({ requirement_requirementId: acc.reqRow.requirementId });
+            const n = (existing || []).length + 1;
+            await INSERT.into(REQUIREMENT_ATTACHMENT).entries({
+                attachmentId: `${acc.reqRow.requirementId}-ATT-${n}`,
+                requirement_requirementId: acc.reqRow.requirementId,
+                fileName: d.fileName || 'file', mimeType: d.mimeType || 'application/octet-stream',
+                fileSize: buf.length, version: n, uploadedByName: acc.cc.contactPerson || acc.cc.clientName, content: buf
+            });
+            await reqAudit(acc.reqRow.requirementId, acc.cc.contactPerson || acc.cc.clientName, 'Document Uploaded', null, d.fileName || 'file');
+            return JSON.stringify({ ok: true });
+        });
+
+        this.on('getRequirementAttachment', async (req) => {
+            const att = await SELECT.one.from(REQUIREMENT_ATTACHMENT).where({ attachmentId: req.data.attachmentId });
+            if (!att) return req.error(404, 'Attachment not found.');
+            const acc = await _ownReq(req, att.requirement_requirementId);
+            if (!acc.ok) return req.error(403, acc.error);
+            const dataBase64 = await binaryToBase64(att.content);
+            if (!dataBase64) return req.error(404, 'No content.');
+            return { fileName: att.fileName, mimeType: att.mimeType || 'application/octet-stream', dataBase64 };
+        });
+
+        // ── Discussion ────────────────────────────────────────────────────────────────
+        this.on('getRequirementComments', async (req) => {
+            const acc = await _ownReq(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const comments = await SELECT.from(REQUIREMENT_COMMENT).where({ requirement_requirementId: acc.reqRow.requirementId }).orderBy('createdAt asc');
+            return JSON.stringify({
+                comments: (comments || []).map(c => ({
+                    commentId: c.commentId, authorName: c.authorName, authorRole: c.authorRole,
+                    message: c.isDeleted ? '' : (c.message || ''), isDeleted: !!c.isDeleted,
+                    hasAttachment: !!c.attachmentName, attachmentName: c.attachmentName || '', at: c.createdAt,
+                    isMine: c.authorRole === 'client'
+                }))
+            });
+        });
+
+        this.on('addRequirementComment', async (req) => {
+            const acc = await _ownReq(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            try {
+                const commentId = await addRequirementCommentRow(acc.reqRow.requirementId, {
+                    authorName: acc.cc.contactPerson || acc.cc.clientName, authorRole: 'client', authorEmployeeId: null,
+                    message: req.data.message, fileName: req.data.fileName, mimeType: req.data.mimeType, dataBase64: req.data.dataBase64
+                });
+                await reqAudit(acc.reqRow.requirementId, acc.cc.contactPerson || acc.cc.clientName, 'Comment Added', null, null);
+                await notifyRequirement(acc.reqRow, acc.project, null,
+                    'New Requirement Comment', `${acc.cc.clientName} commented on "${acc.reqRow.title}".`, 'REQUIREMENT_COMMENT');
+                return JSON.stringify({ ok: true, commentId });
+            } catch (e) { return JSON.stringify({ error: e.message }); }
+        });
+
+        this.on('getRequirementCommentAttachment', async (req) => {
+            const cmt = await SELECT.one.from(REQUIREMENT_COMMENT).where({ commentId: req.data.commentId });
+            if (!cmt) return req.error(404, 'Comment not found.');
+            const acc = await _ownReq(req, cmt.requirement_requirementId);
+            if (!acc.ok) return req.error(403, acc.error);
+            const dataBase64 = await binaryToBase64(cmt.attachment);
+            if (!dataBase64) return req.error(404, 'No attachment.');
+            return { fileName: cmt.attachmentName, mimeType: cmt.attachmentMimeType || 'application/octet-stream', dataBase64 };
+        });
+
+        // ── Approval (client decision on "Awaiting Client Review") ──────────────────────
+        this.on('reviewRequirement', async (req) => {
+            const acc = await _ownReq(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            if (acc.reqRow.status !== 'Awaiting Client Review') return JSON.stringify({ error: 'This requirement is not awaiting your review.' });
+            const decision = (req.data.decision || '').toLowerCase();
+            const comments = (req.data.comments || '').trim();
+            if (!comments) return JSON.stringify({ error: 'Approval comments are mandatory.' });
+            let newStatus;
+            if (decision === 'approve') newStatus = 'Approved';
+            else if (decision === 'reject') newStatus = 'Rejected';
+            else if (decision === 'changes') newStatus = 'In Development';
+            else return JSON.stringify({ error: 'Invalid decision.' });
+            const set = { status: newStatus, approvalComments: comments };
+            if (newStatus === 'Approved') set.closedAt = new Date();
+            await UPDATE(REQUIREMENT).set(set).where({ requirementId: acc.reqRow.requirementId });
+            const actionLabel = newStatus === 'Approved' ? 'Approved' : (newStatus === 'Rejected' ? 'Rejected' : 'Changes Requested');
+            await reqAudit(acc.reqRow.requirementId, acc.cc.contactPerson || acc.cc.clientName, actionLabel, 'Awaiting Client Review', newStatus);
+            await notifyRequirement(acc.reqRow, acc.project, null,
+                `Requirement ${actionLabel}`, `${acc.cc.clientName} ${actionLabel.toLowerCase()} "${acc.reqRow.title}": ${comments}`, 'REQUIREMENT_REVIEW');
+            return JSON.stringify({ ok: true, status: newStatus });
+        });
+
+        this.on('getRequirementHistory', async (req) => {
+            const acc = await _ownReq(req, req.data.requirementId);
+            if (!acc.ok) return JSON.stringify({ error: acc.error });
+            const history = await SELECT.from(REQUIREMENT_AUDIT).where({ requirement_requirementId: acc.reqRow.requirementId }).orderBy('at asc');
+            return JSON.stringify({ history: (history || []).map(h => ({ action: h.action, userName: h.userName, oldValue: h.oldValue, newValue: h.newValue, at: h.at })) });
+        });
+
+        return super.init();
+    }
+}
+
+module.exports = { EmployeeService, ManagerService, HRService, FounderService, ProjectService, ClientService };
 cds.on('served', () => startReminderCron(getMailer, createNotification));

@@ -37,8 +37,12 @@ sap.ui.define([
         "founder-dashboard",
         "founder-approvals",
         "founder-tasks",
-        "founder-ratings"
+        "founder-ratings",
+        "founder-projects"
     ];
+
+    // Client portal is a standalone full-screen experience (like the Founder shell).
+    const CLIENT_ROUTES = ["client-portal"];
 
     function buildInitials(sName) {
         if (!sName) return "JD";
@@ -199,6 +203,11 @@ sap.ui.define([
                     // Founders go straight to their dedicated executive dashboard.
                     if (String(sRole || "").toLowerCase() === "founder") {
                         this._redirectFounder();
+                        return;
+                    }
+                    // Clients go straight to their dedicated portal (no internal nav).
+                    if (String(sRole || "").toLowerCase() === "client") {
+                        this._redirectClient();
                         return;
                     }
                     this._refreshNewsletterBadge();
@@ -773,14 +782,31 @@ sap.ui.define([
             } catch (e) { /* ignore */ }
         },
 
-        // The Founder module is a standalone full-screen experience — hide the
-        // SplitApp master (sidebar) and let the page fill the viewport.
+        _redirectClient() {
+            try {
+                this._applyFounderShell("client-portal");
+                if (!/client-portal/.test(window.location.hash || "")) {
+                    this.getOwnerComponent().getRouter().navTo("client-portal", {}, true);
+                }
+            } catch (e) { /* ignore */ }
+        },
+
+        // The Founder & Client modules are standalone full-screen experiences —
+        // hide the SplitApp master (sidebar) and let the page fill the viewport.
         _applyFounderShell(sRouteName) {
             const bFounder = FOUNDER_ROUTES.indexOf(sRouteName) !== -1;
+            const bClient = CLIENT_ROUTES.indexOf(sRouteName) !== -1;
             try {
                 const oApp = this.byId("app");
-                if (oApp) { if (bFounder) oApp.hideMaster(); else oApp.showMaster(); }
+                if (oApp) { if (bFounder || bClient) oApp.hideMaster(); else oApp.showMaster(); }
                 document.body.classList.toggle("tsFounderMode", bFounder);
+                document.body.classList.toggle("tsClientMode", bClient);
+                // A client must never have the employee rail attached.
+                if (bClient) {
+                    try { AppSidebar.detach(); } catch (e) { /* */ }
+                    const oMenuBtn = this.byId("menuToggleBtn");
+                    if (oMenuBtn) oMenuBtn.setVisible(false);
+                }
             } catch (e) { /* ignore */ }
         },
 
@@ -800,6 +826,19 @@ sap.ui.define([
                     oC.getRouter().navTo("dashboard", {}, true);
                     return;
                 }
+            }
+
+            // Guard: only a Client may open the Client portal. A client landing on
+            // any other route is bounced into their portal (full isolation).
+            const oCC = this.getOwnerComponent();
+            const sCR = (oCC._oCurrentUser && oCC._oCurrentUser.role) || this._oAppModel.getProperty("/userRole") || "";
+            const bIsClient = oCC._oCurrentUser && String(sCR).toLowerCase() === "client";
+            if (CLIENT_ROUTES.indexOf(sRouteName) !== -1) {
+                if (oCC._oCurrentUser && !bIsClient) { oCC.getRouter().navTo("dashboard", {}, true); return; }
+            } else if (bIsClient) {
+                // A client must never reach internal screens.
+                this._redirectClient();
+                return;
             }
 
             // Re-check for a newly published newsletter when landing on the
@@ -883,7 +922,9 @@ sap.ui.define([
         _ensureRail() {
             const sRole = this._oAppModel.getProperty("/userRole");
             const oMenuBtn = this.byId("menuToggleBtn");
-            if (!sRole || sRole === "founder") {
+            // Founder has its own shell; Client is an external user with NO access
+            // to any internal navigation — both get no employee rail.
+            if (!sRole || sRole === "founder" || sRole === "client") {
                 AppSidebar.detach();
                 if (oMenuBtn) oMenuBtn.setVisible(false);
                 return;

@@ -5,13 +5,16 @@
     "node": "^20.0.0"
   },
   "dependencies": {
+    "@azure/msal-node": "^2.16.3",
     "@cap-js/hana": "^2",
     "@sap/cds": "^9",
     "@sap/xssec": "^4",
-    "google-auth-library": "^10.6.2",
+    "axios": "^1.18.0",
+    "exceljs": "^4.4.0",
     "node-cron": "^4.2.1",
     "node-fetch": "^3.3.2",
     "nodemailer": "^8.0.7",
+    "pdfkit": "^0.19.1",
     "ws": "^8.21.0"
   },
   "devDependencies": {
@@ -111,6 +114,24 @@
               ],
               "attr": {
                 "email": "founder@ccentrik.com"
+              }
+            },
+            "clienta": {
+              "password": "clienta",
+              "roles": [
+                "Client"
+              ],
+              "attr": {
+                "email": "contact@acme.com"
+              }
+            },
+            "clientb": {
+              "password": "clientb",
+              "roles": [
+                "Client"
+              ],
+              "attr": {
+                "email": "contact@globex.com"
               }
             }
           }

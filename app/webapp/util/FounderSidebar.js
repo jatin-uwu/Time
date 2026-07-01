@@ -12,11 +12,13 @@ sap.ui.define([], function () {
         dashboard:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5L12 3l9 6.5"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>',
         approvals:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/><path d="M9 13l2 2 4-4"/></svg>',
         tasks:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4 6l1 1 2-2"/><path d="M4 12l1 1 2-2"/><path d="M4 18l1 1 2-2"/></svg>',
-        ratings:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 9 22 9.5 17 14 18.5 21 12 17.2 5.5 21 7 14 2 9.5 9 9 12 2"/></svg>'
+        ratings:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 9 22 9.5 17 14 18.5 21 12 17.2 5.5 21 7 14 2 9.5 9 9 12 2"/></svg>',
+        projects: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>'
     };
 
     var ITEMS = [
         { key: "dashboard", route: "founder-dashboard", label: "Dashboard", icon: ICONS.dashboard },
+        { key: "projects",  route: "founder-projects",  label: "Projects",  icon: ICONS.projects },
         { key: "approvals", route: "founder-approvals", label: "Approvals", icon: ICONS.approvals },
         { key: "tasks",     route: "founder-tasks",     label: "Tasks",     icon: ICONS.tasks },
         { key: "ratings",   route: "founder-ratings",   label: "Ratings",   icon: ICONS.ratings }

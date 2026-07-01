@@ -17,6 +17,10 @@
     {
       "name": "$XSAPPNAME.Founder",
       "description": "Founder role"
+    },
+    {
+      "name": "$XSAPPNAME.Client",
+      "description": "Client (external customer) role"
     }
   ],
   "attributes": [],
@@ -52,6 +56,13 @@
         "$XSAPPNAME.Manager",
         "$XSAPPNAME.HR",
         "$XSAPPNAME.Founder"
+      ]
+    },
+    {
+      "name": "Client",
+      "description": "Client Role (external customer — own projects only)",
+      "scope-references": [
+        "$XSAPPNAME.Client"
       ]
     }
   ]
