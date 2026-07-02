@@ -53,7 +53,7 @@ sap.ui.define([], function () {
         var ov = document.createElement("div");
         ov.className = "fmodOverlay";
         ov.innerHTML =
-            "<div class='fmod fdGlass " + (opts.wide ? "wide" : "") + "' role='dialog'>" +
+            "<div class='fmod fdGlass " + (opts.wide ? "wide " : "") + (opts.cls || "") + "' role='dialog'>" +
               "<div class='fmodHead'><div><div class='fmodTitle'>" + esc(opts.title || "") + "</div>" +
               (opts.sub ? "<div class='fmodSub'>" + esc(opts.sub) + "</div>" : "") + "</div>" +
               "<div class='fmodClose' title='Close'>✕</div></div>" +

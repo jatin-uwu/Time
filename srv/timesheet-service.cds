@@ -917,13 +917,32 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
 
     // ── Client Master management (Founder) ──────────────────────────────────────
     action getClientMasters()                                                     returns LargeString;
+    // Pre-save duplicate probe: matches on company name, email and phone.
+    action checkClientDuplicate(companyName: String(150), email: String(150),
+                             phoneNumber: String(30))                              returns LargeString;
     action createClientMaster(clientName: String(150), companyName: String(150),
-                             contactPerson: String(100), email: String(150),
-                             phoneNumber: String(20), notes: String(1000))         returns LargeString;
+                             clientType: String(20), industry: String(100),
+                             website: String(200), country: String(80),
+                             timeZone: String(60), contactPerson: String(100),
+                             designation: String(100), email: String(150),
+                             phoneNumber: String(30),
+                             secondaryContactName: String(100), secondaryEmail: String(150),
+                             secondaryPhone: String(30), billingEmail: String(150),
+                             gstNumber: String(50), billingAddress: String(300),
+                             status: String(20), notes: String(2000),
+                             force: Boolean)                                       returns LargeString;
     action updateClientMaster(clientId: String(20), clientName: String(150),
-                             companyName: String(150), contactPerson: String(100),
-                             phoneNumber: String(20), status: String(20),
-                             notes: String(1000))                                  returns LargeString;
+                             companyName: String(150), clientType: String(20),
+                             industry: String(100), website: String(200),
+                             country: String(80), timeZone: String(60),
+                             contactPerson: String(100), designation: String(100),
+                             phoneNumber: String(30),
+                             secondaryContactName: String(100), secondaryEmail: String(150),
+                             secondaryPhone: String(30), billingEmail: String(150),
+                             gstNumber: String(50), billingAddress: String(300),
+                             status: String(20), notes: String(2000),
+                             reason: String(500))                                  returns LargeString;
+    action getClientStatusHistory(clientId: String(20))                           returns LargeString;
 
     // ── Requirement visibility & handling (Founder / POC / assigned employee) ────
     // Founder & POC see all requirements for their scope; employees see assigned.

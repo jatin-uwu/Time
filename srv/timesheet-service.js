@@ -420,6 +420,7 @@ const PROJECT_ATTACHMENT = 'ccentrik.employee.timesheet.schema.timesheet.Project
 const PROJECT_BUDGET = 'ccentrik.employee.timesheet.schema.timesheet.ProjectBudget';
 const PROJECT_BUDGET_REQUEST = 'ccentrik.employee.timesheet.schema.timesheet.ProjectBudgetRequest';
 const CLIENT_MASTER = 'ccentrik.employee.timesheet.schema.timesheet.ClientMaster';
+const CLIENT_STATUS_HISTORY = 'ccentrik.employee.timesheet.schema.timesheet.ClientStatusHistory';
 const REQUIREMENT = 'ccentrik.employee.timesheet.schema.timesheet.Requirement';
 const REQUIREMENT_ATTACHMENT = 'ccentrik.employee.timesheet.schema.timesheet.RequirementAttachment';
 const REQUIREMENT_COMMENT = 'ccentrik.employee.timesheet.schema.timesheet.RequirementComment';
@@ -5026,7 +5027,9 @@ class ProjectService extends cds.ApplicationService {
             if (!d.clientId) return JSON.stringify({ error: 'Please select a Client for this project.' });
             const client = await SELECT.one.from(CLIENT_MASTER).columns('clientId', 'clientName', 'status').where({ clientId: d.clientId });
             if (!client) return JSON.stringify({ error: 'Selected client was not found.' });
-            if (String(client.status || '').toLowerCase() === 'inactive') return JSON.stringify({ error: 'Selected client is inactive.' });
+            // Inactive/Blacklisted clients cannot receive new projects.
+            const clientBlock = clientActionBlock(client.status);
+            if (clientBlock) return JSON.stringify({ error: clientBlock });
 
             // ── Project Type (mandatory) — drives all downstream planning/budgeting.
             await ensureProjectTypes();
@@ -6097,10 +6100,16 @@ class ProjectService extends cds.ApplicationService {
         this.on('allocateResources', async (req) => {
             const c = await projectCaller(req);
             const { projectId } = req.data;
-            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'pocName', 'status', 'lifecycleStage', 'projectType_code', 'executionBudget', 'budget', 'startDate', 'endDate').where({ projectId });
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'pocName', 'status', 'lifecycleStage', 'projectType_code', 'executionBudget', 'budget', 'startDate', 'endDate', 'client_clientId').where({ projectId });
             if (!project) return JSON.stringify({ error: 'Project not found.' });
             const allowed = isFounderCaller(req, c) || project.poc_employeeId === c.employeeId;
             if (!allowed) return JSON.stringify({ error: 'Only the project POC can allocate resources.' });
+            // Block new resource allocation when the owning client is Inactive/Blacklisted.
+            if (project.client_clientId) {
+                const projClient = await SELECT.one.from(CLIENT_MASTER).columns('status').where({ clientId: project.client_clientId });
+                const allocBlock = projClient && clientActionBlock(projClient.status);
+                if (allocBlock) return JSON.stringify({ error: allocBlock });
+            }
             // Block resource allocation for Planning projects until budget is allocated.
             if (project.status === 'Planning' && project.lifecycleStage !== 'BudgetAllocated')
                 return JSON.stringify({ error: 'Budget must be allocated before resources can be assigned. Complete the planning meeting and budget allocation first.' });
@@ -7085,32 +7094,138 @@ class ProjectService extends cds.ApplicationService {
             return JSON.stringify({
                 clients: (rows || []).map(r => ({
                     clientId: r.clientId, clientName: r.clientName, companyName: r.companyName,
-                    contactPerson: r.contactPerson, email: r.email, phoneNumber: r.phoneNumber,
+                    clientType: r.clientType, industry: r.industry, website: r.website,
+                    country: r.country, timeZone: r.timeZone,
+                    contactPerson: r.contactPerson, designation: r.designation,
+                    email: r.email, phoneNumber: r.phoneNumber,
+                    secondaryContactName: r.secondaryContactName, secondaryEmail: r.secondaryEmail,
+                    secondaryPhone: r.secondaryPhone, billingEmail: r.billingEmail,
+                    gstNumber: r.gstNumber, billingAddress: r.billingAddress,
                     status: r.status, lastLogin: r.lastLogin, notes: r.notes,
-                    projectCount: countBy[r.clientId] || 0, createdAt: r.createdAt
+                    projectCount: countBy[r.clientId] || 0,
+                    createdAt: r.createdAt, createdBy: r.createdBy,
+                    modifiedAt: r.modifiedAt, modifiedBy: r.modifiedBy
                 }))
             });
+        });
+
+        // ── Client validation helpers ─────────────────────────────────────────────
+        const CLIENT_TYPES = ['Enterprise', 'SMB', 'Startup', 'Individual', 'Internal'];
+        // Full lifecycle (edit-time). Creation is restricted to CREATE_STATUSES so a
+        // client can never be born Inactive/Blacklisted.
+        const CLIENT_STATUSES = ['Prospect', 'Active', 'Inactive', 'Blacklisted'];
+        const CREATE_STATUSES = ['Prospect', 'Active'];
+
+        // Next ClientStatusHistory id (CSH-000001).
+        const nextHistoryId = async () => {
+            const rows = await SELECT.from(CLIENT_STATUS_HISTORY).columns('historyId');
+            let max = 0; (rows || []).forEach(r => { const m = /CSH-(\d+)/.exec(r.historyId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+            return 'CSH-' + String(max + 1).padStart(6, '0');
+        };
+        const logClientStatusChange = async (clientId, oldStatus, newStatus, reason, changedBy) => {
+            if (!oldStatus && !newStatus) return;
+            if (oldStatus === newStatus) return;
+            await INSERT.into(CLIENT_STATUS_HISTORY).entries({
+                historyId: await nextHistoryId(), client_clientId: clientId, clientId,
+                oldStatus: oldStatus || '', newStatus: newStatus || '',
+                reason: (reason || '').trim(), changedBy: changedBy || '', changedOn: new Date()
+            });
+        };
+        // Gate business operations (new projects / resource allocation / invoices)
+        // by client status. Returns an error string when blocked, else null.
+        const clientActionBlock = (status) => {
+            const s = String(status || '').toLowerCase();
+            if (s === 'inactive') return 'This client is inactive and cannot receive new projects or resource allocations.';
+            if (s === 'blacklisted') return 'This client has been blacklisted. All business operations are restricted.';
+            return null;
+        };
+        const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const URL_RE = /^(https?:\/\/)?([\w-]+\.)+[\w-]{2,}(\/\S*)?$/i;
+        // Reduce a phone to comparable digits (drop spaces, dashes, brackets, +).
+        const phoneDigits = (s) => (s || '').replace(/[^\d]/g, '');
+
+        // Locate potential duplicates by company name / email / phone. Returns the
+        // matched client rows plus which fields collided so the UI can warn.
+        const findClientDuplicates = async ({ companyName, email, phoneNumber, excludeId }) => {
+            const co = (companyName || '').trim().toLowerCase();
+            const em = (email || '').trim().toLowerCase();
+            const ph = phoneDigits(phoneNumber);
+            const all = await SELECT.from(CLIENT_MASTER)
+                .columns('clientId', 'clientName', 'companyName', 'email', 'phoneNumber');
+            const matches = [];
+            (all || []).forEach(r => {
+                if (excludeId && r.clientId === excludeId) return;
+                const reasons = [];
+                if (co && (r.companyName || '').trim().toLowerCase() === co) reasons.push('company name');
+                if (em && (r.email || '').trim().toLowerCase() === em) reasons.push('email');
+                if (ph && ph.length >= 7 && phoneDigits(r.phoneNumber) === ph) reasons.push('phone number');
+                if (reasons.length) matches.push({ clientId: r.clientId, companyName: r.companyName || r.clientName, email: r.email, reasons });
+            });
+            return matches;
+        };
+
+        this.on('checkClientDuplicate', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can manage clients.' });
+            const d = req.data || {};
+            const matches = await findClientDuplicates({ companyName: d.companyName, email: d.email, phoneNumber: d.phoneNumber });
+            return JSON.stringify({ duplicates: matches });
         });
 
         this.on('createClientMaster', async (req) => {
             const c = await projectCaller(req);
             if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can create clients.' });
             const d = req.data || {};
-            const name = (d.clientName || '').trim();
-            const email = (d.email || '').trim().toLowerCase();
-            if (!name) return JSON.stringify({ error: 'Client Name is required.' });
+            const t = (v) => (v == null ? '' : String(v)).trim();
+            // companyName is the enterprise-facing required field; fall back to the
+            // legacy clientName if only that was supplied.
+            const companyName = t(d.companyName) || t(d.clientName);
+            const email = t(d.email).toLowerCase();
+            const phoneNumber = t(d.phoneNumber);
+            const website = t(d.website);
+
+            // ── Validation ────────────────────────────────────────────────────────
+            if (companyName.length < 2) return JSON.stringify({ error: 'Company Name is required (minimum 2 characters).' });
+            if (companyName.length > 100) return JSON.stringify({ error: 'Company Name must be 100 characters or fewer.' });
+            if (!t(d.contactPerson)) return JSON.stringify({ error: 'Primary Contact Person is required.' });
             if (!email) return JSON.stringify({ error: 'Email is required (it is the client login identity).' });
+            if (!EMAIL_RE.test(email)) return JSON.stringify({ error: 'Please enter a valid email address.' });
+            if (!phoneNumber) return JSON.stringify({ error: 'Phone Number is required.' });
+            if (website && !URL_RE.test(website)) return JSON.stringify({ error: 'Please enter a valid website URL.' });
+            if (d.secondaryEmail && !EMAIL_RE.test(t(d.secondaryEmail).toLowerCase())) return JSON.stringify({ error: 'Secondary email is not a valid email address.' });
+            if (d.billingEmail && !EMAIL_RE.test(t(d.billingEmail).toLowerCase())) return JSON.stringify({ error: 'Billing email is not a valid email address.' });
+
+            const clientType = CLIENT_TYPES.includes(t(d.clientType)) ? t(d.clientType) : '';
+            // New clients may only be Prospect or Active (default Prospect).
+            const status = CREATE_STATUSES.includes(t(d.status)) ? t(d.status) : 'Prospect';
+
+            // ── Hard uniqueness: email is the login identity, always enforced ──────
             const dupE = await SELECT.one.from(CLIENT_MASTER).columns('clientId').where('lower(email) =', email);
             if (dupE) return JSON.stringify({ error: `A client with email ${email} already exists.` });
+
+            // ── Soft duplicate detection (company / phone) — bypassable via force ──
+            if (!d.force) {
+                const matches = await findClientDuplicates({ companyName, email, phoneNumber });
+                if (matches.length) return JSON.stringify({ duplicate: true, duplicates: matches });
+            }
+
             const rows = await SELECT.from(CLIENT_MASTER).columns('clientId');
             let max = 0; (rows || []).forEach(r => { const m = /CLT-(\d+)/.exec(r.clientId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
             const clientId = 'CLT-' + String(max + 1).padStart(4, '0');
             await INSERT.into(CLIENT_MASTER).entries({
-                clientId, clientName: name, companyName: (d.companyName || '').trim(),
-                contactPerson: (d.contactPerson || '').trim(), email,
-                phoneNumber: (d.phoneNumber || '').trim(), status: 'Active', notes: (d.notes || '').trim()
+                clientId,
+                clientName: companyName, companyName,
+                clientType, industry: t(d.industry), website, country: t(d.country), timeZone: t(d.timeZone),
+                contactPerson: t(d.contactPerson), designation: t(d.designation),
+                email, phoneNumber,
+                secondaryContactName: t(d.secondaryContactName), secondaryEmail: t(d.secondaryEmail).toLowerCase(), secondaryPhone: t(d.secondaryPhone),
+                billingEmail: t(d.billingEmail).toLowerCase(), gstNumber: t(d.gstNumber), billingAddress: t(d.billingAddress),
+                status, notes: t(d.notes)
+                // createdBy / createdAt populated automatically by the `managed` aspect.
             });
-            return JSON.stringify({ ok: true, clientId, clientName: name });
+            // Seed the audit trail with the client's initial status.
+            await logClientStatusChange(clientId, '', status, 'Client created', c.name || req.user.id);
+            return JSON.stringify({ ok: true, clientId, clientName: companyName });
         });
 
         this.on('updateClientMaster', async (req) => {
@@ -7120,16 +7235,46 @@ class ProjectService extends cds.ApplicationService {
             const existing = await SELECT.one.from(CLIENT_MASTER).where({ clientId: d.clientId });
             if (!existing) return JSON.stringify({ error: 'Client not found.' });
             const set = {};
-            if (d.clientName != null) set.clientName = d.clientName.trim();
-            if (d.companyName != null) set.companyName = d.companyName.trim();
-            if (d.contactPerson != null) set.contactPerson = d.contactPerson.trim();
-            if (d.phoneNumber != null) set.phoneNumber = d.phoneNumber.trim();
-            if (d.status && ['Active', 'Inactive'].includes(d.status)) set.status = d.status;
-            if (d.notes != null) set.notes = d.notes.trim();
+            const t = (v) => String(v).trim();
+            if (d.companyName != null) { set.companyName = t(d.companyName); set.clientName = t(d.companyName); }
+            else if (d.clientName != null) { set.clientName = t(d.clientName); set.companyName = t(d.clientName); }
+            if (d.clientType != null && (d.clientType === '' || CLIENT_TYPES.includes(t(d.clientType)))) set.clientType = t(d.clientType);
+            if (d.industry != null) set.industry = t(d.industry);
+            if (d.website != null) { if (d.website && !URL_RE.test(t(d.website))) return JSON.stringify({ error: 'Please enter a valid website URL.' }); set.website = t(d.website); }
+            if (d.country != null) set.country = t(d.country);
+            if (d.timeZone != null) set.timeZone = t(d.timeZone);
+            if (d.contactPerson != null) set.contactPerson = t(d.contactPerson);
+            if (d.designation != null) set.designation = t(d.designation);
+            if (d.phoneNumber != null) set.phoneNumber = t(d.phoneNumber);
+            if (d.secondaryContactName != null) set.secondaryContactName = t(d.secondaryContactName);
+            if (d.secondaryEmail != null) { if (d.secondaryEmail && !EMAIL_RE.test(t(d.secondaryEmail).toLowerCase())) return JSON.stringify({ error: 'Secondary email is not a valid email address.' }); set.secondaryEmail = t(d.secondaryEmail).toLowerCase(); }
+            if (d.secondaryPhone != null) set.secondaryPhone = t(d.secondaryPhone);
+            if (d.billingEmail != null) { if (d.billingEmail && !EMAIL_RE.test(t(d.billingEmail).toLowerCase())) return JSON.stringify({ error: 'Billing email is not a valid email address.' }); set.billingEmail = t(d.billingEmail).toLowerCase(); }
+            if (d.gstNumber != null) set.gstNumber = t(d.gstNumber);
+            if (d.billingAddress != null) set.billingAddress = t(d.billingAddress);
+            // ── Status transition (audited) ───────────────────────────────────────
+            let statusChanged = false, oldStatus = existing.status || '', newStatus = oldStatus;
+            if (d.status && CLIENT_STATUSES.includes(d.status) && d.status !== oldStatus) {
+                set.status = d.status; newStatus = d.status; statusChanged = true;
+            }
+            if (d.notes != null) set.notes = t(d.notes);
             await UPDATE(CLIENT_MASTER).set(set).where({ clientId: d.clientId });
             // Keep denormalised clientName on projects in sync.
             if (set.clientName) await UPDATE(PROJECT).set({ clientName: set.clientName }).where({ client_clientId: d.clientId });
-            return JSON.stringify({ ok: true });
+            if (statusChanged) await logClientStatusChange(d.clientId, oldStatus, newStatus, d.reason, c.name || req.user.id);
+            return JSON.stringify({ ok: true, statusChanged, oldStatus, newStatus });
+        });
+
+        this.on('getClientStatusHistory', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can view client history.' });
+            const rows = await SELECT.from(CLIENT_STATUS_HISTORY).where({ clientId: req.data.clientId }).orderBy('changedOn desc');
+            return JSON.stringify({
+                history: (rows || []).map(r => ({
+                    historyId: r.historyId, oldStatus: r.oldStatus, newStatus: r.newStatus,
+                    reason: r.reason, changedBy: r.changedBy, changedOn: r.changedOn
+                }))
+            });
         });
 
         // ════════════════════════════════════════════════════════════════════════

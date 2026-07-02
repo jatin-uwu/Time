@@ -3413,6 +3413,69 @@ html .sapUiBlockLayer {
 .fpForm label { font-size: 0.74rem; color: #9fb0d6; margin-top: 6px; }
 .fpRow { display: flex; gap: 14px; }
 .fpRow > div { flex: 1; }
+
+/* ── Create Project — roomier, sectioned layout (de-congested) ─────────────── */
+.fmod.fmodCreateProject.wide { width: 760px; }
+.fmodCreateProject .fmodBody { padding: 22px 26px 24px; scrollbar-width: none; -ms-overflow-style: none; }
+.fmodCreateProject .fmodBody::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.fpForm.fpCreate { gap: 0; }
+.fpForm.fpCreate .fpGroup {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 14px;
+    padding: 16px 18px 18px;
+    margin-bottom: 16px;
+}
+.fpForm.fpCreate .fpGroupTitle {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: #a78bfa; margin-bottom: 10px;
+}
+.fpForm.fpCreate label { font-size: 0.78rem; color: #aab8d8; margin-top: 12px; display: block; }
+.fpForm.fpCreate .fpGroup > label:first-of-type,
+.fpForm.fpCreate .fpRow label { margin-top: 0; }
+.fpForm.fpCreate .fpRow { gap: 18px; margin-top: 14px; }
+.fpForm.fpCreate .fpRow + label { margin-top: 12px; }
+.fpForm.fpCreate .fpInput { padding: 10px 12px; font-size: 0.9rem; border-radius: 10px; margin-top: 5px; }
+.fpForm.fpCreate .fmodTextarea { min-height: 76px; margin-top: 5px; }
+.fpForm.fpCreate .fmodFoot { margin-top: 4px; }
+@media (max-width: 820px) {
+    .fmod.fmodCreateProject.wide { width: 100%; }
+    .fpForm.fpCreate .fpRow { flex-direction: column; gap: 0; }
+}
+
+/* ── Create New Client — required marks, hints, inline errors ──────────────── */
+.fpReq { color: #fb7185; font-weight: 700; margin-left: 2px; }
+.fpAudit { font-size: 0.74rem; color: #8394ba; margin-top: 10px; line-height: 1.5; }
+.fpClientForm input:disabled, .fpClientForm .fpInput:disabled { opacity: 0.65; cursor: not-allowed; }
+.fpHint { color: #8394ba; font-weight: 400; font-size: 0.72rem; }
+.fpOpt { color: #8394ba; font-weight: 400; text-transform: none; letter-spacing: 0; }
+.fpFieldErr { display: none; color: #fb7185; font-size: 0.72rem; margin-top: 4px; }
+.fpClientForm .fpPhoneRow { display: flex; gap: 10px; margin-top: 5px; }
+.fpClientForm .fpPhoneRow .fpDial { flex: 0 0 150px; }
+.fpClientForm .fpPhoneRow > .fpInput { flex: 1; margin-top: 0; }
+
+/* Custom searchable dropdown (type-ahead combobox) */
+.fpCombo { position: relative; margin-top: 5px; }
+.fpCombo .fpComboInput { margin-top: 0; padding-right: 30px; cursor: text; }
+.fpCombo .fpComboCaret { position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    color: #9fb0d6; font-size: 0.7rem; pointer-events: auto; cursor: pointer; transition: transform .15s; }
+.fpCombo.open .fpComboCaret { transform: translateY(-50%) rotate(180deg); }
+.fpComboPanel { position: absolute; z-index: 50; left: 0; right: 0; top: calc(100% + 4px);
+    max-height: 240px; overflow-y: auto; background: #141a30; border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.45); padding: 4px; }
+.fpComboItem { padding: 8px 10px; border-radius: 7px; color: #dbe3f5; font-size: 0.86rem; cursor: pointer; }
+.fpComboItem:hover { background: rgba(124,131,214,0.22); }
+.fpComboItem.sel { background: rgba(52,211,153,0.16); color: #34d399; }
+.fpComboEmpty { padding: 10px; color: #8394ba; font-size: 0.82rem; text-align: center; }
+.fpComboPanel::-webkit-scrollbar { width: 8px; }
+.fpComboPanel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 8px; }
+
+/* Inline button spinner */
+.fpSpin { display: inline-block; width: 13px; height: 13px; margin-right: 7px; vertical-align: -2px;
+    border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff; border-radius: 50%;
+    animation: fpSpin .7s linear infinite; }
+@keyframes fpSpin { to { transform: rotate(360deg); } }
+
 .fpLink { background: none; border: none; cursor: pointer; color: #38bdf8; font-size: 0.8rem; }
 .fpLink.danger { color: #fb7185; }
 .faBtn.sm { padding: 5px 12px; font-size: 0.78rem; }

@@ -850,15 +850,48 @@ entity ProjectAuditLog : managed {
 // Clients are NOT employees and never appear in EmployeeMaster.
 entity ClientMaster : managed {
     key clientId    : String(20);                 // CLT-0001
+    // ── Company information ───────────────────────────────────────────────────
+    // clientName / companyName retained for backward compatibility. companyName is
+    // the enterprise-facing "Company Name *"; clientName mirrors it when only one
+    // is supplied so existing screens (project pickers, requirements) keep working.
     clientName      : String(150);
     companyName     : String(150);
-    contactPerson   : String(100);
+    clientType      : String(20);                 // Enterprise | SMB | Startup | Individual | Internal
+    industry        : String(100);
+    website         : String(200);
+    country         : String(80);
+    timeZone        : String(60);
+    // ── Primary contact ───────────────────────────────────────────────────────
+    contactPerson   : String(100);                // Primary contact name
+    designation     : String(100);                // Primary contact designation
     email           : String(150);                // login identity (unique, lower-cased on read)
-    phoneNumber     : String(20);
-    status          : String(20) default 'Active'; // Active | Inactive
+    phoneNumber     : String(30);                 // Primary phone (with country code)
+    // ── Secondary contact (optional) ─────────────────────────────────────────
+    secondaryContactName : String(100);
+    secondaryEmail       : String(150);
+    secondaryPhone       : String(30);
+    // ── Billing information (optional) ───────────────────────────────────────
+    billingEmail    : String(150);
+    gstNumber       : String(50);                 // GST / VAT number
+    billingAddress  : String(300);
+    // ── Status & misc ────────────────────────────────────────────────────────
+    status          : String(20) default 'Prospect'; // Prospect | Active | Inactive | Blacklisted
     lastLogin       : Timestamp;
-    notes           : String(1000);
+    notes           : String(2000);
     projects        : Composition of many Project on projects.client = $self;
+    // Audit (createdBy/createdAt/modifiedBy/modifiedAt) provided by `managed`.
+}
+
+// Immutable audit trail of every client status transition.
+entity ClientStatusHistory : managed {
+    key historyId   : String(30);                 // CSH-000001
+    client          : Association to ClientMaster;
+    clientId        : String(20);                 // denormalised for easy querying
+    oldStatus       : String(20);
+    newStatus       : String(20);
+    reason          : String(500);
+    changedBy       : String(150);                // caller display name / email
+    changedOn       : Timestamp;
 }
 
 // A business requirement raised by a client against one of their projects.
