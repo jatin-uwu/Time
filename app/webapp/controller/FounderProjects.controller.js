@@ -243,10 +243,10 @@
             var counts = { planning: 0, ongoing: 0, onhold: 0, completed: 0 };
             list.forEach(function (p) { var g = self._group(p.status); if (counts[g] !== undefined) counts[g]++; });
             var FILTERS = [
-                { key: "planning", icon: "📝", label: "Planning" },
-                { key: "ongoing", icon: "🚀", label: "Ongoing" },
-                { key: "onhold", icon: "⏸️", label: "On Hold" },
-                { key: "completed", icon: "✅", label: "Completed" }
+                { key: "planning", label: "Planning" },
+                { key: "ongoing", label: "Ongoing" },
+                { key: "onhold", label: "On Hold" },
+                { key: "completed", label: "Completed" }
             ];
             var segs = FILTERS.map(function (f) {
                 return "<button class='fpSeg" + (self._filter === f.key ? " active" : "") + "' onclick=\"window._fpProj.onFilter('" + f.key + "')\">" +
@@ -256,7 +256,6 @@
             var filterBar = "<div class='fpFilterBar'>" +
                 "<div class='fpSegGroup'><span class='fpSegTitle'>📋 Project Status</span>" + segs + "</div>" +
                 "<div style='display:flex;gap:8px'>" +
-                "<button class='faBtn ghost' onclick=\"window._fpProj.onManageClients()\">👥 Manage Clients</button>" +
                 "<button class='faBtn approve' onclick=\"window._fpProj.onCreateProject()\">＋ Create Project</button></div></div>";
 
             var filtered = list.filter(function (p) { return self._group(p.status) === self._filter; });
@@ -264,7 +263,9 @@
             var cards = filtered.length ? filtered.map(this._projCard.bind(this)).join("")
                 : "<div class='faEmpty fdGlass'>No " + (labelMap[this._filter] || "") + " projects.</div>";
 
-            h.setContent(FP.wrap(head, this._portfolioFinancials() + filterBar + "<div class='fpProjGrid'>" + cards + "</div>"));
+            // Portfolio Financials rollup now lives on the dedicated Portfolio
+            // Analysis dashboard — the Projects screen stays a clean project list.
+            h.setContent(FP.wrap(head, filterBar + "<div class='fpProjGrid'>" + cards + "</div>"));
         },
         // Founder Financial Dashboard — portfolio rollup + collapsible per-project table.
         _portfolioFinancials: function () {
@@ -970,287 +971,6 @@
                     });
                 });
             }).catch(function () { FP.toast("Could not load employees/clients.", false); });
-        },
-
-        // ── Manage Clients (Founder) ──────────────────────────────────────────────────
-        onManageClients: function () {
-            var that = this;
-            var pill = function (s) {
-                var k = String(s || "").toLowerCase();
-                var col = k === "active" ? "#34d399" : k === "prospect" ? "#fbbf24" : k === "inactive" ? "#9fb0d6" : k === "blacklisted" ? "#fb7185" : "#9fb0d6";
-                return "<span style='color:" + col + ";font-weight:700;font-size:0.8rem'>" + esc(s || "—") + "</span>";
-            };
-            ppost("getClientMasters", {}).then(function (d) {
-                if (d && d.error) { FP.toast(d.error, false); return; }
-                var clients = d.clients || [];
-                var rows = clients.length ? clients.map(function (c) {
-                    return "<tr><td><b style='color:#e6edf8'>" + esc(c.companyName || c.clientName) + "</b><div class='fdCardSub'>" + esc(c.clientType || "") + (c.country ? " · " + esc(c.country) : "") + "</div></td>" +
-                        "<td style='color:#9fb0d6'>" + esc(c.contactPerson || "—") + "<div class='fdCardSub'>" + esc(c.email) + "</div></td>" +
-                        "<td style='color:#9fb0d6'>" + (c.projectCount || 0) + "</td>" +
-                        "<td>" + pill(c.status) + "</td>" +
-                        "<td><button class='faBtn sm ghost clEdit' data-id='" + esc(c.clientId) + "'>Edit</button></td></tr>";
-                }).join("") : "";
-                var body = "<div class='fpForm'>" +
-                    "<button class='faBtn approve' id='cNew' style='margin-bottom:12px'>＋ New Client</button>" +
-                    (rows ? "<table class='fpTable'><thead><tr><th>Client</th><th>Contact</th><th>Projects</th><th>Status</th><th>Actions</th></tr></thead><tbody>" + rows + "</tbody></table>" : "<div class='fdCardSub'>No clients yet. Create your first client.</div>") +
-                    "<div class='fmodFoot'><button class='faBtn ghost' id='cClose'>Close</button></div></div>";
-                var m = FP.modal({ title: "Manage Clients", body: body, wide: true });
-                m.body.querySelector("#cClose").addEventListener("click", m.close);
-                m.body.querySelector("#cNew").addEventListener("click", function () { m.close(); that.onNewClient(); });
-                m.body.querySelectorAll(".clEdit").forEach(function (btn) {
-                    btn.addEventListener("click", function () {
-                        var c = clients.find(function (x) { return x.clientId === btn.getAttribute("data-id"); });
-                        if (c) { m.close(); that.onEditClient(c); }
-                    });
-                });
-            }).catch(function () { FP.toast("Could not load clients.", false); });
-        },
-
-        onNewClient: function () { this._openClientForm(null); },
-        onEditClient: function (client) { this._openClientForm(client); },
-
-        // Shared Create / Edit client form. `existing` = null → create; else edit.
-        _openClientForm: function (existing) {
-            var that = this;
-            var isEdit = !!existing;
-            var req = "<span class='fpReq'>*</span>";
-            // Create → Prospect/Active only. Edit → full lifecycle.
-            var statusList = isEdit ? CLIENT_STATUSES : CREATE_STATUSES;
-            var curStatus = isEdit ? (existing.status || "Prospect") : "Prospect";
-            var statusOpts = statusList.map(function (s) { return "<option" + (s === curStatus ? " selected" : "") + ">" + s + "</option>"; }).join("");
-            var dialOpts = COUNTRIES.map(function (c) { return { value: c.d + "|" + c.n, label: c.d + "  " + c.n }; })
-                .filter(function (o, i, a) { return a.findIndex(function (x) { return x.value === o.value; }) === i; });
-
-            var auditHtml = "";
-            if (isEdit) {
-                var fmt = function (v) { return v ? new Date(v).toLocaleString() : "—"; };
-                auditHtml = "<div class='fpGroup'><div class='fpGroupTitle'>Record</div>" +
-                    "<div class='fpRow'><div><label>Client ID</label><input class='fpInput' value='" + esc(existing.clientId) + "' disabled/></div>" +
-                    "<div><label>Projects</label><input class='fpInput' value='" + (existing.projectCount || 0) + "' disabled/></div></div>" +
-                    "<div class='fpAudit'>Created by " + esc(existing.createdBy || "—") + " on " + esc(fmt(existing.createdAt)) +
-                    " · Last updated by " + esc(existing.modifiedBy || "—") + " on " + esc(fmt(existing.modifiedAt)) + "</div></div>";
-            }
-
-            var body = "<div class='fpForm fpCreate fpClientForm'>" +
-                auditHtml +
-                // ── Company Information ─────────────────────────────────────────
-                "<div class='fpGroup'>" +
-                "<div class='fpGroupTitle'>Company Information</div>" +
-                "<label>Company Name " + req + "</label><input class='fpInput' id='clCo' maxlength='100' placeholder='e.g. Acme Corporation'/>" +
-                "<div class='fpFieldErr' id='e_clCo'></div>" +
-                "<div class='fpRow'>" +
-                "<div><label>Client Type " + req + "</label><div class='fpCombo' id='clType'></div></div>" +
-                "<div><label>Industry</label><div class='fpCombo' id='clInd'></div></div></div>" +
-                "<div class='fpRow'>" +
-                "<div><label>Website</label><input class='fpInput' id='clWeb' placeholder='https://company.com'/><div class='fpFieldErr' id='e_clWeb'></div></div>" +
-                "<div><label>Country " + req + "</label><div class='fpCombo' id='clCountry'></div></div></div>" +
-                "<label>Time Zone <span class='fpHint'>— auto-filled from country</span></label><div class='fpCombo' id='clTz'></div>" +
-                "</div>" +
-                // ── Primary Contact ─────────────────────────────────────────────
-                "<div class='fpGroup'>" +
-                "<div class='fpGroupTitle'>Primary Contact</div>" +
-                "<div class='fpRow'>" +
-                "<div><label>Contact Person " + req + "</label><input class='fpInput' id='clContact'/><div class='fpFieldErr' id='e_clContact'></div></div>" +
-                "<div><label>Designation</label><input class='fpInput' id='clDesig' placeholder='e.g. Procurement Head'/></div></div>" +
-                "<label>Email " + req + " <span class='fpHint'>— used as the client login identity</span></label>" +
-                "<input class='fpInput' id='clEmail' placeholder='contact@company.com'" + (isEdit ? " disabled" : "") + "/><div class='fpFieldErr' id='e_clEmail'></div>" +
-                "<label>Phone Number " + req + "</label>" +
-                "<div class='fpPhoneRow'><div class='fpCombo fpDial' id='clDial'></div><input class='fpInput' id='clPhone' placeholder='98765 43210'/></div>" +
-                "<div class='fpFieldErr' id='e_clPhone'></div>" +
-                "</div>" +
-                // ── Secondary Contact ───────────────────────────────────────────
-                "<div class='fpGroup'>" +
-                "<div class='fpGroupTitle'>Secondary Contact <span class='fpOpt'>(Optional)</span></div>" +
-                "<label>Contact Person</label><input class='fpInput' id='clSecName'/>" +
-                "<div class='fpRow'>" +
-                "<div><label>Email</label><input class='fpInput' id='clSecEmail'/><div class='fpFieldErr' id='e_clSecEmail'></div></div>" +
-                "<div><label>Phone</label><input class='fpInput' id='clSecPhone'/></div></div>" +
-                "</div>" +
-                // ── Billing Information ──────────────────────────────────────────
-                "<div class='fpGroup'>" +
-                "<div class='fpGroupTitle'>Billing Information <span class='fpOpt'>(Optional)</span></div>" +
-                "<div class='fpRow'>" +
-                "<div><label>Billing Email</label><input class='fpInput' id='clBillEmail'/><div class='fpFieldErr' id='e_clBillEmail'></div></div>" +
-                "<div><label>GST / VAT Number</label><input class='fpInput' id='clGst'/></div></div>" +
-                "<label>Billing Address</label><textarea class='fmodTextarea' id='clBillAddr' style='min-height:60px'></textarea>" +
-                "</div>" +
-                // ── Client Status ────────────────────────────────────────────────
-                "<div class='fpGroup'>" +
-                "<div class='fpGroupTitle'>Client Status</div>" +
-                "<label>Status " + req + "</label><select class='fpInput' id='clStatus'>" + statusOpts + "</select>" +
-                (isEdit ? "<div class='fpHint' style='margin-top:6px'>Inactive disables new projects &amp; allocations. Blacklisted restricts all business operations.</div>" : "") +
-                "</div>" +
-                // ── Additional Information ───────────────────────────────────────
-                "<div class='fpGroup'>" +
-                "<div class='fpGroupTitle'>Additional Information</div>" +
-                "<label>Notes</label><textarea class='fmodTextarea' id='clNotes' placeholder='Add project requirements, special instructions, billing notes, communication preferences, or any other relevant information.'></textarea>" +
-                "</div>" +
-                "<div id='pErr' style='display:none;color:#fb7185;font-size:0.84rem;padding:8px 12px;background:rgba(251,113,133,0.10);border-radius:8px;margin-top:4px'></div>" +
-                "<div class='fmodFoot'><button class='faBtn ghost' id='cCancel'>Cancel</button><button class='faBtn approve' id='cSave'" + (isEdit ? "" : " disabled") + ">" + (isEdit ? "Save Changes" : "Create Client") + "</button></div></div>";
-
-            var saveLabel = isEdit ? "Save Changes" : "Create Client";
-            var m = FP.modal({ title: isEdit ? "Edit Client — " + esc(existing.companyName || existing.clientName) : "Create New Client", body: body, wide: true, cls: "fmodCreateProject fmodClient" });
-            var $ = function (id) { return m.body.querySelector(id); };
-            var g = function (id) { var el = $(id); return el ? el.value.trim() : ""; };
-            var saveBtn = $("#cSave");
-            var showErr = function (msg) { var el = $("#pErr"); el.textContent = "⚠ " + msg; el.style.display = "block"; el.scrollIntoView({ behavior: "smooth", block: "nearest" }); };
-            var clearErr = function () { $("#pErr").style.display = "none"; };
-            var fieldErr = function (id, msg) { var el = $(id); if (el) { el.textContent = msg || ""; el.style.display = msg ? "block" : "none"; } };
-
-            // ── Searchable dropdowns ────────────────────────────────────────────
-            var typeCombo = initCombo(m.body, "#clType", CLIENT_TYPES.map(function (t) { return { value: t, label: t }; }), { placeholder: "Select client type…", onChange: validate });
-            var indCombo = initCombo(m.body, "#clInd", INDUSTRIES.map(function (i) { return { value: i, label: i }; }), { placeholder: "Search industry…" });
-            var dialCombo = initCombo(m.body, "#clDial", dialOpts, { placeholder: "Code", onChange: validate });
-            var tzCombo = initCombo(m.body, "#clTz", [], { placeholder: "Select country first…" });
-            var countryCombo = initCombo(m.body, "#clCountry", COUNTRIES.map(function (c) { return { value: c.n, label: c.n }; }), {
-                placeholder: "Search country…",
-                onChange: function (name) {
-                    var c = countryByName(name);
-                    // Refresh timezone options immediately; auto-select if only one.
-                    var zones = tzOptionsFor(name);
-                    tzCombo.setOptions(zones);
-                    if (zones.length === 1) tzCombo.set(zones[0].value);
-                    if (c && dialCombo && !dialCombo.value) dialCombo.set(c.d + "|" + c.n);
-                    validate();
-                }
-            });
-
-            // ── Prefill (edit) ──────────────────────────────────────────────────
-            if (isEdit) {
-                $("#clCo").value = existing.companyName || existing.clientName || "";
-                typeCombo.set(existing.clientType || "");
-                indCombo.set(existing.industry || "");
-                $("#clWeb").value = existing.website || "";
-                if (existing.country) { countryCombo.set(existing.country); tzCombo.setOptions(tzOptionsFor(existing.country)); }
-                if (existing.timeZone) tzCombo.set(existing.timeZone);
-                $("#clContact").value = existing.contactPerson || "";
-                $("#clDesig").value = existing.designation || "";
-                $("#clEmail").value = existing.email || "";
-                // Split "+91 98765..." into dial + local number.
-                var pm = /^(\+\d+)\s*(.*)$/.exec(existing.phoneNumber || "");
-                if (pm) { var dc = countryByName(existing.country); dialCombo.set(pm[1] + "|" + ((dc && dc.d === pm[1]) ? dc.n : (COUNTRIES.find(function (x) { return x.d === pm[1]; }) || {}).n || "")); $("#clPhone").value = pm[2]; }
-                else $("#clPhone").value = existing.phoneNumber || "";
-                $("#clSecName").value = existing.secondaryContactName || "";
-                $("#clSecEmail").value = existing.secondaryEmail || "";
-                $("#clSecPhone").value = existing.secondaryPhone || "";
-                $("#clBillEmail").value = existing.billingEmail || "";
-                $("#clGst").value = existing.gstNumber || "";
-                $("#clBillAddr").value = existing.billingAddress || "";
-                $("#clNotes").value = existing.notes || "";
-            }
-
-            // ── Live validation → gate the save button ──────────────────────────
-            var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            var URL_RE = /^(https?:\/\/)?([\w-]+\.)+[\w-]{2,}(\/\S*)?$/i;
-            function validate() {
-                var ok = true;
-                var co = g("#clCo");
-                if (co.length < 2) { ok = false; fieldErr("#e_clCo", co ? "Minimum 2 characters." : ""); } else if (co.length > 100) { ok = false; fieldErr("#e_clCo", "Maximum 100 characters."); } else fieldErr("#e_clCo", "");
-                if (!typeCombo.value) ok = false;
-                if (!countryCombo.value) ok = false;
-                if (!g("#clContact")) ok = false;
-                var em = g("#clEmail").toLowerCase();
-                if (!em || !EMAIL_RE.test(em)) { ok = false; fieldErr("#e_clEmail", em && !EMAIL_RE.test(em) ? "Enter a valid email address." : ""); } else fieldErr("#e_clEmail", "");
-                var ph = g("#clPhone").replace(/[^\d]/g, "");
-                if (ph.length < 7 || ph.length > 15) { ok = false; fieldErr("#e_clPhone", ph ? "Enter a valid phone number." : ""); } else fieldErr("#e_clPhone", "");
-                var web = g("#clWeb"); if (web && !URL_RE.test(web)) { ok = false; fieldErr("#e_clWeb", "Enter a valid URL."); } else fieldErr("#e_clWeb", "");
-                var se = g("#clSecEmail").toLowerCase(); if (se && !EMAIL_RE.test(se)) { ok = false; fieldErr("#e_clSecEmail", "Enter a valid email."); } else fieldErr("#e_clSecEmail", "");
-                var be = g("#clBillEmail").toLowerCase(); if (be && !EMAIL_RE.test(be)) { ok = false; fieldErr("#e_clBillEmail", "Enter a valid email."); } else fieldErr("#e_clBillEmail", "");
-                saveBtn.disabled = !ok;
-                return ok;
-            }
-            ["#clCo", "#clWeb", "#clContact", "#clDesig", "#clEmail", "#clPhone", "#clSecEmail", "#clBillEmail"].forEach(function (id) {
-                var el = $(id); if (el) el.addEventListener("input", validate);
-            });
-
-            // ── Payload assembly ────────────────────────────────────────────────
-            function basePayload() {
-                var dial = (dialCombo.value || "").split("|")[0] || "";
-                var phone = g("#clPhone");
-                return {
-                    companyName: g("#clCo"), clientName: g("#clCo"),
-                    clientType: typeCombo.value, industry: indCombo.value || "",
-                    website: g("#clWeb"), country: countryCombo.value, timeZone: tzCombo.value,
-                    contactPerson: g("#clContact"), designation: g("#clDesig"),
-                    phoneNumber: (dial ? dial + " " : "") + phone,
-                    secondaryContactName: g("#clSecName"), secondaryEmail: g("#clSecEmail").toLowerCase(), secondaryPhone: g("#clSecPhone"),
-                    billingEmail: g("#clBillEmail").toLowerCase(), gstNumber: g("#clGst"), billingAddress: g("#clBillAddr"),
-                    status: g("#clStatus"), notes: g("#clNotes")
-                };
-            }
-
-            function busy(on) {
-                saveBtn.disabled = on;
-                saveBtn.innerHTML = on ? "<span class='fpSpin'></span>Saving…" : saveLabel;
-            }
-
-            // ── Create path (duplicate detection) ───────────────────────────────
-            function doCreate(force) {
-                clearErr(); busy(true);
-                var p = basePayload(); p.email = g("#clEmail").toLowerCase(); p.force = !!force;
-                ppost("createClientMaster", p).then(function (res) {
-                    if (res && res.duplicate) { busy(false); that._confirmClientDuplicate(res.duplicates, function () { doCreate(true); }); return; }
-                    if (res && res.error) { busy(false); showErr(res.error); return; }
-                    m.close(); FP.toast("Client created successfully."); that.onManageClients();
-                }).catch(function () { busy(false); FP.toast("Unable to create client. Please try again.", false); });
-            }
-
-            // ── Edit path (status-change confirmation + audit) ──────────────────
-            function doUpdate(reason) {
-                clearErr(); busy(true);
-                var p = basePayload(); p.clientId = existing.clientId; if (reason) p.reason = reason;
-                ppost("updateClientMaster", p).then(function (res) {
-                    if (res && res.error) { busy(false); showErr(res.error); return; }
-                    m.close(); FP.toast("Client updated successfully."); that.onManageClients();
-                }).catch(function () { busy(false); FP.toast("Unable to update client. Please try again.", false); });
-            }
-
-            $("#cCancel").addEventListener("click", m.close);
-            saveBtn.addEventListener("click", function () {
-                if (!validate()) return;
-                if (!isEdit) { doCreate(false); return; }
-                var oldS = existing.status || "Prospect", newS = g("#clStatus");
-                that._confirmStatusChange(oldS, newS, function (reason) { doUpdate(reason); });
-            });
-            validate();
-        },
-
-        // Duplicate-client warning → let the founder proceed or cancel.
-        _confirmClientDuplicate: function (dups, onContinue) {
-            var list = (dups || []).map(function (d) {
-                return "<li><b style='color:#e6edf8'>" + esc(d.companyName || d.clientId) + "</b>" +
-                    (d.email ? " · " + esc(d.email) : "") +
-                    " <span style='color:#9fb0d6'>(matches " + esc((d.reasons || []).join(", ")) + ")</span></li>";
-            }).join("");
-            var body = "<div class='fmod'>" +
-                "<p class='fmodP'>This client may already exist. Do you want to continue?</p>" +
-                "<ul style='margin:0 0 12px;padding-left:18px;color:#c8d3ef;font-size:0.86rem;line-height:1.7'>" + list + "</ul>" +
-                "<div class='fmodFoot'><button class='faBtn ghost' id='dupCancel'>Cancel</button><button class='faBtn approve' id='dupGo'>Continue Anyway</button></div></div>";
-            var m2 = FP.modal({ title: "Possible Duplicate", body: body });
-            m2.body.querySelector("#dupCancel").addEventListener("click", m2.close);
-            m2.body.querySelector("#dupGo").addEventListener("click", function () { m2.close(); onContinue(); });
-        },
-
-        // Status-transition guard. Prompts (with an optional reason) for the sensitive
-        // transitions, otherwise proceeds straight through. Calls onOk(reason).
-        _confirmStatusChange: function (oldS, newS, onOk) {
-            if (oldS === newS) { onOk(""); return; }
-            var msg = null;
-            if (oldS === "Active" && newS === "Inactive") msg = "Are you sure you want to mark this client as Inactive? New projects and resource allocations will be disabled.";
-            else if (newS === "Blacklisted") msg = "Are you sure you want to blacklist this client? All business operations with this client will be restricted.";
-            else if (oldS === "Blacklisted" && newS === "Active") msg = "Are you sure you want to reactivate this blacklisted client? This action will be logged in the audit history.";
-            if (!msg) { onOk(""); return; }
-            var body = "<div class='fmod'>" +
-                "<p class='fmodP'>" + esc(msg) + "</p>" +
-                "<label style='display:block;color:#9fb0d6;font-size:0.78rem;margin-bottom:4px'>Reason <span class='fpOpt'>(recorded in audit trail)</span></label>" +
-                "<textarea class='fmodTextarea' id='scReason' placeholder='Optional reason for this status change'></textarea>" +
-                "<div class='fmodFoot'><button class='faBtn ghost' id='scCancel'>Cancel</button><button class='faBtn approve' id='scGo'>Confirm</button></div></div>";
-            var m2 = FP.modal({ title: "Confirm Status Change", body: body });
-            m2.body.querySelector("#scCancel").addEventListener("click", m2.close);
-            m2.body.querySelector("#scGo").addEventListener("click", function () {
-                var reason = (m2.body.querySelector("#scReason").value || "").trim();
-                m2.close(); onOk(reason);
-            });
         },
 
         // ── Schedule Planning Meeting (selects from POC + managers) ──────────────

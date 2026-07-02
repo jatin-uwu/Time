@@ -38,7 +38,9 @@ sap.ui.define([
         "founder-approvals",
         "founder-tasks",
         "founder-ratings",
-        "founder-projects"
+        "founder-projects",
+        "founder-portfolio",
+        "founder-clients"
     ];
 
     // Client portal is a standalone full-screen experience (like the Founder shell).

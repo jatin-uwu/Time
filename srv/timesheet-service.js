@@ -5576,6 +5576,248 @@ class ProjectService extends cds.ApplicationService {
             return JSON.stringify({ portfolio, projects: rows });
         });
 
+        // ── Per-project executive health + risk (shared by portfolio + drill-down)
+        // Returns { health(0-100), healthLabel, risk, penalties, flags }.
+        const projectHealth = (p, fin, tasks, hasResources, todayStr) => {
+            const st = String(p.status || '');
+            const isCompleted = st === 'Completed';
+            const isActive = st === 'Active';
+            const isOverdue = !isCompleted && p.endDate && String(p.endDate).slice(0, 10) < todayStr;
+            const overBudget = fin.executionBudget > 0 && fin.projectedTotalCost > fin.executionBudget;
+            const isCritical = String(p.priority || '') === 'Critical';
+            const blocked = (tasks || []).filter(t => String(t.status || '').toLowerCase() === 'blocked').length;
+            const delayP = isOverdue ? 25 : 0;
+            const budgetP = overBudget ? 20 : 0;
+            const riskP = (isCritical ? 15 : (String(p.priority) === 'High' ? 8 : 0)) + (blocked ? 10 : 0);
+            const resP = (isActive && !hasResources) ? 10 : 0;
+            const health = Math.max(0, Math.min(100, 100 - delayP - budgetP - riskP - resP));
+            const score = delayP + budgetP + riskP + resP;
+            const risk = score >= 45 ? 'Critical' : score >= 25 ? 'High' : score >= 10 ? 'Medium' : 'Low';
+            return {
+                health, healthLabel: health >= 90 ? 'Healthy' : health >= 70 ? 'At Risk' : 'Critical',
+                risk, penalties: { delay: delayP, budget: budgetP, risk: riskP, resource: resP },
+                isCompleted, isActive, isOverdue, overBudget, isCritical, blocked
+            };
+        };
+
+        // ── Executive Portfolio Command Center ──────────────────────────────────
+        // Single aggregation feeding every KPI, chart and table on the Founder
+        // Portfolio Analysis dashboard. Reuses projectFinancials/projectActualCost
+        // so numbers agree with the per-project financial screens.
+        this.on('getPortfolioAnalysis', async (req) => {
+          try {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can view portfolio analysis.' });
+            const today = new Date();
+            const todayStr = today.toISOString().slice(0, 10);
+            const curMonKey = todayStr.slice(0, 7);
+            const projects = await SELECT.from(PROJECT).orderBy('createdAt desc');
+            const clients = await SELECT.from(CLIENT_MASTER).columns('clientId', 'companyName', 'clientName');
+            const clientNameById = {}; (clients || []).forEach(cl => { clientNameById[cl.clientId] = cl.companyName || cl.clientName || cl.clientId; });
+
+            // 12-month buckets for revenue/spend trends.
+            const months = [];
+            for (let i = 11; i >= 0; i--) { const d = new Date(today.getFullYear(), today.getMonth() - i, 1); months.push({ key: d.toISOString().slice(0, 7), label: d.toLocaleString('en-US', { month: 'short' }) + " '" + String(d.getFullYear()).slice(-2) }); }
+            const revByMonth = {}, spendByMonth = {}; months.forEach(m => { revByMonth[m.key] = 0; spendByMonth[m.key] = 0; });
+            const spread = (startDate, endDate, total, bucket) => {
+                if (!total) return;
+                const s = startDate ? new Date(startDate) : today;
+                let e = endDate ? new Date(endDate) : today; if (e > today) e = today;
+                let ss = new Date(s.getFullYear(), s.getMonth(), 1);
+                const keys = [];
+                while (ss <= e) { const k = ss.toISOString().slice(0, 7); if (bucket[k] !== undefined) keys.push(k); ss = new Date(ss.getFullYear(), ss.getMonth() + 1, 1); }
+                if (!keys.length) { if (bucket[curMonKey] !== undefined) bucket[curMonKey] += total; return; }
+                const per = total / keys.length; keys.forEach(k => { bucket[k] += per; });
+            };
+
+            const statusBuckets = { Planning: 0, Ongoing: 0, 'On Hold': 0, Completed: 0 };
+            const clientRev = {}; const table = []; const revVsCost = [];
+            let totalContract = 0, forecastProfit = 0, currentSpendTot = 0, execBudgetTot = 0, expectedProfitTot = 0, forecastSpendTot = 0, revenueRealized = 0, revenueAtRisk = 0;
+            let cntTotal = 0, cntActive = 0, cntCompleted = 0, cntDelayed = 0, cntAtRisk = 0, cntOverBudget = 0, cntBlocked = 0, cntCritical = 0, cntUnderResourced = 0;
+            let newTotal = 0, newActive = 0, newCompleted = 0;
+            const projName = {}; (projects || []).forEach(p => { projName[p.projectId] = p.projectName; });
+
+            for (const p of (projects || [])) {
+              try {
+                if (String(p.status) === 'Cancelled') continue;
+                cntTotal++;
+                const createdMon = p.createdAt ? String(p.createdAt).slice(0, 7) : '';
+                if (createdMon === curMonKey) newTotal++;
+                const { actualCost, hourly } = await projectActualCost(p.projectId);
+                const fin = await projectFinancials(p, hourly);
+                const tasks = await SELECT.from(PROJECT_TASK).columns('taskId', 'status', 'dueDate').where({ project_projectId: p.projectId });
+                const completion = projectProgress(tasks);
+                const resCount = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: p.projectId });
+                const hasResources = (resCount || []).length > 0;
+                const h = projectHealth(p, fin, tasks, hasResources, todayStr);
+
+                const st = String(p.status || '');
+                if (['Planning', 'MeetingScheduled', 'MeetingCompleted', 'BudgetAllocated'].includes(st)) statusBuckets.Planning++;
+                else if (st === 'Active') statusBuckets.Ongoing++;
+                else if (st === 'On Hold') statusBuckets['On Hold']++;
+                else if (st === 'Completed') statusBuckets.Completed++;
+
+                if (h.isActive) { cntActive++; if (createdMon === curMonKey) newActive++; }
+                if (h.isCompleted) { cntCompleted++; if (createdMon === curMonKey) newCompleted++; }
+                if (h.isOverdue) cntDelayed++;
+                if (h.risk === 'High' || h.risk === 'Critical') cntAtRisk++;
+                if (h.overBudget) cntOverBudget++;
+                if (h.blocked) cntBlocked++;
+                if (h.isCritical) cntCritical++;
+                if (h.isActive && !hasResources) cntUnderResourced++;
+
+                const forecastedSpend = Math.max(actualCost, fin.projectedTotalCost);
+                const realized = Math.round(fin.contractValue * completion / 100);
+                totalContract += fin.contractValue;
+                forecastProfit += fin.projectedMargin;
+                currentSpendTot += actualCost;
+                forecastSpendTot += forecastedSpend;
+                execBudgetTot += fin.executionBudget;
+                expectedProfitTot += fin.profitReserve;
+                revenueRealized += realized;
+                if (h.isOverdue || h.blocked > 0 || h.isCritical) revenueAtRisk += fin.contractValue;
+
+                const cn = clientNameById[p.client_clientId] || p.clientName || 'Unassigned';
+                clientRev[cn] = (clientRev[cn] || 0) + fin.contractValue;
+                spread(p.startDate, p.endDate, realized, revByMonth);
+                spread(p.startDate, p.endDate, actualCost, spendByMonth);
+                revVsCost.push({ name: p.projectName, contract: fin.contractValue, forecast: forecastedSpend });
+                table.push({
+                    projectId: p.projectId, name: p.projectName, client: cn, pm: p.pocName || '—',
+                    status: st, health: h.health, healthLabel: h.healthLabel, completion,
+                    contractValue: fin.contractValue, projectedProfit: fin.projectedMargin,
+                    marginPct: fin.projectedMarginPct, risk: h.risk
+                });
+              } catch (perr) {
+                cds.log('portfolio').warn('Skipped project ' + (p && p.projectId) + ' in portfolio analysis:', perr.message || perr);
+              }
+            }
+
+            const denom = cntTotal || 1;
+            const portDelay = 30 * (cntDelayed / denom), portBudget = 25 * (cntOverBudget / denom), portRisk = 25 * (cntAtRisk / denom), portRes = 20 * (cntUnderResourced / denom);
+            const portfolioHealth = Math.max(0, Math.round(100 - portDelay - portBudget - portRisk - portRes));
+
+            const clientArr = Object.keys(clientRev).map(k => ({ name: k, value: Math.round(clientRev[k]) })).sort((a, b) => b.value - a.value);
+            const topClients = clientArr.slice(0, 6);
+            const othersVal = clientArr.slice(6).reduce((s, x) => s + x.value, 0);
+            if (othersVal > 0) topClients.push({ name: 'Others', value: othersVal });
+
+            const top5 = table.slice().sort((a, b) => b.projectedProfit - a.projectedProfit).slice(0, 5).map(t => ({ name: t.name, profit: t.projectedProfit }));
+            const revVsCostTop = revVsCost.slice().sort((a, b) => b.contract - a.contract).slice(0, 10);
+
+            const in30 = new Date(today.getTime() + 30 * 86400000).toISOString().slice(0, 10);
+            const ms = await SELECT.from(MILESTONE).columns('milestoneId', 'name', 'project_projectId', 'plannedEndDate', 'status', 'plannedBudget', 'isCritical')
+                .where('plannedEndDate >=', todayStr, 'and plannedEndDate <=', in30);
+            const milestones = (ms || []).filter(m => String(m.status || '') !== 'Completed')
+                .sort((a, b) => String(a.plannedEndDate).localeCompare(String(b.plannedEndDate))).slice(0, 12)
+                .map(m => ({ project: projName[m.project_projectId] || m.project_projectId, milestone: m.name, dueDate: m.plannedEndDate, revenueImpact: Number(m.plannedBudget) || 0, critical: m.isCritical === true }));
+
+            const pct = (n, d) => d > 0 ? Math.round(n / d * 100) : 0;
+            return JSON.stringify({
+                kpis: {
+                    totalProjects: cntTotal, activeProjects: cntActive, completedProjects: cntCompleted,
+                    delayedProjects: cntDelayed, atRiskProjects: cntAtRisk,
+                    trends: { totalProjects: newTotal, activeProjects: newActive, completedProjects: newCompleted }
+                },
+                financials: {
+                    totalContractValue: Math.round(totalContract), forecastedProfit: Math.round(forecastProfit),
+                    portfolioMarginPct: pct(forecastProfit, totalContract),
+                    revenueRealized: Math.round(revenueRealized), revenueAtRisk: Math.round(revenueAtRisk),
+                    cashCollectionPct: pct(revenueRealized, totalContract),
+                    budgetUtilizationPct: pct(currentSpendTot, execBudgetTot),
+                    currentSpend: Math.round(currentSpendTot), executionBudget: Math.round(execBudgetTot),
+                    forecastedSpend: Math.round(forecastSpendTot), expectedProfit: Math.round(expectedProfitTot)
+                },
+                health: { score: portfolioHealth, label: portfolioHealth >= 90 ? 'Healthy' : portfolioHealth >= 70 ? 'Moderate' : 'Needs Attention', penalties: { delay: Math.round(portDelay), budget: Math.round(portBudget), risk: Math.round(portRisk), resource: Math.round(portRes) } },
+                charts: {
+                    statusDistribution: statusBuckets,
+                    revenueByClient: topClients,
+                    revenueVsCost: revVsCostTop,
+                    top5Profitable: top5,
+                    revenueTrend: months.map(m => ({ label: m.label, value: Math.round(revByMonth[m.key]) })),
+                    spendTrend: months.map(m => ({ label: m.label, value: Math.round(spendByMonth[m.key]) })),
+                    attention: { delayed: cntDelayed, overBudget: cntOverBudget, blocked: cntBlocked, critical: cntCritical },
+                    milestones
+                },
+                table: table.sort((a, b) => b.contractValue - a.contractValue)
+            });
+          } catch (err) {
+            cds.log('portfolio').error('getPortfolioAnalysis failed:', err);
+            return JSON.stringify({ error: 'Portfolio analysis failed: ' + (err && err.message ? err.message : String(err)) });
+          }
+        });
+
+        // ── Portfolio drill-down: full financial + delivery + resource detail ────
+        this.on('getPortfolioProjectDetail', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can view this.' });
+            const p = await SELECT.one.from(PROJECT).where({ projectId: req.data.projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            const today = new Date();
+            const todayStr = today.toISOString().slice(0, 10);
+            const { actualCost, hourly } = await projectActualCost(p.projectId);
+            const fin = await projectFinancials(p, hourly);
+            const tasks = await SELECT.from(PROJECT_TASK).columns('taskId', 'status', 'dueDate').where({ project_projectId: p.projectId });
+            const completion = projectProgress(tasks);
+            const resources = await SELECT.from(PROJECT_RESOURCE).where({ project_projectId: p.projectId });
+            const h = projectHealth(p, fin, tasks, resources.length > 0, todayStr);
+            const forecastedSpend = Math.max(actualCost, fin.projectedTotalCost);
+            const projectedProfit = fin.contractValue - forecastedSpend;
+            const client = p.client_clientId ? await SELECT.one.from(CLIENT_MASTER).columns('companyName', 'clientName').where({ clientId: p.client_clientId }) : null;
+            const allMs = await SELECT.from(MILESTONE).columns('name', 'plannedEndDate', 'actualEndDate', 'status', 'isCritical', 'plannedBudget').where({ project_projectId: p.projectId }).orderBy('sequence asc');
+            const upcoming = (allMs || []).filter(m => String(m.status) !== 'Completed' && m.plannedEndDate && String(m.plannedEndDate).slice(0, 10) >= todayStr).slice(0, 6);
+            const delayed = (allMs || []).filter(m => String(m.status) !== 'Completed' && m.plannedEndDate && String(m.plannedEndDate).slice(0, 10) < todayStr);
+
+            // Resource utilisation / billable split.
+            const totalBw = resources.reduce((s, r) => s + (Number(r.bandwidth) || 0), 0);
+            const billableBw = resources.reduce((s, r) => s + ((r.isBillable === false) ? 0 : (Number(r.bandwidth) || 0)), 0);
+
+            // Monthly spend/revenue trend across the project's own duration.
+            const months = [];
+            const start = p.startDate ? new Date(p.startDate) : today;
+            let cur = new Date(start.getFullYear(), start.getMonth(), 1);
+            const end = p.endDate ? new Date(p.endDate) : today;
+            while (cur <= end && months.length < 24) { months.push({ key: cur.toISOString().slice(0, 7), label: cur.toLocaleString('en-US', { month: 'short' }) + " '" + String(cur.getFullYear()).slice(-2) }); cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1); }
+            const nMon = months.length || 1;
+            const spendPer = Math.round(actualCost / nMon), revPer = Math.round(fin.contractValue * completion / 100 / nMon);
+            let cumBurn = 0;
+            const trend = months.map(m => { cumBurn += spendPer; return { label: m.label, spend: spendPer, revenue: revPer, burn: cumBurn }; });
+
+            return JSON.stringify({
+                project: {
+                    projectId: p.projectId, name: p.projectName, client: client ? (client.companyName || client.clientName) : (p.clientName || '—'),
+                    pm: p.pocName || '—', status: p.status, priority: p.priority, typeName: p.projectTypeName || 'Other',
+                    health: h.health, healthLabel: h.healthLabel, risk: h.risk, completion
+                },
+                financial: {
+                    contractValue: fin.contractValue, executionBudget: fin.executionBudget, currentSpend: actualCost,
+                    forecastedSpend, projectedProfit, projectedMarginPct: fin.contractValue > 0 ? Math.round(projectedProfit / fin.contractValue * 100) : 0,
+                    budgetVariance: fin.executionBudget - forecastedSpend, profitVariance: projectedProfit - fin.profitReserve,
+                    expectedProfit: fin.profitReserve, profitReserve: fin.profitReserve,
+                    revenueRealized: Math.round(fin.contractValue * completion / 100),
+                    revenueAtRisk: (h.isOverdue || h.blocked > 0 || h.isCritical) ? fin.contractValue : 0
+                },
+                delivery: {
+                    status: p.status, completion, healthScore: h.health,
+                    upcomingMilestones: upcoming.map(m => ({ name: m.name, dueDate: m.plannedEndDate, critical: m.isCritical === true })),
+                    delayedMilestones: delayed.map(m => ({ name: m.name, dueDate: m.plannedEndDate })),
+                    blockedTasks: h.blocked, overdueTasks: (tasks || []).filter(t => String(t.status || '').toLowerCase() !== 'completed' && t.dueDate && String(t.dueDate).slice(0, 10) < todayStr).length
+                },
+                resourceInfo: {
+                    allocated: resources.length,
+                    utilizationPct: Math.min(100, Math.round(totalBw)),
+                    billablePct: totalBw > 0 ? Math.round(billableBw / totalBw * 100) : 0,
+                    benchPct: totalBw > 0 ? Math.round((totalBw - billableBw) / totalBw * 100) : 0,
+                    list: resources.map(r => ({ name: r.employeeName, department: r.department, bandwidth: Number(r.bandwidth) || 0, role: r.role || '' }))
+                },
+                timeline: {
+                    plannedStart: p.startDate, actualStart: p.actualStartDate || p.startDate,
+                    plannedEnd: p.endDate, forecastedEnd: p.forecastedEndDate || p.endDate, goLive: p.goLiveDate || null
+                },
+                trend
+            });
+        });
+
         // Multi-month capacity timeline for ONE employee (range optional).
         this.on('getCapacityForecast', async (req) => {
             const c = await projectCaller(req);
@@ -7088,25 +7330,39 @@ class ProjectService extends cds.ApplicationService {
             const c = await projectCaller(req);
             if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can manage clients.' });
             const rows = await SELECT.from(CLIENT_MASTER).orderBy('clientName asc');
-            // Attach a project count per client.
-            const projs = await SELECT.from(PROJECT).columns('projectId', 'client_clientId');
-            const countBy = {}; (projs || []).forEach(p => { if (p.client_clientId) countBy[p.client_clientId] = (countBy[p.client_clientId] || 0) + 1; });
-            return JSON.stringify({
-                clients: (rows || []).map(r => ({
-                    clientId: r.clientId, clientName: r.clientName, companyName: r.companyName,
-                    clientType: r.clientType, industry: r.industry, website: r.website,
-                    country: r.country, timeZone: r.timeZone,
-                    contactPerson: r.contactPerson, designation: r.designation,
-                    email: r.email, phoneNumber: r.phoneNumber,
-                    secondaryContactName: r.secondaryContactName, secondaryEmail: r.secondaryEmail,
-                    secondaryPhone: r.secondaryPhone, billingEmail: r.billingEmail,
-                    gstNumber: r.gstNumber, billingAddress: r.billingAddress,
-                    status: r.status, lastLogin: r.lastLogin, notes: r.notes,
-                    projectCount: countBy[r.clientId] || 0,
-                    createdAt: r.createdAt, createdBy: r.createdBy,
-                    modifiedAt: r.modifiedAt, modifiedBy: r.modifiedBy
-                }))
+            // Attach a project count + total contract value per client.
+            const projs = await SELECT.from(PROJECT).columns('projectId', 'client_clientId', 'contractValue');
+            const countBy = {}, valueBy = {};
+            (projs || []).forEach(p => {
+                if (!p.client_clientId) return;
+                countBy[p.client_clientId] = (countBy[p.client_clientId] || 0) + 1;
+                valueBy[p.client_clientId] = (valueBy[p.client_clientId] || 0) + (Number(p.contractValue) || 0);
             });
+            const clients = (rows || []).map(r => ({
+                clientId: r.clientId, clientName: r.clientName, companyName: r.companyName,
+                clientType: r.clientType, industry: r.industry, website: r.website,
+                country: r.country, timeZone: r.timeZone,
+                contactPerson: r.contactPerson, designation: r.designation,
+                email: r.email, phoneNumber: r.phoneNumber,
+                secondaryContactName: r.secondaryContactName, secondaryEmail: r.secondaryEmail,
+                secondaryPhone: r.secondaryPhone, billingEmail: r.billingEmail,
+                gstNumber: r.gstNumber, billingAddress: r.billingAddress,
+                status: r.status, lastLogin: r.lastLogin, notes: r.notes,
+                projectCount: countBy[r.clientId] || 0, contractValue: Math.round(valueBy[r.clientId] || 0),
+                createdAt: r.createdAt, createdBy: r.createdBy,
+                modifiedAt: r.modifiedAt, modifiedBy: r.modifiedBy
+            }));
+            // Portfolio summary for the Clients dashboard cards.
+            const summary = { total: clients.length, active: 0, prospect: 0, inactive: 0, blacklisted: 0, totalContractValue: 0 };
+            clients.forEach(cl => {
+                const s = String(cl.status || '').toLowerCase();
+                if (s === 'active') summary.active++;
+                else if (s === 'prospect') summary.prospect++;
+                else if (s === 'inactive') summary.inactive++;
+                else if (s === 'blacklisted') summary.blacklisted++;
+                summary.totalContractValue += cl.contractValue || 0;
+            });
+            return JSON.stringify({ clients, summary });
         });
 
         // ── Client validation helpers ─────────────────────────────────────────────
@@ -7263,6 +7519,20 @@ class ProjectService extends cds.ApplicationService {
             if (set.clientName) await UPDATE(PROJECT).set({ clientName: set.clientName }).where({ client_clientId: d.clientId });
             if (statusChanged) await logClientStatusChange(d.clientId, oldStatus, newStatus, d.reason, c.name || req.user.id);
             return JSON.stringify({ ok: true, statusChanged, oldStatus, newStatus });
+        });
+
+        this.on('deleteClientMaster', async (req) => {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can delete clients.' });
+            const clientId = req.data.clientId;
+            const existing = await SELECT.one.from(CLIENT_MASTER).columns('clientId', 'companyName', 'clientName', 'status').where({ clientId });
+            if (!existing) return JSON.stringify({ error: 'Client not found.' });
+            // Referential safety: never orphan projects.
+            const projCount = await SELECT.from(PROJECT).columns('projectId').where({ client_clientId: clientId });
+            if ((projCount || []).length) return JSON.stringify({ error: `This client has ${projCount.length} project(s) and cannot be deleted. Mark it Inactive or Blacklisted instead.` });
+            await logClientStatusChange(clientId, existing.status || '', 'Deleted', req.data.reason || 'Client deleted', c.name || req.user.id);
+            await DELETE.from(CLIENT_MASTER).where({ clientId });
+            return JSON.stringify({ ok: true });
         });
 
         this.on('getClientStatusHistory', async (req) => {

@@ -942,6 +942,7 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
                              gstNumber: String(50), billingAddress: String(300),
                              status: String(20), notes: String(2000),
                              reason: String(500))                                  returns LargeString;
+    action deleteClientMaster(clientId: String(20), reason: String(500))          returns LargeString;
     action getClientStatusHistory(clientId: String(20))                           returns LargeString;
 
     // ── Requirement visibility & handling (Founder / POC / assigned employee) ────
@@ -1040,6 +1041,9 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
     // Cost forecasting + project health + founder financial dashboard (Phase 3).
     action getProjectHealth(projectId: String(20))                             returns LargeString;
     action getFounderFinancials()                                              returns LargeString;
+    // Executive Portfolio Command Center (Founder only).
+    action getPortfolioAnalysis()                                                 returns LargeString;
+    action getPortfolioProjectDetail(projectId: String(20))                       returns LargeString;
     // Multi-month capacity timeline (single source of truth, time-aware).
     action getCapacityForecast(employeeId: String(10), fromDate: String, toDate: String) returns LargeString;
     action getProjectCapacityForecast(projectId: String(20))                   returns LargeString;

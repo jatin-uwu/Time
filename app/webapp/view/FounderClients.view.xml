@@ -1,0 +1,15 @@
+<mvc:View
+    controllerName="timesheet.app.controller.FounderClients"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    height="100%">
+
+    <!-- Standalone Client Management module (Founder). The controller renders the
+         dashboard summary cards, searchable/filterable/sortable/paginated client
+         list and all client actions into the HTML host below. -->
+    <Page id="clientsPage" showHeader="false" backgroundDesign="Transparent" class="founderPage">
+        <core:HTML id="clientsHost" content="&lt;div class='fpaRoot'&gt;&lt;div class='fdLoading'&gt;Loading clients…&lt;/div&gt;&lt;/div&gt;" />
+    </Page>
+
+</mvc:View>

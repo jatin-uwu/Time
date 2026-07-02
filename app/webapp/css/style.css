@@ -3476,6 +3476,167 @@ html .sapUiBlockLayer {
     animation: fpSpin .7s linear infinite; }
 @keyframes fpSpin { to { transform: rotate(360deg); } }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   Executive Portfolio Command Center (Founder → Portfolio Analysis)
+   ══════════════════════════════════════════════════════════════════════════ */
+/* Offset content by the fixed founder rail (72px collapsed) so nothing hides
+   beneath it; the expanded rail (256px) is an intentional hover overlay. */
+.fpaRoot { min-height: 100%; color: #e6edf8; padding-left: 72px; box-sizing: border-box; }
+.fpaWrap { padding: 0 32px 48px; max-width: 1560px; margin: 0 auto; }
+.fpaRoot .fdLoading { padding: 80px; text-align: center; color: #9fb0d6; font-size: 1rem; }
+
+/* Header + sticky filters */
+.fpaHeader { position: sticky; top: 0; z-index: 30; display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 20px; padding: 26px 32px 18px; margin-bottom: 8px; flex-wrap: wrap;
+    background: linear-gradient(180deg, rgba(9,13,28,0.96) 60%, rgba(9,13,28,0.0));
+    backdrop-filter: blur(8px); }
+.fpaH1 { font-size: 1.7rem; font-weight: 800; letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #fff, #a7b6e0); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.fpaH2 { font-size: 0.85rem; color: #93a3c9; margin-top: 3px; }
+.fpaFilters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.fpaSel { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); color: #e6edf8;
+    border-radius: 10px; padding: 8px 12px; font-size: 0.82rem; cursor: pointer; }
+.fpaSel option { color: #111827; }
+.fpaExport { position: relative; }
+.fpaExpBtn { background: linear-gradient(135deg, #6366f1, #4f46e5); border: none; color: #fff; font-weight: 600;
+    border-radius: 10px; padding: 9px 16px; font-size: 0.82rem; cursor: pointer; }
+.fpaExpMenu { position: absolute; right: 0; top: calc(100% + 6px); background: #141a30; border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px; box-shadow: 0 12px 30px rgba(0,0,0,0.5); padding: 5px; display: none; min-width: 140px; }
+.fpaExpMenu.open { display: block; }
+.fpaExpMenu a { display: block; padding: 8px 12px; border-radius: 7px; color: #dbe3f5; font-size: 0.84rem; cursor: pointer; }
+.fpaExpMenu a:hover { background: rgba(124,131,214,0.22); }
+
+.fpaSecHead { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    color: #8aa0d0; margin: 26px 2px 14px; display: flex; align-items: center; gap: 10px; }
+.fpaCount { background: rgba(99,102,241,0.2); color: #a5b4fc; border-radius: 20px; padding: 1px 10px; font-size: 0.72rem; }
+
+/* KPI cards */
+.fpaKpiRow { display: grid; gap: 14px; }
+.fpaKpiRow.projects { grid-template-columns: repeat(5, 1fr); }
+.fpaKpiRow.fin { grid-template-columns: repeat(4, 1fr); flex: 1; }
+.fpaKpiSplit { display: flex; gap: 14px; margin-top: 14px; align-items: stretch; }
+.fpaKpi { background: linear-gradient(160deg, rgba(30,37,66,0.7), rgba(19,24,45,0.7)); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 16px 18px; transition: transform .15s, border-color .15s; }
+.fpaKpi:hover { transform: translateY(-2px); border-color: rgba(124,131,214,0.4); }
+.fpaKpiL { font-size: 0.74rem; color: #93a3c9; font-weight: 500; }
+.fpaKpiV { font-size: 1.55rem; font-weight: 800; margin-top: 6px; color: #fff; letter-spacing: -0.01em; }
+.fpaKpiSub { font-size: 0.72rem; color: #8aa0d0; margin-top: 2px; }
+.fpaKpiTrend { font-size: 0.72rem; margin-top: 6px; font-weight: 600; }
+.fpaKpiTrend.up { color: #34d399; }
+.fpaKpiTrend.down { color: #fbbf24; }
+.fpaKpi.fin .fpaKpiV { font-size: 1.35rem; }
+
+/* Health gauge */
+.fpaHealth { background: linear-gradient(160deg, rgba(52,211,153,0.08), rgba(19,24,45,0.7)); border: 1px solid rgba(52,211,153,0.25);
+    border-radius: 16px; padding: 14px 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 210px; }
+.fpaHealthTitle { font-size: 0.76rem; color: #93a3c9; font-weight: 600; }
+.fpaHealthLabel { font-size: 1rem; font-weight: 800; margin-top: 2px; }
+
+/* Charts */
+.fpaChartGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.fpaChartCard { background: linear-gradient(160deg, rgba(24,30,54,0.75), rgba(15,19,37,0.75)); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 16px 18px; display: flex; flex-direction: column; }
+.fpaChartCard.sm { grid-column: span 1; }
+.fpaChartCard.md { grid-column: span 2; }
+.fpaChartCard.lg { grid-column: span 2; }
+.fpaChartTitle { font-size: 0.92rem; font-weight: 700; color: #eaf0fb; }
+.fpaChartSub { font-size: 0.72rem; color: #8aa0d0; margin-top: 1px; }
+.fpaChartBox { position: relative; height: 240px; margin-top: 12px; flex: 1; }
+.fpaChartCard.sm .fpaChartBox { height: 260px; }
+
+/* Milestones list card */
+.fpaMsList { margin-top: 12px; overflow-y: auto; max-height: 260px; display: flex; flex-direction: column; gap: 8px; }
+.fpaMsRow { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,0.04); }
+.fpaMsRow b { color: #e6edf8; font-size: 0.85rem; }
+.fpaMsSub { font-size: 0.72rem; color: #8aa0d0; margin-top: 2px; }
+.fpaMsMeta { text-align: right; font-size: 0.76rem; color: #c7d2e8; white-space: nowrap; }
+.fpaMsRev { color: #34d399; font-weight: 700; margin-top: 2px; }
+.fpaCrit { color: #fb7185; font-size: 0.66rem; font-weight: 700; text-transform: uppercase; }
+
+/* Executive table */
+.fpaTableWrap { overflow-x: auto; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08); }
+.fpaTable { width: 100%; border-collapse: collapse; background: rgba(17,22,42,0.6); font-size: 0.83rem; }
+.fpaTable thead th { text-align: left; padding: 12px 14px; color: #8aa0d0; font-weight: 600; font-size: 0.72rem;
+    text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid rgba(255,255,255,0.1); position: sticky; top: 0; background: #131a30; }
+.fpaTable tbody td { padding: 11px 14px; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: middle; }
+.fpaTable tbody tr:hover { background: rgba(124,131,214,0.08); }
+.fpaStatusChip { background: rgba(255,255,255,0.08); border-radius: 20px; padding: 2px 10px; font-size: 0.74rem; color: #c7d2e8; }
+.fpaBar { display: inline-block; width: 70px; height: 6px; border-radius: 6px; background: rgba(255,255,255,0.1); overflow: hidden; vertical-align: middle; }
+.fpaBarFill { height: 100%; border-radius: 6px; }
+.fpaBarPct { font-size: 0.72rem; color: #9fb0d6; margin-left: 6px; }
+
+/* Drill-down drawer */
+.fpaDrawHead { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 4px; }
+.fpaDrawName { font-size: 1.15rem; font-weight: 800; color: #fff; }
+.fpaDrawMeta { font-size: 0.8rem; color: #93a3c9; margin-top: 3px; }
+.fpaDrawBadges { display: flex; gap: 8px; flex-wrap: wrap; }
+.fpaBadge { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 20px; padding: 4px 12px; font-size: 0.78rem; font-weight: 700; }
+.fpaDrawSec { margin-top: 18px; }
+.fpaDrawTitle { font-size: 0.76rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #a78bfa; margin-bottom: 10px; }
+.fpaStatGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.fpaStat { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 10px 12px; }
+.fpaStatL { font-size: 0.7rem; color: #8aa0d0; }
+.fpaStatV { font-size: 1.02rem; font-weight: 700; color: #e6edf8; margin-top: 3px; }
+.fpaMsCols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+.fpaMsColTitle { font-size: 0.74rem; color: #93a3c9; font-weight: 600; margin-bottom: 4px; }
+.fpaMsCols ul, .fpaResList { margin: 0; padding-left: 16px; color: #c7d2e8; font-size: 0.83rem; line-height: 1.7; }
+.fpaResList { margin-top: 10px; }
+
+@media (max-width: 1200px) {
+    .fpaChartGrid { grid-template-columns: repeat(2, 1fr); }
+    .fpaChartCard.md, .fpaChartCard.lg { grid-column: span 2; }
+    .fpaKpiRow.projects { grid-template-columns: repeat(3, 1fr); }
+    .fpaKpiRow.fin { grid-template-columns: repeat(3, 1fr); }
+    .fpaKpiSplit { flex-direction: column; }
+    .fpaStatGrid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 760px) {
+    .fpaRoot { padding-left: 60px; }
+    .fpaWrap { padding: 0 16px 40px; }
+    .fpaHeader { padding-left: 20px; padding-right: 20px; }
+    .fpaChartGrid { grid-template-columns: 1fr; }
+    .fpaChartCard.sm, .fpaChartCard.md, .fpaChartCard.lg { grid-column: span 1; }
+    .fpaKpiRow.projects, .fpaKpiRow.fin { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Print → PDF export */
+@media print {
+    .fsb, .fpaFilters, .fpaExport, .fpaView, .fdIconBtn { display: none !important; }
+    .fpaRoot { color: #000; }
+}
+
+/* ── Clients module (standalone) ─────────────────────────────────────────── */
+.fcCrumb { font-size: 0.76rem; color: #8aa0d0; margin-bottom: 4px; }
+.fcCrumb span { margin: 0 6px; color: #5a6b93; }
+.fcCrumb b { color: #cdd8f2; }
+.fcCardRow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+.fcToolbar { display: flex; gap: 10px; margin: 22px 2px 14px; flex-wrap: wrap; align-items: center; }
+.fcSearch { flex: 1; min-width: 240px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14);
+    color: #e6edf8; border-radius: 10px; padding: 10px 14px; font-size: 0.86rem; }
+.fcSearch::placeholder { color: #8394ba; }
+.fcTable td { vertical-align: middle; }
+.fcActionsCell { position: relative; overflow: visible; }
+.fcMenu { position: relative; display: inline-block; }
+.fcMenuBtn { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #cdd6ef;
+    border-radius: 8px; padding: 3px 10px; font-size: 1rem; line-height: 1; cursor: pointer; }
+.fcMenuBtn:hover { background: rgba(255,255,255,0.16); }
+.fcMenuPop { position: absolute; right: 0; top: calc(100% + 4px); z-index: 60; min-width: 150px; display: none;
+    background: #141a30; border: 1px solid rgba(255,255,255,0.14); border-radius: 10px; box-shadow: 0 12px 30px rgba(0,0,0,0.5); padding: 5px; }
+.fcMenu.open .fcMenuPop { display: block; }
+.fcMenu.up .fcMenuPop { top: auto; bottom: calc(100% + 4px); }
+.fcMenuPop a { display: block; padding: 8px 12px; border-radius: 7px; color: #dbe3f5; font-size: 0.84rem; cursor: pointer; white-space: nowrap; }
+.fcMenuPop a:hover { background: rgba(124,131,214,0.22); }
+.fcMenuPop a.danger { color: #fb7185; }
+.fcMenuPop a.danger:hover { background: rgba(251,113,133,0.16); }
+.fcPager { display: flex; align-items: center; justify-content: space-between; padding: 12px 4px; color: #9fb0d6; font-size: 0.82rem; }
+.fcPageBtns { display: flex; align-items: center; gap: 10px; }
+.fcPg { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); color: #dbe3f5;
+    border-radius: 8px; padding: 6px 12px; font-size: 0.8rem; cursor: pointer; }
+.fcPg:disabled { opacity: 0.4; cursor: not-allowed; }
+.fcPageNum { color: #9fb0d6; }
+@media (max-width: 1200px) { .fcCardRow { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 760px) { .fcCardRow { grid-template-columns: repeat(2, 1fr); } }
+
 .fpLink { background: none; border: none; cursor: pointer; color: #38bdf8; font-size: 0.8rem; }
 .fpLink.danger { color: #fb7185; }
 .faBtn.sm { padding: 5px 12px; font-size: 0.78rem; }
