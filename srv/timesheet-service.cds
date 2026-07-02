@@ -1068,19 +1068,29 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
 
     // ── Scoped reads (Founder: all · POC: assigned · Employee: allocated) ──────
     action getProjects()                                                          returns LargeString;
+    // Project Manager Dashboard — project-specific, PM-safe (no founder financials).
+    action getPmDashboard(projectId: String(20))                                  returns LargeString;
     action getProjectDetail(projectId: String(20))                                returns LargeString;
     action getProjectAuditLog(projectId: String(20))                              returns LargeString;
 
     // ── Microsoft Teams Meetings (project-scoped) ─────────────────────────────
     // POC or Founder can schedule/edit/cancel; all project members can view.
     action scheduleMeeting(projectId: String(20), title: String(200),
-                           agenda: String(2000), startDateTime: String, endDateTime: String,
-                           participantIds: many String)                            returns LargeString;
+                           meetingType: String(150), agenda: String(2000),
+                           startDateTime: String, endDateTime: String,
+                           timeZone: String(60), meetingMode: String(20),
+                           location: String(300), manualJoinUrl: String(1000),
+                           participantIds: many String, requiredIds: many String,
+                           externalJson: LargeString, isDraft: Boolean)            returns LargeString;
     action updateMeetingDetails(meetingId: String(45), title: String(200),
-                                agenda: String(2000), startDateTime: String,
-                                endDateTime: String)                               returns LargeString;
+                                meetingType: String(150), agenda: String(2000),
+                                startDateTime: String, endDateTime: String,
+                                timeZone: String(60), meetingMode: String(20),
+                                location: String(300), manualJoinUrl: String(1000)) returns LargeString;
     action cancelProjectMeeting(meetingId: String(45))                            returns LargeString;
     action getProjectMeetings(projectId: String(20))                              returns LargeString;
+    // DEV-ONLY: mark all onboarding meetings complete & advance the workflow.
+    action completeAllProjectMeetings(projectId: String(20))                      returns LargeString;
 
     // ── Project Chat ──────────────────────────────────────────────────────────
     // All project members (allocated employees, POC, Founder) can participate.

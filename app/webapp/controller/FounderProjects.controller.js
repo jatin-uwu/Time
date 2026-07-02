@@ -243,10 +243,10 @@
             var counts = { planning: 0, ongoing: 0, onhold: 0, completed: 0 };
             list.forEach(function (p) { var g = self._group(p.status); if (counts[g] !== undefined) counts[g]++; });
             var FILTERS = [
-                { key: "planning", label: "Planning" },
-                { key: "ongoing", label: "Ongoing" },
-                { key: "onhold", label: "On Hold" },
-                { key: "completed", label: "Completed" }
+                { key: "planning", icon: "📝", label: "Planning" },
+                { key: "ongoing", icon: "🚀", label: "Ongoing" },
+                { key: "onhold", icon: "⏸️", label: "On Hold" },
+                { key: "completed", icon: "✅", label: "Completed" }
             ];
             var segs = FILTERS.map(function (f) {
                 return "<button class='fpSeg" + (self._filter === f.key ? " active" : "") + "' onclick=\"window._fpProj.onFilter('" + f.key + "')\">" +
@@ -479,27 +479,8 @@
 
             var auditBtn = "<div style='margin-top:14px'><button class='faBtn ghost' onclick=\"window._fpProj.onAudit()\">🕓 View audit log</button></div>";
 
-            // ── Meetings block ───────────────────────────────────────────────────
-            var mtgData = this._meetings || { meetings: [] };
-            var mtgRows = (mtgData.meetings || []).map(function (m) {
-                var sc = m.status === "Cancelled" ? "#fb7185" : m.status === "Completed" ? "#34d399" : "#38bdf8";
-                var joinBtn = (m.canJoin !== false && m.teamsJoinUrl && m.status === "Scheduled")
-                    ? "<a href='" + esc(m.teamsJoinUrl) + "' target='_blank' style='padding:3px 10px;background:#5b5fc7;color:#fff;border-radius:6px;font-size:0.75rem;font-weight:600;text-decoration:none;'>Join</a>"
-                    : (m.status === "Scheduled" ? "<span style='color:#9fb0d6;font-size:0.72rem'>View Details Only</span>" : "");
-                var cxlBtn = m.status === "Scheduled"
-                    ? "<button class='faBtn ghost' style='padding:3px 10px;font-size:0.75rem;' onclick=\"window._fpProj.onFpCancelMtg('" + esc(m.meetingId) + "','" + esc(m.title) + "')\">Cancel</button>" : "";
-                return "<tr><td><b style='color:#e6edf8'>" + esc(m.title) + "</b></td>" +
-                    "<td style='color:#9fb0d6'>" + esc(m.dateLabel) + "</td>" +
-                    "<td style='color:#9fb0d6'>" + esc(m.timeLabel) + "</td>" +
-                    "<td><span style='color:" + sc + ";font-weight:700;font-size:0.8rem'>" + esc(m.status) + "</span></td>" +
-                    "<td>" + joinBtn + "</td><td>" + cxlBtn + "</td></tr>";
-            }).join("");
-            var mtgBlock = "<div class='fdCard fdGlass' style='display:block;margin-top:14px'>" +
-                "<div class='fdCardTitle' style='display:flex;align-items:center;justify-content:space-between'>" +
-                "<span>Meetings (" + (mtgData.meetings || []).length + ")</span>" +
-                "<button onclick=\"window._fpProj.onFpScheduleMtg()\" style='padding:6px 16px;font-size:0.82rem;font-weight:600;background:#5b5fc7;color:#fff;border:none;border-radius:8px;cursor:pointer;'>＋ Schedule Meeting</button></div>" +
-                (mtgRows ? "<table class='fpTable'><thead><tr><th>Title</th><th>Date</th><th>Time</th><th>Status</th><th></th><th></th></tr></thead><tbody>" + mtgRows + "</tbody></table>"
-                    : "<div class='fdCardSub'>No meetings scheduled yet. Click Schedule Meeting to create one.</div>") + "</div>";
+            // ── Meetings block (tabs + rich table) ───────────────────────────────
+            var mtgBlock = this._meetingsSection(p);
 
             var chatBlock = "<div class='fdCard fdGlass' style='display:block;margin-top:14px'>" +
                 "<div class='fdCardTitle' style='display:flex;align-items:center;justify-content:space-between'>" +
@@ -525,6 +506,19 @@
 
             var lcTracker = this._lifecycleTracker(p.lifecycleStage, p.status);
             var lcAction = this._lifecycleActionCard(p, this._meetings);
+
+            // ── Onboarding lock ──────────────────────────────────────────────────
+            // While the project is in Planning (onboarding), the full dashboard —
+            // execution metrics, resources, tasks, meetings, chat, requirements,
+            // audit — stays hidden. Only the lifecycle progress + the current action
+            // card are shown, so the founder is guided one step at a time. The gate
+            // is driven by the server-persisted status/lifecycleStage, so it holds
+            // across refreshes. Everything unlocks automatically once the project
+            // reaches Active (POC allocates the first resource after budgeting).
+            if (isPlanning) {
+                return FP.wrap(head, "<div style='margin-top:6px'>" + back + "</div>" + lcTracker + lcAction);
+            }
+
             return FP.wrap(head, "<div style='margin-top:6px'>" + back + "</div>" + lcTracker + lcAction + execHeader + execBody + resBlock + taskBlock + mtgBlock + chatBlock + rqBlock + auditBtn);
         },
 
@@ -975,57 +969,9 @@
 
         // ── Schedule Planning Meeting (selects from POC + managers) ──────────────
         onFpSchedulePlanningMtg: function () {
-            var that = this, pid = this._detail.project.projectId;
-            var poc = { employeeId: this._detail.project.poc_employeeId, employeeName: this._detail.project.pocName };
-            var today = new Date().toISOString().slice(0, 10);
-            ppost("getManagersForMeeting", {}).then(function (d) {
-                // POC is auto-included separately → never offer them in the manager
-                // multi-select (prevents a duplicate attendee entry).
-                var managers = (d.managers || []).filter(function (m) { return m.employeeId !== poc.employeeId; });
-                var fldStyle = "background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:8px 10px;color:#e6edf8;font-size:0.9rem;width:100%;box-sizing:border-box";
-                var lblStyle = "display:block;color:#9fb0d6;font-size:0.78rem;margin:10px 0 4px";
-                // POC is auto-included; managers are multi-select.
-                var pocRow = poc.employeeId
-                    ? "<label style='display:block;padding:5px 0;font-size:0.88rem;color:#34d399'><input type='checkbox' checked disabled style='margin-right:6px'/>" + esc(poc.employeeName) + " <span style='color:#9fb0d6'>(POC — auto included)</span></label>"
-                    : "";
-                var mgrChecks = managers.map(function (m) {
-                    return "<label style='display:block;padding:5px 0;font-size:0.88rem;cursor:pointer;color:#e6edf8'>" +
-                        "<input type='checkbox' class='fpMtgMgr' data-emp='" + esc(m.employeeId) + "' style='margin-right:6px;'/>" +
-                        esc(m.employeeName) + " <span style='color:#9fb0d6'>(" + esc(m.department || m.designation || "") + ")</span></label>";
-                }).join("") || "<div style='color:#9fb0d6;font-size:0.85rem;'>No managers found.</div>";
-                var bodyHtml = "<div style='display:flex;flex-direction:column;gap:2px'>" +
-                    "<label style='" + lblStyle + "'>Title *</label><input type='text' id='fMtgTitle' placeholder='Project Kick-off Planning Meeting' style='" + fldStyle + "'/>" +
-                    "<label style='" + lblStyle + "'>Agenda</label><textarea id='fMtgAgenda' rows='2' style='" + fldStyle + "' placeholder='Discuss scope, timeline, roles, budget expectations…'></textarea>" +
-                    "<div style='display:flex;gap:10px;margin-top:4px'>" +
-                    "<div style='flex:1'><label style='" + lblStyle + "'>Date *</label><input type='date' id='fMtgDate' min='" + today + "' style='" + fldStyle + "'/></div>" +
-                    "<div style='flex:1'><label style='" + lblStyle + "'>Start *</label><input type='time' id='fMtgStart' value='10:00' style='" + fldStyle + "'/></div>" +
-                    "<div style='flex:1'><label style='" + lblStyle + "'>End *</label><input type='time' id='fMtgEnd' value='11:00' style='" + fldStyle + "'/></div></div>" +
-                    "<label style='" + lblStyle + "'>Participants</label>" +
-                    "<div style='max-height:180px;overflow:auto;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 12px'>" + pocRow + mgrChecks + "</div>" +
-                    "<div style='display:flex;justify-content:flex-end;gap:10px;margin-top:16px'>" +
-                    "<button id='fMtgCancel' style='padding:8px 18px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#9fb0d6;cursor:pointer;font-size:0.88rem'>Cancel</button>" +
-                    "<button id='fMtgSave' style='padding:8px 18px;background:#5b5fc7;border:none;border-radius:8px;color:#fff;cursor:pointer;font-weight:600;font-size:0.88rem'>Schedule</button></div></div>";
-                var m = FP.modal({ title: "Schedule Planning Meeting", body: bodyHtml });
-                m.body.querySelector("#fMtgCancel").addEventListener("click", function () { m.close(); });
-                m.body.querySelector("#fMtgSave").addEventListener("click", function () {
-                    var g = function (id) { var el = m.body.querySelector(id); return el ? el.value.trim() : ""; };
-                    var title = g("#fMtgTitle"), date = g("#fMtgDate"), start = g("#fMtgStart"), end = g("#fMtgEnd");
-                    if (!title) { FP.toast("Title is required.", false); return; }
-                    if (!date) { FP.toast("Date is required.", false); return; }
-                    if (!start || !end || end <= start) { FP.toast("Valid start and end time are required.", false); return; }
-                    var partIds = poc.employeeId ? [poc.employeeId] : [];
-                    m.body.querySelectorAll(".fpMtgMgr").forEach(function (chk) { if (chk.checked) partIds.push(chk.getAttribute("data-emp")); });
-                    if (!partIds.length) { FP.toast("Select at least one participant.", false); return; }
-                    this.disabled = true; this.textContent = "Scheduling…";
-                    ppost("scheduleMeeting", { projectId: pid, title: title, agenda: g("#fMtgAgenda"), startDateTime: date + "T" + start + ":00", endDateTime: date + "T" + end + ":00", participantIds: partIds })
-                        .then(function (res) {
-                            m.close();
-                            if (res && res.error) { FP.toast(res.error, false); return; }
-                            FP.toast("Planning meeting scheduled!");
-                            that._meetings = null; that._openProject(pid);
-                        }).catch(function () { m.close(); FP.toast("Could not schedule the meeting.", false); });
-                });
-            }).catch(function () { FP.toast("Could not load managers.", false); });
+            // The planning meeting now uses the full enterprise Schedule Meeting
+            // modal (multiple meetings, types, modes, invites). Same backend flow.
+            this._openMeetingModal(null);
         },
 
         // ── Mark planning meeting as completed ───────────────────────────────────
@@ -1047,20 +993,21 @@
         onFpAllocateBudget: function () {
             var that = this, pid = this._detail.project.projectId;
             Promise.all([
-                ppost("getBudgetAllocation", { projectId: pid }).catch(function () { return {}; }),
-                ppost("getDepartments", {}).catch(function () { return {}; })
+                ppost("getBudgetAllocation", { projectId: pid }).catch(function () { return {}; })
             ]).then(function (r) {
                 var existing = r[0] || {};
-                // Type-aware = the project type defines resource categories (SAP / Dev).
-                // Section A then shows those role categories; otherwise org departments.
+                // Section A units are ALWAYS driven by the project type's own configuration
+                // (SAP modules, dev resource categories, …). No generic org departments,
+                // no hardcoded fallback. Empty → a proper empty state is shown.
+                var unitKind = existing.allocationUnitKind || "Department";
                 var typeAware = !!(existing.resourceCategories && existing.resourceCategories.length);
-                var allDepts = typeAware ? existing.resourceCategories.slice()
-                    : ((r[1] && r[1].departments && r[1].departments.length) ? r[1].departments.slice() : DEPT_ROWS.slice());
-                var allCats = typeAware ? (existing.costCategories || RESOURCE_CATEGORIES).slice() : RESOURCE_CATEGORIES.slice();
-                var secALabel = typeAware ? "📦 Resource Category Allocation" : "📦 Department Allocation";
-                var secABtn = typeAware ? "＋ Select Resource Categories" : "＋ Select Departments";
-                var secBLabel = typeAware ? "🧰 Other Costs" : "🧰 Cost Category Allocation";
-                var secBBtn = typeAware ? "＋ Select Cost Categories" : "＋ Select Resource Categories";
+                var allDepts = typeAware ? existing.resourceCategories.slice() : [];
+                var allCats = (existing.costCategories && existing.costCategories.length ? existing.costCategories : RESOURCE_CATEGORIES).slice();
+                var kindPlural = unitKind === "Module" ? "Modules" : unitKind === "Resource Category" ? "Resource Categories" : "Departments";
+                var secALabel = unitKind + " Allocation";
+                var secABtn = "＋ Select " + kindPlural;
+                var secBLabel = "Cost Category Allocation";
+                var secBBtn = "＋ Select Cost Categories";
 
                 // ── State (preserved across picker toggles) ───────────────────────
                 var deptAmt = {}, deptNotes = {}, catAmt = {}, catNotes = {};
@@ -1091,10 +1038,7 @@
                 // Execution Budget (contract − profit reserve) is the fixed allocation
                 // ceiling here — it flows from project creation and is not edited.
                 var execBudget = Number(existing.executionBudget || existing.totalBudget) || 0;
-                var finCtx = (Number(existing.contractValue) > 0)
-                    ? "<div class='fpBdNotice' style='display:block'>Contract " + that._money(existing.contractValue) +
-                        " − Profit Reserve " + that._money(existing.profitReserveAmount) + " (" + (Number(existing.profitMarginPct) || 0) + "%) = Execution Budget</div>"
-                    : "";
+                var finCtx = "";
                 var body = "<div class='fpForm fpBudgetWs'>" +
                     "<label>Execution Budget (₹) — allocation ceiling</label>" +
                     "<input type='number' class='fpInput' id='fpTotalBudget' value='" + execBudget + "' readonly style='opacity:0.85;cursor:not-allowed'/>" +
@@ -1118,7 +1062,7 @@
                     "<div id='fpBdBreakdown' style='margin-top:18px'></div>" +
                     "<div id='fpBdError' class='fpBdError' style='display:none'></div>" +
                     "<div class='fmodFoot'><button class='faBtn ghost' id='fpBdCancel'>Cancel</button><button class='faBtn approve' id='fpBdSave'>Save Budget Allocation</button></div></div>";
-                var m = FP.modal({ title: "Budget Allocation", body: body, wide: true });
+                var m = FP.modal({ title: "Budget Allocation", body: body, wide: true, cls: "fmodCreateProject" });
                 var $ = function (sel) { return m.body.querySelector(sel); };
 
                 // ── Renderers ─────────────────────────────────────────────────────
@@ -1127,14 +1071,29 @@
                         return "<label class='fpBdPickOpt'><input type='checkbox' class='" + cls + "' data-name='" + esc(name) + "'" + (sel[name] ? " checked" : "") + "/> " + esc(name) + "</label>";
                     }).join("");
                 }
-                function renderFields(containerId, all, sel, amt, notes, cls) {
+                function renderFields(containerId, all, sel, amt, notes, cls, kindWord, pickBtnId) {
                     var chosen = all.filter(function (n) { return sel[n]; });
-                    if (!chosen.length) { $("#" + containerId).innerHTML = "<div class='fpBdEmpty'>None selected yet.</div>"; return; }
-                    $("#" + containerId).innerHTML = chosen.map(function (n) {
-                        return "<div class='fpBdFieldRow'><div class='fpBdFieldName'>" + esc(n) + "</div>" +
-                            "<input type='number' min='0' step='1000' class='" + cls + "Amt' data-name='" + esc(n) + "' value='" + (amt[n] || 0) + "' placeholder='Amount ₹' style='" + fld + "'/>" +
-                            "<input type='text' class='" + cls + "Notes' data-name='" + esc(n) + "' value='" + esc(notes[n] || "") + "' placeholder='Notes…' style='" + fld + "'/></div>";
+                    var word = (kindWord || "Department");
+                    var plural = /y$/i.test(word) ? word.replace(/y$/i, "ies") : word + "s";
+                    var lc = plural.toLowerCase();
+                    if (!all.length) {
+                        // No units configured for this project type → true empty state.
+                        $("#" + containerId).innerHTML = "<div class='fpBdEmpty'>No " + esc(lc) + " are configured for this project type. " +
+                            "Configure them in Project Type settings to allocate budget here.</div>";
+                        return;
+                    }
+                    if (!chosen.length) {
+                        $("#" + containerId).innerHTML = "<div class='fpBdEmpty'>No " + esc(lc) + " added yet — click <b>Select " + esc(plural) + "</b> above to add allocations.</div>";
+                        return;
+                    }
+                    var rows = chosen.map(function (n) {
+                        return "<tr class='fpBdAllocRow'><td class='fpBdAllocName'>" + esc(n) + "</td>" +
+                            "<td><input type='number' min='0' step='1000' class='" + cls + "Amt' data-name='" + esc(n) + "' value='" + (amt[n] ? amt[n] : "") + "' placeholder='0' style='" + fld + ";text-align:right'/></td>" +
+                            "<td><input type='text' class='" + cls + "Notes' data-name='" + esc(n) + "' value='" + esc(notes[n] || "") + "' placeholder='Notes…' style='" + fld + "'/></td>" +
+                            "<td><button type='button' class='fpBdRemove " + cls + "Del' data-name='" + esc(n) + "' title='Remove'>✕</button></td></tr>";
                     }).join("");
+                    $("#" + containerId).innerHTML = "<table class='fpBdAllocTable'><thead><tr>" +
+                        "<th>" + esc(kindWord || "Item") + "</th><th style='text-align:right;width:150px'>Amount (₹)</th><th>Notes</th><th style='width:40px'></th></tr></thead><tbody>" + rows + "</tbody></table>";
                 }
                 function sumSel(all, sel, amt) { return all.reduce(function (s, n) { return s + (sel[n] ? (Number(amt[n]) || 0) : 0); }, 0); }
 
@@ -1154,14 +1113,17 @@
                     if (total <= 0) { notice.style.display = "block"; notice.textContent = "ℹ Project budget has not been defined yet. Enter the approved budget to begin allocating."; }
                     else { notice.style.display = "none"; }
 
-                    // Summary cards.
+                    // Summary cards — full financial picture (Indian currency format).
                     $("#fpBdCards").innerHTML = [
-                        { l: "Approved Budget", v: INR(total), c: "#e6edf8" },
-                        { l: "Allocated", v: INR(allocated), c: col },
-                        { l: "Remaining", v: INR(remaining), c: over ? "#fb7185" : "#34d399" },
-                        { l: "Utilization", v: util + "%", c: col }
+                        { l: "Contract Value", v: INR(existing.contractValue || 0), c: "#c7d2e8", sub: "signed value" },
+                        { l: "Profit Reserve", v: INR(existing.profitReserveAmount || 0), c: "#a78bfa", sub: (Number(existing.profitMarginPct) || 0) + "% margin" },
+                        { l: "Execution Budget", v: INR(total), c: "#38bdf8", sub: "allocation ceiling" },
+                        { l: "Allocated Budget", v: INR(allocated), c: col, sub: util + "% of ceiling" },
+                        { l: "Remaining Budget", v: INR(remaining), c: over ? "#fb7185" : "#34d399", sub: over ? "over budget" : Math.max(0, 100 - util) + "% left" },
+                        { l: "Utilization", v: util + "%", c: col, sub: over ? "exceeds budget" : "of execution budget" }
                     ].map(function (k) {
-                        return "<div class='fpBdCard'><div class='fpBdCardLbl'>" + k.l + "</div><div class='fpBdCardVal' style='color:" + k.c + "'>" + k.v + "</div></div>";
+                        return "<div class='fpBdCard'><div class='fpBdCardLbl'>" + k.l + "</div><div class='fpBdCardVal' style='color:" + k.c + "'>" + k.v + "</div>" +
+                            "<div class='fpBdCardSub'>" + k.sub + "</div></div>";
                     }).join("");
 
                     // Progress bar (capped visual at 100; colour conveys over-budget).
@@ -1200,8 +1162,9 @@
                 }
 
                 // ── Wire up ───────────────────────────────────────────────────────
-                renderFields("fpDeptFields", allDepts, selDepts, deptAmt, deptNotes, "fpBdDept");
-                renderFields("fpCatFields", allCats, selCats, catAmt, catNotes, "fpBdCat");
+                var renderA = function () { renderFields("fpDeptFields", allDepts, selDepts, deptAmt, deptNotes, "fpBdDept", unitKind, "fpSelDept"); };
+                var renderB = function () { renderFields("fpCatFields", allCats, selCats, catAmt, catNotes, "fpBdCat", "Cost Category", "fpSelCat"); };
+                renderA(); renderB();
                 recompute();
 
                 $("#fpSelDept").addEventListener("click", function () {
@@ -1219,8 +1182,14 @@
                 // inputs update state + recompute live.
                 m.body.addEventListener("change", function (e) {
                     var t = e.target;
-                    if (t.classList.contains("fpBdDeptChk")) { selDepts[t.getAttribute("data-name")] = t.checked; renderFields("fpDeptFields", allDepts, selDepts, deptAmt, deptNotes, "fpBdDept"); recompute(); }
-                    else if (t.classList.contains("fpBdCatChk")) { selCats[t.getAttribute("data-name")] = t.checked; renderFields("fpCatFields", allCats, selCats, catAmt, catNotes, "fpBdCat"); recompute(); }
+                    if (t.classList.contains("fpBdDeptChk")) { selDepts[t.getAttribute("data-name")] = t.checked; renderA(); recompute(); }
+                    else if (t.classList.contains("fpBdCatChk")) { selCats[t.getAttribute("data-name")] = t.checked; renderB(); recompute(); }
+                });
+                m.body.addEventListener("click", function (e) {
+                    var t = e.target;
+                    // Remove (✕) an allocation row — unchecks it in the picker too.
+                    if (t.classList.contains("fpBdDeptDel")) { selDepts[t.getAttribute("data-name")] = false; deptAmt[t.getAttribute("data-name")] = 0; renderA(); recompute(); }
+                    else if (t.classList.contains("fpBdCatDel")) { selCats[t.getAttribute("data-name")] = false; catAmt[t.getAttribute("data-name")] = 0; renderB(); recompute(); }
                 });
                 m.body.addEventListener("input", function (e) {
                     var t = e.target;
@@ -1394,54 +1363,298 @@
         },
 
         // ── Schedule Meeting (Founder) ─────────────────────────────────────────────
-        onFpScheduleMtg: function () {
-            var that = this, pid = this._detail.project.projectId;
-            var resources = (this._detail.resources || []).slice().sort(function (a, b) { return (a.employeeName || "").localeCompare(b.employeeName || ""); });
-            var today = new Date().toISOString().slice(0, 10);
-            var partChecks = resources.map(function (r) {
-                return "<label style='display:block;padding:5px 0;font-size:0.88rem;cursor:pointer;color:#e6edf8'>" +
-                    "<input type='checkbox' class='fpMtgPart' data-emp='" + esc(r.employeeId) + "' style='margin-right:6px;'/>" +
-                    esc(r.employeeName) + " <span style='color:#9fb0d6'>(" + esc(r.department) + ")</span></label>";
-            }).join("");
-            if (!partChecks) partChecks = "<div style='color:#9fb0d6;font-size:0.85rem;'>No allocated resources. Allocate resources via POC first.</div>";
+        // ── Project Meetings module (Upcoming / Completed / Cancelled tabs) ──────
+        onFpMtgTab: function (tab) { this._mtgTab = tab; this._render(); },
+        _meetingsSection: function (p) {
+            var that = this;
+            var all = (this._meetings || {}).meetings || [];
+            var canManage = (this._meetings || {}).canManage !== false && (this._detail.canManage || this._detail.isPoc);
+            var tab = this._mtgTab || "upcoming";
+            var groups = {
+                upcoming: all.filter(function (m) { return m.status === "Scheduled" || m.status === "Draft"; }),
+                completed: all.filter(function (m) { return m.status === "Completed"; }),
+                cancelled: all.filter(function (m) { return m.status === "Cancelled"; })
+            };
+            var rowsFor = groups[tab] || [];
+            var statusCol = function (s) { return s === "Cancelled" ? "#fb7185" : s === "Completed" ? "#34d399" : s === "Draft" ? "#9fb0d6" : "#38bdf8"; };
 
-            var fldStyle = "background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:8px 10px;color:#e6edf8;font-size:0.9rem;width:100%;box-sizing:border-box";
-            var lblStyle = "display:block;color:#9fb0d6;font-size:0.78rem;margin:10px 0 4px";
-            var bodyHtml =
-                "<div style='display:flex;flex-direction:column;gap:2px'>" +
-                "<label style='" + lblStyle + "'>Title *</label><input type='text' id='fMtgTitle' placeholder='e.g. Sprint Review' style='" + fldStyle + "'/>" +
-                "<label style='" + lblStyle + "'>Agenda</label><textarea id='fMtgAgenda' rows='2' style='" + fldStyle + "'></textarea>" +
-                "<div style='display:flex;gap:10px;margin-top:4px'>" +
-                "<div style='flex:1'><label style='" + lblStyle + "'>Date *</label><input type='date' id='fMtgDate' min='" + today + "' style='" + fldStyle + "'/></div>" +
-                "<div style='flex:1'><label style='" + lblStyle + "'>Start *</label><input type='time' id='fMtgStart' value='10:00' style='" + fldStyle + "'/></div>" +
-                "<div style='flex:1'><label style='" + lblStyle + "'>End *</label><input type='time' id='fMtgEnd' value='11:00' style='" + fldStyle + "'/></div>" +
+            var body = rowsFor.length ? rowsFor.map(function (m) {
+                var modeLabel = m.meetingMode === "InPerson" ? "In Person" : "Teams";
+                var partN = (m.participants || []).length;
+                var link = m.meetingMode === "InPerson"
+                    ? (m.location ? "<span style='color:#c7d2e8'>" + esc(m.location) + "</span>" : "—")
+                    : (m.teamsJoinUrl ? "<a href='" + esc(m.teamsJoinUrl) + "' target='_blank' style='color:#38bdf8'>Link</a>" : "—");
+                var actions = "<button class='faBtn sm ghost' onclick=\"window._fpProj.onFpViewMtg('" + esc(m.meetingId) + "')\">View</button>";
+                if (m.teamsJoinUrl && m.status === "Scheduled" && m.canJoin !== false)
+                    actions += "<button class='faBtn sm approve' onclick=\"window._fpProj.onFpJoinMtg('" + esc(m.meetingId) + "')\">Join</button>";
+                if (canManage && (m.status === "Scheduled" || m.status === "Draft")) {
+                    actions += "<button class='faBtn sm ghost' onclick=\"window._fpProj.onFpEditMtg('" + esc(m.meetingId) + "')\">Edit</button>";
+                    actions += "<button class='faBtn sm ghost' onclick=\"window._fpProj.onFpCancelMtg('" + esc(m.meetingId) + "','" + esc((m.title || '').replace(/'/g, '')) + "')\">Cancel</button>";
+                }
+                return "<tr><td><b style='color:#e6edf8'>" + esc(m.title) + "</b><div class='fdCardSub'>" + esc(m.meetingType || "—") + "</div></td>" +
+                    "<td style='color:#9fb0d6'>" + esc(m.dateLabel) + "</td>" +
+                    "<td style='color:#9fb0d6'>" + esc(m.timeLabel) + "</td>" +
+                    "<td style='color:#9fb0d6'>" + esc(m.durationLabel || "—") + "</td>" +
+                    "<td style='color:#9fb0d6'>" + partN + "</td>" +
+                    "<td style='color:#c7d2e8'>" + modeLabel + "</td>" +
+                    "<td>" + link + "</td>" +
+                    "<td><span style='color:" + statusCol(m.status) + ";font-weight:700;font-size:0.8rem'>" + esc(m.status) + "</span></td>" +
+                    "<td class='fpMtgActions'>" + actions + "</td></tr>";
+            }).join("")
+                : "<tr><td colspan='9' style='text-align:center;color:#9fb0d6;padding:16px'>No " + tab + " meetings.</td></tr>";
+
+            var tabBtn = function (key, label, n) {
+                return "<button class='fpMtgTab" + (tab === key ? " active" : "") + "' onclick=\"window._fpProj.onFpMtgTab('" + key + "')\">" + label + " <span class='fpMtgTabN'>" + n + "</span></button>";
+            };
+            var devBtn = this._isDevEnv()
+                ? "<button class='faBtn ghost sm' style='color:#fbbf24' onclick=\"window._fpProj.onFpCompleteAllMtgs()\">🧪 Complete All Meetings</button>" : "";
+
+            return "<div class='fdCard fdGlass' style='display:block;margin-top:14px'>" +
+                "<div class='fdCardTitle' style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>" +
+                "<span>Meetings</span><div style='display:flex;gap:8px'>" + devBtn +
+                (canManage ? "<button onclick=\"window._fpProj.onFpScheduleMtg()\" style='padding:6px 16px;font-size:0.82rem;font-weight:600;background:#5b5fc7;color:#fff;border:none;border-radius:8px;cursor:pointer;'>＋ Schedule Meeting</button>" : "") +
+                "</div></div>" +
+                "<div class='fpMtgTabs'>" + tabBtn("upcoming", "Upcoming", groups.upcoming.length) + tabBtn("completed", "Completed", groups.completed.length) + tabBtn("cancelled", "Cancelled", groups.cancelled.length) + "</div>" +
+                "<table class='fpTable fpMtgTable'><thead><tr><th>Meeting</th><th>Date</th><th>Time</th><th>Duration</th><th>Participants</th><th>Mode</th><th>Link</th><th>Status</th><th>Actions</th></tr></thead><tbody>" + body + "</tbody></table></div>";
+        },
+
+        // Are we in a dev environment? Drives visibility of the "Complete All
+        // Meetings" testing utility (backend also gates it by NODE_ENV).
+        _isDevEnv: function () {
+            var h = window.location.hostname;
+            return h === "localhost" || h === "127.0.0.1" || /^192\.168\./.test(h) || h.indexOf("webide") !== -1;
+        },
+        _commonTimeZones: function () {
+            var base = ["Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Asia/Tokyo", "Europe/London", "Europe/Berlin",
+                "Europe/Paris", "America/New_York", "America/Chicago", "America/Los_Angeles", "Australia/Sydney", "UTC"];
+            var detected = "";
+            try { detected = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { /* */ }
+            if (detected && base.indexOf(detected) === -1) base.unshift(detected);
+            return base;
+        },
+
+        onFpScheduleMtg: function () { this._openMeetingModal(null); },
+        onFpEditMtg: function (meetingId) {
+            var m = ((this._meetings || {}).meetings || []).find(function (x) { return x.meetingId === meetingId; });
+            if (m) this._openMeetingModal(m);
+        },
+        onFpJoinMtg: function (meetingId) {
+            var m = ((this._meetings || {}).meetings || []).find(function (x) { return x.meetingId === meetingId; });
+            if (m && m.teamsJoinUrl) window.open(m.teamsJoinUrl, "_blank");
+            else FP.toast("No join link available for this meeting.", false);
+        },
+        onFpViewMtg: function (meetingId) {
+            var m = ((this._meetings || {}).meetings || []).find(function (x) { return x.meetingId === meetingId; });
+            if (!m) return;
+            var row = function (l, v) { return "<div class='fpaStat'><div class='fpaStatL'>" + esc(l) + "</div><div class='fpaStatV'>" + (v || "—") + "</div></div>"; };
+            var parts = (m.participants || []).map(function (p) { return esc(p.employeeName) + (p.employeeEmail ? " &lt;" + esc(p.employeeEmail) + "&gt;" : ""); }).join("<br/>") || "—";
+            var link = m.meetingMode === "InPerson" ? esc(m.location || "—")
+                : (m.teamsJoinUrl ? "<a href='" + esc(m.teamsJoinUrl) + "' target='_blank' style='color:#38bdf8'>Join Microsoft Teams Meeting</a>" : "—");
+            var body = "<div class='fpaDrawer'>" +
+                "<div class='fpaDrawHead'><div><div class='fpaDrawName'>" + esc(m.title) + "</div><div class='fpaDrawMeta'>" + esc(m.meetingType || "") + "</div></div>" +
+                "<span class='fpaBadge'>" + esc(m.status) + "</span></div>" +
+                "<div class='fpaDrawSec'><div class='fpaStatGrid'>" +
+                row("Date", esc(m.dateLabel)) + row("Time", esc(m.timeLabel)) + row("Duration", esc(m.durationLabel || "—")) +
+                row("Timezone", esc(m.timeZone || "—")) + row("Mode", m.meetingMode === "InPerson" ? "In Person" : "Microsoft Teams") +
+                row("Organizer", esc(m.organizer || "—")) + "</div></div>" +
+                (m.agenda ? "<div class='fpaDrawSec'><div class='fpaDrawTitle'>Agenda</div><div style='color:#c7d2e8;font-size:0.86rem;line-height:1.6'>" + esc(m.agenda) + "</div></div>" : "") +
+                "<div class='fpaDrawSec'><div class='fpaDrawTitle'>" + (m.meetingMode === "InPerson" ? "Location" : "Meeting Link") + "</div><div style='font-size:0.88rem'>" + link + "</div></div>" +
+                "<div class='fpaDrawSec'><div class='fpaDrawTitle'>Participants</div><div style='color:#c7d2e8;font-size:0.85rem;line-height:1.7'>" + parts + "</div></div>" +
+                "<div class='fmodFoot'><button class='faBtn ghost' id='vClose'>Close</button>" +
+                (m.teamsJoinUrl && m.status === "Scheduled" ? "<a class='faBtn approve' href='" + esc(m.teamsJoinUrl) + "' target='_blank'>Join Meeting</a>" : "") + "</div></div>";
+            var mm = FP.modal({ title: "Meeting Details", body: body, wide: true, cls: "fmodCreateProject" });
+            mm.body.querySelector("#vClose").addEventListener("click", mm.close);
+        },
+        onFpCompleteAllMtgs: function () {
+            var that = this, pid = this._detail.project.projectId;
+            if (!confirm("[DEV] Mark ALL meetings for this project as completed and advance onboarding?")) return;
+            ppost("completeAllProjectMeetings", { projectId: pid }).then(function (res) {
+                if (res && res.error) { FP.toast(res.error, false); return; }
+                FP.toast(res.message || "All meetings completed."); that._meetings = null; that._openProject(pid);
+            }).catch(function () { FP.toast("Could not complete meetings.", false); });
+        },
+
+        // ── Premium Schedule / Edit Meeting modal ────────────────────────────────
+        // existing = null → create; else edit/reschedule the given meeting.
+        _openMeetingModal: function (existing) {
+            var that = this, d = this._detail, p = d.project, pid = p.projectId;
+            var isEdit = !!existing;
+            var req = "<span class='fpReq'>*</span>";
+            var today = new Date().toISOString().slice(0, 10);
+            var resources = (d.resources || []).slice().sort(function (a, b) { return (a.employeeName || "").localeCompare(b.employeeName || ""); });
+
+            // Managers (Required participants) — founder-only endpoint; ignore errors.
+            var loadManagers = this._detail.canManage ? ppost("getManagersForMeeting", {}).catch(function () { return { managers: [] }; }) : Promise.resolve({ managers: [] });
+            loadManagers.then(function (md) {
+                var managers = ((md && md.managers) || []).filter(function (mgr) { return mgr.employeeId !== p.poc_employeeId; });
+                that._renderMeetingModal(existing, isEdit, req, today, resources, managers);
+            });
+        },
+        _renderMeetingModal: function (existing, isEdit, req, today, resources, managers) {
+            var that = this, p = this._detail.project, pid = p.projectId;
+            var tzList = this._commonTimeZones();
+            var curTz = (existing && existing.timeZone) || tzList[0] || "Asia/Kolkata";
+            var tzOpts = tzList.map(function (z) { return "<option" + (z === curTz ? " selected" : "") + ">" + z + "</option>"; }).join("");
+            var mode = (existing && existing.meetingMode) || "Teams";
+            // Derive date/start/end from an existing meeting's ISO strings.
+            var eDate = "", eStart = "", eEnd = "";
+            if (existing && existing.startISO) { eDate = String(existing.startISO).slice(0, 10); eStart = String(existing.startISO).slice(11, 16); }
+            if (existing && existing.endISO) { eEnd = String(existing.endISO).slice(11, 16); }
+
+            var mgrRows = managers.map(function (mgr) {
+                return "<label class='fpMtgPartRow'><input type='checkbox' class='fpMtgReq' data-emp='" + esc(mgr.employeeId) + "'/>" +
+                    esc(mgr.employeeName) + " <span class='fdCardSub'>(" + esc(mgr.designation || mgr.department || "Manager") + ")</span></label>";
+            }).join("");
+            var mgrNote = managers.length ? "" : "<div class='fdCardSub' style='padding:4px 2px'>No managers have been assigned to this project yet. You can still schedule the meeting with the Project POC.</div>";
+            var empRows = resources.map(function (r) {
+                return "<label class='fpMtgPartRow'><input type='checkbox' class='fpMtgPart' data-emp='" + esc(r.employeeId) + "'/>" +
+                    esc(r.employeeName) + " <span class='fdCardSub'>(" + esc(r.department || "") + ")</span></label>";
+            }).join("") || "<div class='fdCardSub' style='padding:4px 2px'>No allocated resources yet.</div>";
+
+            var body = "<div class='fpForm fpCreate fpMtgForm'>" +
+                // Meeting details
+                "<div class='fpGroup'><div class='fpGroupTitle'>Meeting Details</div>" +
+                "<label>Title " + req + "</label><input class='fpInput' id='mTitle' placeholder='e.g. Project Kick-off Meeting'/>" +
+                "<label>Meeting Type " + req + "</label><input class='fpInput' id='mType' list='mTypeList' placeholder='e.g. Requirement Gathering Session'/>" +
+                "<datalist id='mTypeList'><option>Project Kick-off Meeting</option><option>Requirement Gathering Session</option><option>Budget Discussion</option><option>Resource Planning Meeting</option><option>Architecture Discussion</option><option>Steering Committee Meeting</option><option>Weekly Status Meeting</option><option>UAT Sign-off Meeting</option><option>Go-Live Readiness Meeting</option><option>Project Closure Meeting</option></datalist>" +
+                "<label>Agenda</label><textarea class='fmodTextarea' id='mAgenda' placeholder='Discussion points, objectives…'></textarea></div>" +
+                // Schedule
+                "<div class='fpGroup'><div class='fpGroupTitle'>Schedule</div>" +
+                "<div class='fpRow'><div><label>Date " + req + "</label><input type='date' class='fpInput' id='mDate' min='" + today + "'/></div>" +
+                "<div><label>Start Time " + req + "</label><input type='time' class='fpInput' id='mStart' value='10:00'/></div>" +
+                "<div><label>End Time " + req + "</label><input type='time' class='fpInput' id='mEnd' value='11:00'/></div>" +
+                "<div><label>Timezone</label><select class='fpInput' id='mTz'>" + tzOpts + "</select></div></div>" +
+                "<div class='fpMtgDuration' id='mDuration'></div></div>" +
+                // Mode
+                "<div class='fpGroup'><div class='fpGroupTitle'>Meeting Mode " + req + "</div>" +
+                "<div class='fpMtgModeRow'>" +
+                "<label class='fpRadio'><input type='radio' name='mMode' value='Teams'" + (mode === "Teams" ? " checked" : "") + "/> Microsoft Teams</label>" +
+                "<label class='fpRadio'><input type='radio' name='mMode' value='InPerson'" + (mode === "InPerson" ? " checked" : "") + "/> In Person</label></div>" +
+                "<div id='mTeamsBox'><label>Teams Meeting Link <span class='fpHint'>— auto-generated on schedule; enter manually only if generation is unavailable</span></label>" +
+                "<input class='fpInput' id='mManualLink' placeholder='https://teams.microsoft.com/l/meetup-join/…'/></div>" +
+                "<div id='mLocBox' style='display:none'><label>Meeting Location / Room " + req + "</label><input class='fpInput' id='mLocation' placeholder='e.g. Conference Room A / Office Address'/></div>" +
                 "</div>" +
-                "<label style='" + lblStyle + "'>Participants *</label>" +
-                "<div style='max-height:160px;overflow:auto;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 12px'>" + partChecks + "</div>" +
-                "<div style='display:flex;justify-content:flex-end;gap:10px;margin-top:16px'>" +
-                "<button id='fMtgCancel' style='padding:8px 18px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#9fb0d6;cursor:pointer;font-size:0.88rem'>Cancel</button>" +
-                "<button id='fMtgSave' style='padding:8px 18px;background:#5b5fc7;border:none;border-radius:8px;color:#fff;cursor:pointer;font-weight:600;font-size:0.88rem'>Schedule</button>" +
-                "</div></div>";
-            var m = FP.modal({ title: "Schedule Teams Meeting", body: bodyHtml });
-            m.body.querySelector("#fMtgCancel").addEventListener("click", function () { m.close(); });
-            m.body.querySelector("#fMtgSave").addEventListener("click", function () {
-                var g = function (id) { var el = m.body.querySelector(id); return el ? el.value.trim() : ""; };
-                var title = g("#fMtgTitle"), date = g("#fMtgDate"), start = g("#fMtgStart"), end = g("#fMtgEnd");
-                if (!title) { FP.toast("Title is required.", false); return; }
-                if (!date)  { FP.toast("Date is required.", false); return; }
-                if (!start || !end) { FP.toast("Start and end time are required.", false); return; }
-                if (end <= start) { FP.toast("End time must be after start time.", false); return; }
-                var partIds = [];
-                m.body.querySelectorAll(".fpMtgPart").forEach(function (chk) { if (chk.checked) partIds.push(chk.getAttribute("data-emp")); });
-                if (!partIds.length) { FP.toast("Select at least one participant.", false); return; }
-                this.disabled = true; this.textContent = "Scheduling…";
-                ppost("scheduleMeeting", { projectId: pid, title: title, agenda: g("#fMtgAgenda"), startDateTime: date + "T" + start + ":00", endDateTime: date + "T" + end + ":00", participantIds: partIds })
-                    .then(function (res) {
-                        m.close();
-                        if (res && res.error) { FP.toast(res.error, false); return; }
-                        FP.toast(res.isMock ? "Meeting scheduled (mock mode)." : "Teams meeting created!");
-                        that._meetings = null; that._openProject(pid);
-                    }).catch(function () { m.close(); FP.toast("Could not schedule the meeting.", false); });
+                // Participants
+                (isEdit ? "" :
+                "<div class='fpGroup'><div class='fpGroupTitle'>Participants</div>" +
+                "<div class='fpMtgPartLbl'>Required Participants</div>" +
+                "<label class='fpMtgPartRow'><input type='checkbox' checked disabled/> " + esc(p.pocName || "Project POC") + " <span class='fdCardSub'>(POC — auto-included)</span></label>" +
+                mgrRows + mgrNote +
+                "<div class='fpMtgPartLbl' style='margin-top:10px'>Additional Participants</div>" +
+                "<div class='fpMtgPartBox'>" + empRows + "</div>" +
+                "<div class='fpMtgExtLbl'>External Participants</div><div id='mExtList'></div>" +
+                "<button type='button' class='faBtn ghost sm' id='mAddExt'>＋ Add External Participant</button></div>") +
+                (isEdit ? "<div class='fpGroup'><div class='fdCardSub'>Participants are managed on the original invite. Editing here updates the details, time, mode and re-sends the calendar invite.</div></div>" : "") +
+                "<div id='mErr' style='display:none;color:#fb7185;font-size:0.84rem;padding:8px 12px;background:rgba(251,113,133,0.10);border-radius:8px;margin-top:4px'></div>" +
+                "<div class='fmodFoot'><button class='faBtn ghost' id='mCancel'>Cancel</button>" +
+                (isEdit ? "" : "<button class='faBtn ghost' id='mDraft'>Save Draft</button>") +
+                "<button class='faBtn approve' id='mSave'>" + (isEdit ? "Save Changes" : "Schedule Meeting") + "</button></div></div>";
+
+            var m = FP.modal({ title: isEdit ? "Edit Meeting" : "Schedule Meeting", body: body, wide: true, cls: "fmodCreateProject fmodMeeting" });
+            var $ = function (id) { return m.body.querySelector(id); };
+            var g = function (id) { var el = $(id); return el ? el.value.trim() : ""; };
+            var showErr = function (msg) { var el = $("#mErr"); el.textContent = "⚠ " + msg; el.style.display = "block"; el.scrollIntoView({ behavior: "smooth", block: "nearest" }); };
+
+            // Prefill (edit)
+            if (isEdit) {
+                $("#mTitle").value = existing.title || ""; $("#mType").value = existing.meetingType || "";
+                $("#mAgenda").value = existing.agenda || ""; $("#mDate").value = eDate; $("#mStart").value = eStart; $("#mEnd").value = eEnd;
+                if (existing.location) $("#mLocation").value = existing.location;
+                if (existing.teamsJoinUrl && existing.manualLink) $("#mManualLink").value = existing.teamsJoinUrl;
+            }
+
+            // Mode toggle → show Teams link vs Location.
+            var applyMode = function () {
+                var mo = (m.body.querySelector("input[name='mMode']:checked") || {}).value || "Teams";
+                $("#mTeamsBox").style.display = mo === "Teams" ? "block" : "none";
+                $("#mLocBox").style.display = mo === "InPerson" ? "block" : "none";
+            };
+            m.body.querySelectorAll("input[name='mMode']").forEach(function (r) { r.addEventListener("change", applyMode); });
+            applyMode();
+
+            // Live duration.
+            var updDur = function () {
+                var s = g("#mStart"), e = g("#mEnd");
+                var el = $("#mDuration");
+                if (!s || !e || e <= s) { el.textContent = ""; return; }
+                var mins = (parseInt(e.slice(0, 2)) * 60 + parseInt(e.slice(3))) - (parseInt(s.slice(0, 2)) * 60 + parseInt(s.slice(3)));
+                var h = Math.floor(mins / 60), mm = mins % 60;
+                el.textContent = "Duration: " + [h ? h + " Hour" + (h > 1 ? "s" : "") : "", mm ? mm + " Minute" + (mm > 1 ? "s" : "") : ""].filter(Boolean).join(" ");
+            };
+            ["#mStart", "#mEnd"].forEach(function (id) { $(id).addEventListener("input", updDur); }); updDur();
+
+            // External participant rows.
+            if (!isEdit) {
+                $("#mAddExt").addEventListener("click", function () {
+                    var wrap = document.createElement("div"); wrap.className = "fpMtgExtRow";
+                    wrap.innerHTML = "<input class='fpInput mExtName' placeholder='Name'/><input class='fpInput mExtEmail' placeholder='email@company.com'/><button type='button' class='fpMtgExtDel'>✕</button>";
+                    wrap.querySelector(".fpMtgExtDel").addEventListener("click", function () { wrap.remove(); });
+                    $("#mExtList").appendChild(wrap);
+                });
+            }
+
+            var collect = function () {
+                var mo = (m.body.querySelector("input[name='mMode']:checked") || {}).value || "Teams";
+                var payload = {
+                    projectId: pid, title: g("#mTitle"), meetingType: g("#mType"), agenda: g("#mAgenda"),
+                    timeZone: g("#mTz"), meetingMode: mo, location: g("#mLocation"),
+                    manualJoinUrl: mo === "Teams" ? g("#mManualLink") : ""
+                };
+                var date = g("#mDate"), s = g("#mStart"), e = g("#mEnd");
+                payload.startDateTime = (date && s) ? date + "T" + s + ":00" : "";
+                payload.endDateTime = (date && e) ? date + "T" + e + ":00" : "";
+                if (!isEdit) {
+                    var partIds = [], reqIds = [];
+                    m.body.querySelectorAll(".fpMtgPart").forEach(function (chk) { if (chk.checked) partIds.push(chk.getAttribute("data-emp")); });
+                    m.body.querySelectorAll(".fpMtgReq").forEach(function (chk) { if (chk.checked) { partIds.push(chk.getAttribute("data-emp")); reqIds.push(chk.getAttribute("data-emp")); } });
+                    payload.participantIds = partIds; payload.requiredIds = reqIds;
+                    var ext = [];
+                    m.body.querySelectorAll(".fpMtgExtRow").forEach(function (r) {
+                        var em = r.querySelector(".mExtEmail").value.trim(); var nm = r.querySelector(".mExtName").value.trim();
+                        if (em) ext.push({ name: nm, email: em });
+                    });
+                    payload.externalJson = JSON.stringify(ext);
+                }
+                return payload;
+            };
+            var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            var validate = function (draft) {
+                var pl = collect();
+                if (!pl.title) { showErr("Title is required."); return null; }
+                if (!draft && !pl.meetingType) { showErr("Meeting Type is required."); return null; }
+                if (!g("#mDate")) { showErr("Date is required."); return null; }
+                if (draft) return pl;
+                if (!g("#mStart") || !g("#mEnd")) { showErr("Start and End time are required."); return null; }
+                if (pl.endDateTime <= pl.startDateTime) { showErr("End time must be after start time."); return null; }
+                if (new Date(pl.startDateTime) < new Date()) { showErr("Meeting cannot be scheduled in the past."); return null; }
+                if (pl.meetingMode === "InPerson" && !pl.location) { showErr("Meeting location is required for an in-person meeting."); return null; }
+                if (!isEdit) {
+                    var ext = JSON.parse(pl.externalJson || "[]");
+                    if (ext.some(function (x) { return !EMAIL_RE.test(x.email); })) { showErr("One or more external participant emails are invalid."); return null; }
+                }
+                return pl;
+            };
+
+            $("#mCancel").addEventListener("click", m.close);
+            if ($("#mDraft")) $("#mDraft").addEventListener("click", function () {
+                var pl = validate(true); if (!pl) return; pl.isDraft = true;
+                this.disabled = true; this.textContent = "Saving…";
+                ppost("scheduleMeeting", pl).then(function (res) {
+                    m.close(); if (res && res.error) { FP.toast(res.error, false); return; }
+                    FP.toast("Draft saved."); that._meetings = null; that._openProject(pid);
+                }).catch(function () { m.close(); FP.toast("Could not save draft.", false); });
+            });
+            $("#mSave").addEventListener("click", function () {
+                var pl = validate(false); if (!pl) return;
+                var btn = this; btn.disabled = true; btn.innerHTML = "<span class='fpSpin'></span>" + (isEdit ? "Saving…" : "Scheduling…");
+                var action = isEdit ? "updateMeetingDetails" : "scheduleMeeting";
+                if (isEdit) pl.meetingId = existing.meetingId;
+                ppost(action, pl).then(function (res) {
+                    if (res && res.error) { btn.disabled = false; btn.textContent = isEdit ? "Save Changes" : "Schedule Meeting"; showErr(res.error); return; }
+                    m.close();
+                    FP.toast(res.message || (isEdit ? "Meeting updated. Invite re-sent." : "Meeting scheduled. Invites sent."));
+                    that._meetings = null; that._openProject(pid);
+                }).catch(function () { btn.disabled = false; btn.textContent = isEdit ? "Save Changes" : "Schedule Meeting"; showErr("Server error — please try again."); });
             });
         },
 

@@ -116,10 +116,20 @@ sap.ui.define([
                 this._bar(p.progress) + "<div class='pmCardFoot'>" + (p.taskCount || 0) + " task(s)</div></div>";
         },
 
+        onPmDashboard: function (projectId) {
+            try {
+                this.getOwnerComponent().getRouter().navTo("pm-dashboard", { projectId: projectId });
+            } catch (e) {
+                MessageToast.show("Could not open the PM Dashboard — please refresh the page and try again.");
+            }
+        },
+
         _renderDetail: function () {
             var d = this._detail, p = d.project || {};
             var activeTab = this._detailTab || "overview";
-            var back = "<button class='pmBtn ghost' onclick=\"window._projCtrl.onBack()\">← Back</button>";
+            var dashBtn = (d.isPoc || d.canManage)
+                ? " <button class='pmBtn primary' onclick=\"window._projCtrl.onPmDashboard('" + esc(p.projectId) + "')\">📊 PM Dashboard</button>" : "";
+            var back = "<button class='pmBtn ghost' onclick=\"window._projCtrl.onBack()\">← Back</button>" + dashBtn;
 
             // Tab bar
             var TABS = [
@@ -143,8 +153,12 @@ sap.ui.define([
                     "<span>Priority: <b>" + esc(p.priority) + "</b></span>" +
                     "<span>Timeline: <b>" + esc(p.startDate || "—") + " → " + esc(p.endDate || "—") + "</b></span></div>" +
                     (p.description ? "<div class='pmDesc'>" + esc(p.description) + "</div>" : "") +
+                    ((d.isPoc || d.canManage)
+                        ? "<div class='pmDashCta'><div><b>Project Manager Dashboard</b><div class='pmDashCtaSub'>Full operational view — KPIs, health, tasks, resources, milestones, budget, risks &amp; meetings.</div></div>" +
+                          "<button class='pmBtn primary' onclick=\"window._projCtrl.onPmDashboard('" + esc(p.projectId) + "')\">📊 Open PM Dashboard</button></div>"
+                        : "") +
                     (p.status === "Planning"
-                        ? "<div class='pmLcNotice'>⏳ This project is in the Planning Phase. Progress tracking and the project dashboard become available once the project is Active.</div>"
+                        ? "<div class='pmLcNotice'>⏳ This project is in the Planning Phase. Task progress tracking becomes available once the project is Active.</div>"
                         : this._bar(d.progress)) + "</div>";
             } else if (activeTab === "resources") {
                 var resCount = (d.resources || []).length;
