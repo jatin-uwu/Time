@@ -5185,6 +5185,10 @@ class ProjectService extends cds.ApplicationService {
             if (!VALID.includes(status)) return JSON.stringify({ error: 'Invalid status.' });
             const p = await SELECT.one.from(PROJECT).columns('projectId', 'status').where({ projectId });
             if (!p) return JSON.stringify({ error: 'Project not found.' });
+            // Once a project leaves Planning (onboarding complete), it can never be
+            // moved back to Planning — that phase is a one-way gate.
+            if (status === 'Planning' && p.status !== 'Planning')
+                return JSON.stringify({ error: 'This project has already been activated and cannot be moved back to Planning.' });
             await UPDATE(PROJECT).set({ status }).where({ projectId });
             await projectAudit(projectId, c.name, 'Status Changed', p.status, status);
 
@@ -5224,13 +5228,15 @@ class ProjectService extends cds.ApplicationService {
             const { projectId, totalBudget, departmentBudgets, otherBudgets, categoryBudgets } = req.data;
             const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'lifecycleStage', 'status', 'executionBudget').where({ projectId });
             if (!project) return JSON.stringify({ error: 'Project not found.' });
-            // Budget allocation (and editing it) is a planning-phase activity.
-            if (project.status !== 'Planning') return JSON.stringify({ error: 'Budget can only be set for Planning projects.' });
+            // Budget may be allocated in Planning and edited afterwards while the project
+            // is Active/On Hold. Only Completed/Cancelled projects are locked.
+            if (['Completed', 'Cancelled'].includes(project.status)) return JSON.stringify({ error: 'Budget cannot be changed for a completed or cancelled project.' });
             // Prerequisite: the planning meeting must be completed. Once satisfied, the
-            // lifecycle advances to MeetingCompleted → BudgetAllocated, and both stages
-            // (and any later planning stage) keep the prerequisite satisfied — so
-            // EDITING an already-allocated budget must not re-trigger this check.
-            const meetingDone = ['MeetingCompleted', 'BudgetAllocated'].includes(project.lifecycleStage);
+            // lifecycle advances to MeetingCompleted → BudgetAllocated → Active, and every
+            // later stage keeps the prerequisite satisfied — so EDITING an already-allocated
+            // budget (on an Active project) must not re-trigger this check.
+            const meetingDone = project.status !== 'Planning'
+                || ['MeetingCompleted', 'BudgetAllocated', 'Active'].includes(project.lifecycleStage);
             if (!meetingDone) return JSON.stringify({ error: 'Complete the planning meeting before allocating budget.' });
 
             // The allocation ceiling is the EXECUTION BUDGET (contract − profit reserve),
@@ -5257,8 +5263,19 @@ class ProjectService extends cds.ApplicationService {
                 categoryBudgets: (typeof categoryBudgets === 'string') ? categoryBudgets : JSON.stringify(categoryBudgets || []),
                 allocatedAt: new Date(), allocatedByName: c.name || 'Founder'
             });
-            await UPDATE(PROJECT).set({ lifecycleStage: 'BudgetAllocated' }).where({ projectId });
+            // ── Auto-activate on budget allocation ────────────────────────────────
+            // Allocating the budget completes onboarding: the project automatically
+            // moves Planning → Active (no manual status change). This unlocks the full
+            // project dashboard and hides the lifecycle tracker on every screen (both
+            // gate on status === 'Planning'). Re-saving an already-Active project's
+            // budget just updates the numbers and leaves the status untouched.
+            const wasPlanning = project.status === 'Planning';
+            await UPDATE(PROJECT).set(wasPlanning
+                ? { lifecycleStage: 'Active', status: 'Active' }
+                : { lifecycleStage: project.lifecycleStage || 'Active' }
+            ).where({ projectId });
             await projectAudit(projectId, c.name, 'Budget Allocated', null, `₹${catSum.toLocaleString('en-IN')} of ₹${ceiling.toLocaleString('en-IN')} execution budget`);
+            if (wasPlanning) await projectAudit(projectId, c.name, 'Status Changed', 'Planning', 'Active — budget allocated, onboarding complete');
 
             // Notify POC that resource allocation can begin.
             if (project.poc_employeeId) {
@@ -5272,7 +5289,7 @@ class ProjectService extends cds.ApplicationService {
                         projectId, 'PROJECT_BUDGET_ALLOCATED');
                 }
             }
-            return JSON.stringify({ ok: true, projectId, lifecycleStage: 'BudgetAllocated' });
+            return JSON.stringify({ ok: true, projectId, activated: wasPlanning, status: wasPlanning ? 'Active' : project.status, lifecycleStage: 'Active' });
         });
 
         // ── Get saved budget allocation for a project ─────────────────────────────
@@ -5751,7 +5768,7 @@ class ProjectService extends cds.ApplicationService {
 
             const statusBuckets = { Planning: 0, Ongoing: 0, 'On Hold': 0, Completed: 0 };
             const clientRev = {}; const table = []; const revVsCost = [];
-            let totalContract = 0, forecastProfit = 0, currentSpendTot = 0, execBudgetTot = 0, expectedProfitTot = 0, forecastSpendTot = 0, revenueRealized = 0, revenueAtRisk = 0;
+            let totalContract = 0, forecastProfit = 0, currentSpendTot = 0, committedSpendTot = 0, execBudgetTot = 0, expectedProfitTot = 0, forecastSpendTot = 0, revenueRealized = 0, revenueAtRisk = 0;
             let cntTotal = 0, cntActive = 0, cntCompleted = 0, cntDelayed = 0, cntAtRisk = 0, cntOverBudget = 0, cntBlocked = 0, cntCritical = 0, cntUnderResourced = 0;
             let newTotal = 0, newActive = 0, newCompleted = 0;
             const projName = {}; (projects || []).forEach(p => { projName[p.projectId] = p.projectName; });
@@ -5789,6 +5806,9 @@ class ProjectService extends cds.ApplicationService {
                 const realized = Math.round(fin.contractValue * completion / 100);
                 totalContract += fin.contractValue;
                 forecastProfit += fin.projectedMargin;
+                // Budget "consumed" is driven by committed resource allocation cost
+                // (Σ totalAllocationCost); timesheet actuals are tracked separately.
+                committedSpendTot += (Number(fin.allocatedResourceCost) || 0);
                 currentSpendTot += actualCost;
                 forecastSpendTot += forecastedSpend;
                 execBudgetTot += fin.executionBudget;
@@ -5843,8 +5863,9 @@ class ProjectService extends cds.ApplicationService {
                     portfolioMarginPct: pct(forecastProfit, totalContract),
                     revenueRealized: Math.round(revenueRealized), revenueAtRisk: Math.round(revenueAtRisk),
                     cashCollectionPct: pct(revenueRealized, totalContract),
-                    budgetUtilizationPct: pct(currentSpendTot, execBudgetTot),
-                    currentSpend: Math.round(currentSpendTot), executionBudget: Math.round(execBudgetTot),
+                    budgetUtilizationPct: pct(committedSpendTot, execBudgetTot),
+                    committedSpend: Math.round(committedSpendTot), actualSpend: Math.round(currentSpendTot),
+                    currentSpend: Math.round(committedSpendTot), executionBudget: Math.round(execBudgetTot),
                     forecastedSpend: Math.round(forecastSpendTot), expectedProfit: Math.round(expectedProfitTot)
                 },
                 health: { score: portfolioHealth, label: portfolioHealth >= 90 ? 'Healthy' : portfolioHealth >= 70 ? 'Moderate' : 'Needs Attention', penalties: { delay: Math.round(portDelay), budget: Math.round(portBudget), risk: Math.round(portRisk), resource: Math.round(portRes) } },
@@ -6728,7 +6749,7 @@ class ProjectService extends cds.ApplicationService {
         this.on('allocateResourceToMilestone', async (req) => {
             const c = await projectCaller(req);
             const d = req.data || {};
-            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'status', 'startDate', 'endDate').where({ projectId: d.projectId });
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'status', 'startDate', 'endDate', 'executionBudget', 'budget').where({ projectId: d.projectId });
             if (!project) return JSON.stringify({ error: 'Project not found.' });
             if (!(isFounderCaller(req, c) || project.poc_employeeId === c.employeeId))
                 return JSON.stringify({ error: 'Only the project POC or Founder can allocate resources.' });
@@ -6771,12 +6792,35 @@ class ProjectService extends cds.ApplicationService {
             const peakMonth = Math.max(...monthly.map(m => m.hours));
             const bandwidth = Math.max(0, Math.min(100, Math.round(peakMonth / cap * 100)));
 
+            // ── Cost & budget consumption ─────────────────────────────────────────
+            // Cost = estimatedHours × fully-loaded hourly rate ((salary+overhead)/capacity).
+            // Only HARD allocations consume budget; SOFT is a tentative reservation (₹0),
+            // so committed budget = Σ totalAllocationCost stays hard-only automatically.
+            const cfg = await rp.loadConfig();
+            const overhead = Number(cfg.monthlyOverhead) || 0;
+            const salRow = await SELECT.one.from(SALARY_MASTER).columns('employee_employeeId', 'monthlySalary', 'hourlyCost', 'isActive').where({ employee_employeeId: d.employeeId });
+            const rate = rp.loadedHourlyRate((salRow && salRow.isActive !== false) ? salRow : null, cap, overhead);
+            const allocCost = type === 'Hard' ? Math.round(rate * hours) : 0;
+
+            // Budget guard (HARD only): committed cost may not exceed the execution
+            // budget unless an override reason is provided.
+            const execB = Number(project.executionBudget) || Number(project.budget) || 0;
+            const priorRows = await SELECT.from(PROJECT_RESOURCE).columns('allocationId', 'totalAllocationCost').where({ project_projectId: d.projectId });
+            const priorCommitted = (priorRows || []).filter(r => r.allocationId !== allocationId).reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0);
+            if (type === 'Hard' && !d.force && allocCost > 0 && execB > 0 && priorCommitted + allocCost > execB) {
+                return JSON.stringify({
+                    error: `Allocating ${emp.employeeName} for ${hours}h (₹${allocCost.toLocaleString('en-IN')}) would exceed the execution budget — committed ₹${(priorCommitted + allocCost).toLocaleString('en-IN')} vs ₹${execB.toLocaleString('en-IN')}. Provide an override reason, reduce the hours, or use a Soft reservation.`,
+                    budgetOverrun: true, committed: Math.round(priorCommitted + allocCost), executionBudget: execB
+                });
+            }
+
             await UPSERT.into(PROJECT_RESOURCE).entries({
                 allocationId, project_projectId: d.projectId, employee_employeeId: d.employeeId,
                 employeeName: emp.employeeName, department: emp.department || '',
                 milestone_milestoneId: d.milestoneId, estimatedHours: hours, allocationType: type,
                 bandwidth, startDate: String(start).slice(0, 10), endDate: String(end).slice(0, 10),
                 status: 'Active', role: d.role || null,
+                hourlyCostSnapshot: Math.round(rate), overheadSnapshot: overhead, totalAllocationCost: allocCost,
                 isOverridden: !!d.force, overrideReason: d.force ? (d.overrideReason || 'Override') : null
             });
             // Regenerate the month-wise rows for this allocation.
@@ -6790,9 +6834,15 @@ class ProjectService extends cds.ApplicationService {
                 });
             }
             await projectAudit(d.projectId, c.name, 'Resource Allocated (hours)', null,
-                `${emp.employeeName} · ${ms.name} · ${hours}h (${type})`);
+                `${emp.employeeName} · ${ms.name} · ${hours}h (${type}) · ₹${allocCost.toLocaleString('en-IN')}`);
             founderEvents.ping('allocateResourceToMilestone');
-            return JSON.stringify({ ok: true, allocationId, allocationType: type, bandwidth, monthly });
+            const committedNow = priorCommitted + allocCost;
+            return JSON.stringify({
+                ok: true, allocationId, allocationType: type, bandwidth, monthly,
+                cost: allocCost, hourlyRate: Math.round(rate),
+                committedBudget: Math.round(committedNow), executionBudget: execB,
+                remainingBudget: Math.round(Math.max(0, execB - committedNow))
+            });
         });
 
         // Hours-based availability forecast (current + next N months) with the
@@ -6849,8 +6899,11 @@ class ProjectService extends cds.ApplicationService {
             if (!project) return JSON.stringify({ error: 'Project not found.' });
             const allowed = isFounderCaller(req, c) || project.poc_employeeId === c.employeeId;
             if (!allowed) return JSON.stringify({ error: 'Only the project POC can remove resources.' });
+            // Match ANY allocation for this employee on this project — both the legacy
+            // bandwidth id (projectId-employeeId) and milestone-hours ids
+            // (projectId-employeeId-milestoneId) — so deallocation works for both models.
             const row = await SELECT.one.from(PROJECT_RESOURCE).columns('employeeName', 'employee_employeeId')
-                .where({ allocationId: `${projectId}-${employeeId}` });
+                .where({ project_projectId: projectId, employee_employeeId: employeeId });
             if (!row) return JSON.stringify({ error: 'This employee is not allocated to the project.' });
 
             // ── Deallocation validation ─────────────────────────────────────────
@@ -7033,8 +7086,12 @@ class ProjectService extends cds.ApplicationService {
             const currentPhase = (msList.find(m => !m.done) || {}).name || (msList.length ? 'All milestones complete' : '—');
 
             // ── Budget (PM-safe: no contract/profit) ──────────────────────────
-            const { actualCost } = await projectActualCost(projectId);
+            const { actualCost } = await projectActualCost(projectId);   // timesheet actual spend
             const execBudget = Number(p.executionBudget) || Number(p.budget) || 0;
+            // Committed budget = Σ resource allocation cost (hours × loaded rate; Hard only).
+            // This is what "consumes" the budget the moment a resource is allocated by hours.
+            const allocCostRows = await SELECT.from(PROJECT_RESOURCE).columns('totalAllocationCost').where({ project_projectId: projectId });
+            const committed = Math.round((allocCostRows || []).reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0));
             let deptAlloc = [];
             const bRow = await SELECT.one.from(PROJECT_BUDGET).columns('categoryBudgets', 'departmentBudgets').where({ budgetId: `${projectId}-BUDGET` });
             if (bRow) {
@@ -7046,9 +7103,12 @@ class ProjectService extends cds.ApplicationService {
                 } catch (_) { /* */ }
             }
             const budget = {
-                approved: execBudget, utilized: actualCost,
-                remaining: Math.max(0, execBudget - actualCost),
-                utilizationPct: execBudget > 0 ? Math.round(actualCost / execBudget * 100) : 0,
+                approved: execBudget,
+                committed,                     // consumed by resource allocation (hours × rate)
+                utilized: committed,           // primary "utilized" = committed allocation cost
+                actualSpend: actualCost,       // timesheet actuals (secondary reference)
+                remaining: Math.max(0, execBudget - committed),
+                utilizationPct: execBudget > 0 ? Math.round(committed / execBudget * 100) : 0,
                 deptAllocation: deptAlloc
             };
 

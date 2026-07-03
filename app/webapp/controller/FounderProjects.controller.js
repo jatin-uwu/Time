@@ -23,11 +23,11 @@
 
     // Lifecycle stage → display label + step index (0-based out of 4)
     var LIFECYCLE_STEPS = [
-        { key: "Planning",         label: "Project Created",       icon: "🏗" },
-        { key: "MeetingScheduled", label: "Meeting Scheduled",     icon: "📅" },
-        { key: "MeetingCompleted", label: "Meeting Completed",     icon: "✅" },
-        { key: "BudgetAllocated",  label: "Budget Allocated",      icon: "💰" },
-        { key: "Active",           label: "Active",                icon: "🚀" }
+        { key: "Planning",         label: "Project Created",       icon: "1" },
+        { key: "MeetingScheduled", label: "Meeting Scheduled",     icon: "2" },
+        { key: "MeetingCompleted", label: "Meeting Completed",     icon: "3" },
+        { key: "BudgetAllocated",  label: "Budget Allocated",      icon: "4" },
+        { key: "Active",           label: "Active",                icon: "5" }
     ];
     function lifecycleIdx(stage) {
         var s = stage || "Planning";
@@ -243,18 +243,17 @@
             var counts = { planning: 0, ongoing: 0, onhold: 0, completed: 0 };
             list.forEach(function (p) { var g = self._group(p.status); if (counts[g] !== undefined) counts[g]++; });
             var FILTERS = [
-                { key: "planning", icon: "📝", label: "Planning" },
-                { key: "ongoing", icon: "🚀", label: "Ongoing" },
-                { key: "onhold", icon: "⏸️", label: "On Hold" },
-                { key: "completed", icon: "✅", label: "Completed" }
+                { key: "planning", label: "Planning" },
+                { key: "ongoing", label: "Ongoing" },
+                { key: "onhold", label: "On Hold" },
+                { key: "completed", label: "Completed" }
             ];
             var segs = FILTERS.map(function (f) {
                 return "<button class='fpSeg" + (self._filter === f.key ? " active" : "") + "' onclick=\"window._fpProj.onFilter('" + f.key + "')\">" +
-                    "<span class='fpSegIco'>" + f.icon + "</span>" + f.label +
-                    "<span class='fpSegCount'>" + counts[f.key] + "</span></button>";
+                    f.label + "<span class='fpSegCount'>" + counts[f.key] + "</span></button>";
             }).join("");
             var filterBar = "<div class='fpFilterBar'>" +
-                "<div class='fpSegGroup'><span class='fpSegTitle'>📋 Project Status</span>" + segs + "</div>" +
+                "<div class='fpSegGroup'><span class='fpSegTitle'>Project Status</span>" + segs + "</div>" +
                 "<div style='display:flex;gap:8px'>" +
                 "<button class='faBtn approve' onclick=\"window._fpProj.onCreateProject()\">＋ Create Project</button></div></div>";
 
@@ -367,10 +366,9 @@
 
             if (stage === "Planning") {
                 return "<div class='fdCard fdGlass fpLcAction' style='display:block;margin-top:14px'>" +
-                    "<div class='fpLcActionIcon'>📅</div>" +
                     "<div class='fpLcActionTitle'>Schedule Planning Meeting</div>" +
                     "<div class='fpLcActionDesc'>Before this project can progress, schedule a planning meeting with the POC and key managers to align on scope, timeline, and expectations.</div>" +
-                    "<button class='faBtn approve' onclick=\"window._fpProj.onFpSchedulePlanningMtg()\">📅 Schedule Planning Meeting</button></div>";
+                    "<button class='faBtn approve' onclick=\"window._fpProj.onFpSchedulePlanningMtg()\">Schedule Planning Meeting</button></div>";
             }
             if (stage === "MeetingScheduled") {
                 // Find the planning meeting in loaded meetings
@@ -379,22 +377,19 @@
                 var joinBtn = planMtg.teamsJoinUrl
                     ? "<a href='" + esc(planMtg.teamsJoinUrl) + "' target='_blank' style='display:inline-block;padding:8px 18px;background:#5b5fc7;color:#fff;border-radius:8px;font-size:0.86rem;font-weight:600;text-decoration:none;margin-right:8px'>Join Meeting</a>" : "";
                 return "<div class='fdCard fdGlass fpLcAction scheduled' style='display:block;margin-top:14px'>" +
-                    "<div class='fpLcActionIcon'>📅</div>" +
                     "<div class='fpLcActionTitle'>Planning Meeting Scheduled</div>" +
                     "<div class='fpLcActionDesc'>The planning meeting <b>" + esc(planMtg.title || "") + "</b> is scheduled for " + esc(planMtg.dateLabel || "") + " at " + esc(planMtg.timeLabel || "") + ". Once the meeting is done, mark it as completed to proceed to budget allocation.</div>" +
                     "<div style='margin-top:12px;display:flex;gap:8px;flex-wrap:wrap'>" + joinBtn +
-                    "<button class='faBtn approve' onclick=\"window._fpProj.onFpMarkMeetingCompleted('" + esc(p.planningMeetingId) + "')\">✅ Mark Meeting Completed</button></div></div>";
+                    "<button class='faBtn approve' onclick=\"window._fpProj.onFpMarkMeetingCompleted('" + esc(p.planningMeetingId) + "')\">Mark Meeting Completed</button></div></div>";
             }
             if (stage === "MeetingCompleted") {
                 return "<div class='fdCard fdGlass fpLcAction completed' style='display:block;margin-top:14px'>" +
-                    "<div class='fpLcActionIcon'>💰</div>" +
                     "<div class='fpLcActionTitle'>Allocate Project Budget</div>" +
                     "<div class='fpLcActionDesc'>The planning meeting is complete. Now allocate the total project budget with department-wise and other category breakdowns. The POC will be notified to begin resource allocation once the budget is set.</div>" +
-                    "<button class='faBtn approve' onclick=\"window._fpProj.onFpAllocateBudget()\">💰 Allocate Budget</button></div>";
+                    "<button class='faBtn approve' onclick=\"window._fpProj.onFpAllocateBudget()\">Allocate Budget</button></div>";
             }
             if (stage === "BudgetAllocated") {
                 return "<div class='fdCard fdGlass fpLcAction budget' style='display:block;margin-top:14px'>" +
-                    "<div class='fpLcActionIcon'>🏗</div>" +
                     "<div class='fpLcActionTitle'>Awaiting Resource Allocation</div>" +
                     "<div class='fpLcActionDesc'>Budget has been allocated and the POC has been notified. The project will automatically become <b>Active</b> once the POC allocates the first resource.</div>" +
                     "<button class='faBtn ghost' onclick=\"window._fpProj.onFpAllocateBudget()\">📊 View / Edit Budget</button></div>";
@@ -408,9 +403,12 @@
             var head = FP.header("Project · " + (p.projectName || ""), p.customerName || "");
             var back = "<button class='faBtn ghost' onclick=\"window._fpProj.onBack()\">← Back to projects</button>";
 
+            // Once a project has been activated, "Planning" is no longer selectable —
+            // it's a one-way gate (enforced server-side too).
+            var statusOptions = (p.status === "Planning") ? STATUSES : STATUSES.filter(function (s) { return s !== "Planning"; });
             var statusSel = d.canManage
                 ? "<select class='fpSelect' onchange=\"window._fpProj.onSetStatus(this.value)\">" +
-                    STATUSES.map(function (s) { return "<option value='" + s + "'" + (s === p.status ? " selected" : "") + ">" + s + "</option>"; }).join("") + "</select>"
+                    statusOptions.map(function (s) { return "<option value='" + s + "'" + (s === p.status ? " selected" : "") + ">" + s + "</option>"; }).join("") + "</select>"
                 : this._statusPill(p.status);
 
             var x = this._exec || {};

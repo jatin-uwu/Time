@@ -115,8 +115,8 @@ sap.ui.define([
             var poc = (this._data.isPocOf || []).indexOf(p.projectId) !== -1;
             var lcBadge = "";
             if (p.status === "Planning" && poc) {
-                var lcLabels = { Planning: "⏳ Awaiting Meeting", MeetingScheduled: "📅 Meeting Scheduled", MeetingCompleted: "✅ Meeting Done", BudgetAllocated: "💰 Allocate Resources" };
-                var lc = lcLabels[p.lifecycleStage] || ("⏳ " + (p.lifecycleStage || "Planning"));
+                var lcLabels = { Planning: "Awaiting Meeting", MeetingScheduled: "Meeting Scheduled", MeetingCompleted: "Meeting Done", BudgetAllocated: "Allocate Resources" };
+                var lc = lcLabels[p.lifecycleStage] || (p.lifecycleStage || "Planning");
                 lcBadge = "<div class='pmLcBadge'>" + lc + "</div>";
             }
             return "<div class='pmCard' onclick=\"window._projCtrl.onOpen('" + esc(p.projectId) + "')\">" +
@@ -234,9 +234,10 @@ sap.ui.define([
             var budgetPanel = "<div class='pmPanel pmSpan2'><div class='pmPanelHead'>Budget</div>" +
                 "<div class='pmMiniStats pmBudgetStats'>" +
                 "<div><span>Approved</span><b>" + this._pmMoney(b.approved) + "</b></div>" +
-                "<div><span>Utilized</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + this._pmMoney(b.utilized) + "</b></div>" +
+                "<div><span>Committed</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + this._pmMoney(b.committed != null ? b.committed : b.utilized) + "</b></div>" +
                 "<div><span>Remaining</span><b style='color:#16a34a'>" + this._pmMoney(b.remaining) + "</b></div>" +
-                "<div><span>Utilization</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + b.utilizationPct + "%</b></div></div>" +
+                "<div><span>Utilization</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + b.utilizationPct + "%</b></div>" +
+                (b.actualSpend != null ? "<div><span>Actual Spend</span><b style='color:#64748b'>" + this._pmMoney(b.actualSpend) + "</b></div>" : "") + "</div>" +
                 "<div class='pmProgTrack'><div class='pmProgFill' style='width:" + Math.min(100, b.utilizationPct) + "%;background:" + this._pmUtilColor(b.utilizationPct) + "'></div></div>" +
                 "<table class='pmMiniTable'><thead><tr><th>Department / Module</th><th style='text-align:right'>Allocated</th><th style='text-align:right'>Consumed</th><th style='text-align:right'>Remaining</th><th style='text-align:right'>%</th></tr></thead><tbody>" + deptRows + "</tbody></table></div>";
 
@@ -323,7 +324,7 @@ sap.ui.define([
                 var p2 = d.project || {};
                 var canAllocate = d.isPoc && !(p2.status === "Planning" && p2.lifecycleStage !== "BudgetAllocated");
                 var lcNotice = (d.isPoc && p2.status === "Planning" && p2.lifecycleStage !== "BudgetAllocated")
-                    ? "<div class='pmLcNotice'>⏳ Resource allocation will be unlocked once the Founder completes the planning meeting and allocates the budget.</div>"
+                    ? "<div class='pmLcNotice'>Resource allocation will be unlocked once the Founder completes the planning meeting and allocates the budget.</div>"
                     : "";
                 var resHead = "<div class='pmPanelHead'>Resources <span class='pmCount'>" + resCount + "</span>" +
                     (canAllocate ? " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onAllocateByMilestone()\">＋ Allocate by Hours</button>" : "") +
@@ -586,7 +587,7 @@ sap.ui.define([
 
         _msApprovalChip: function (s) {
             var map = {
-                "Pending Approval": ["#fef9c3", "#a16207", "⏳ Approval Pending"],
+                "Pending Approval": ["#fef9c3", "#a16207", "Approval Pending"],
                 "Approved":         ["#dcfce7", "#16a34a", "✓ Approved"],
                 "Rejected":         ["#fee2e2", "#dc2626", "✗ Rejected"],
                 "Rework Required":  ["#ffedd5", "#c2410c", "↻ Rework Required"]
@@ -1371,13 +1372,16 @@ sap.ui.define([
                     ppost("allocateResourceToMilestone", { projectId: pid, employeeId: employeeId, milestoneId: milestoneId, estimatedHours: hrs, allocationType: type, force: !!force, overrideReason: reason || "" })
                         .then(function (res) {
                             btn.disabled = false; btn.textContent = "Allocate";
-                            if (res && res.overallocation) {
+                            // Capacity or budget over-allocation → confirm with an override reason.
+                            if (res && (res.overallocation || res.budgetOverrun)) {
                                 var r = window.prompt(res.error + "\n\nEnter an override reason to proceed (or Cancel):", "");
                                 if (r) save(true, r);
                                 return;
                             }
                             if (res && res.error) { err.style.display = "block"; err.textContent = res.error; return; }
-                            close(); MessageToast.show("Allocated " + hrs + "h. Monthly plan generated.");
+                            close();
+                            var costMsg = (res && res.cost) ? (" · Cost ₹" + Number(res.cost).toLocaleString("en-IN") + " · Remaining ₹" + Number(res.remainingBudget || 0).toLocaleString("en-IN")) : "";
+                            MessageToast.show("Allocated " + hrs + "h. Monthly plan generated." + costMsg);
                             that._open(pid);
                         }).catch(function () { btn.disabled = false; btn.textContent = "Allocate"; err.style.display = "block"; err.textContent = "Could not allocate — please try again."; });
                 };

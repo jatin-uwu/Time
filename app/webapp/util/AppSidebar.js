@@ -20,7 +20,7 @@ sap.ui.define(["sap/ui/core/IconPool"], function (IconPool) {
     var COMMON = [
         { items: [{ route: "dashboard", label: "Overview", icon: "home" }] },
         { items: [{ route: "projects", label: "Projects", icon: "tree" }] },
-        { items: [{ route: "meetings", label: "Meetings", icon: "appointments-2" }] },
+        { items: [{ route: "meetings", label: "Meetings", icon: "appointment-2" }] },
         { title: "Timesheet", items: [
             { route: "timesheet", label: "Fill Timesheet", icon: "add-activity" },
             { route: "history", label: "Timesheet History", icon: "history" }
