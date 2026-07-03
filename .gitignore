@@ -20,3 +20,8 @@ mta_archives/
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite
+
+# Local secrets / environment (SMTP credentials, etc.)
+.env
+.env.local
+.env.*.local

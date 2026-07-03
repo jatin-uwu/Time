@@ -1,0 +1,12 @@
+<h2 style="margin:0 0 12px;color:#0f172a;font-size:20px;">📌 New Task Assigned</h2>
+<p style="margin:0 0 8px;">Hi {{EmployeeName}},</p>
+<p style="margin:0 0 16px;">You have been assigned a new task{{ByLine}}. Details are below.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+  <tr><td style="padding:10px 14px;font-size:14px;"><b style="color:#64748b;">Task</b><div style="color:#0f172a;font-weight:600;">{{TaskName}}</div></td></tr>
+  <tr><td style="padding:10px 14px;font-size:14px;border-top:1px solid #eef2f7;"><b style="color:#64748b;">Project</b> &nbsp; {{ProjectName}}</td></tr>
+  <tr><td style="padding:10px 14px;font-size:14px;border-top:1px solid #eef2f7;"><b style="color:#64748b;">Priority</b> &nbsp; {{Priority}} &nbsp;&nbsp; <b style="color:#64748b;">Due</b> &nbsp; {{DueDate}}</td></tr>
+  <tr><td style="padding:10px 14px;font-size:14px;border-top:1px solid #eef2f7;"><b style="color:#64748b;">Description</b><div style="color:#334155;">{{Description}}</div></td></tr>
+</table>
+<p style="margin:18px 0 0;">
+  <a href="{{ActionUrl}}" style="display:inline-block;background:{{BrandColor}};color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600;">Open Task</a>
+</p>

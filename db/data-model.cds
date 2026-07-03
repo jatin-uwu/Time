@@ -798,6 +798,22 @@ entity EmployeeSkill : managed {
     skillName : String(100);
     level     : String(20);               // Beginner / Intermediate / Expert (optional)
 }
+// Audit log of every email send attempt — powers delivery history, retries insight
+// and a future "email history" UI. Additive; written best-effort by the EmailService.
+entity EmailLog : managed {
+    key logId      : String(40);
+    recipient      : String(255);
+    ccList         : String(500);
+    subject        : String(255);
+    template       : String(60);
+    status         : String(20);          // Sent | Failed | Simulated
+    attempts       : Integer default 1;
+    errorMessage   : String(1000);
+    refType        : String(40);          // MEETING | TASK | LEAVE | MILESTONE | …
+    refId          : String(60);
+    sentAt         : Timestamp;
+}
+
 entity EmployeeCertification : managed {
     key id            : String(55);        // <employeeId>-<certId>
     employee          : Association to EmployeeMaster;

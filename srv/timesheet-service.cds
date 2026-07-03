@@ -691,6 +691,8 @@ service HRService @(path: '/hr')@(requires: 'HR') {
                           departmentId: String(20), roleId: String(30))   returns LargeString;
     // Language typeahead — distinct values already on file (dynamic, no hardcoded list).
     action searchLanguages(q: String(100))                                 returns LargeString;
+    // Email diagnostics — verify SMTP + send a branded test email (UI → CAP → SMTP).
+    action sendTestEmail(to: String(255))                                  returns LargeString;
 
     action addEmployee(employeeName: String(100),
                        designation: String(50),

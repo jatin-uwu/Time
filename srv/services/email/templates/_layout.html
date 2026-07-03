@@ -1,0 +1,30 @@
+<!-- Shared responsive email shell. Table-based + inline CSS for broad email-client
+     support (Outlook, Gmail, Apple Mail). {{BODY}} is the per-template content. -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{{CompanyName}}</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1e293b;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:24px 12px;">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(15,23,42,0.08);">
+        <!-- Header -->
+        <tr><td style="background:{{BrandColor}};padding:20px 28px;">{{{LogoBlock}}}</td></tr>
+        <!-- Body -->
+        <tr><td style="padding:28px;font-size:15px;line-height:1.6;color:#334155;">
+          {{{BODY}}}
+        </td></tr>
+        <!-- Footer -->
+        <tr><td style="padding:18px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;color:#94a3b8;">
+          <div>This is an automated message from <b style="color:#64748b;">{{CompanyName}}</b>. Please do not reply.</div>
+          <div style="margin-top:4px;">Need help? Contact <a href="mailto:{{SupportEmail}}" style="color:{{BrandColor}};text-decoration:none;">{{SupportEmail}}</a></div>
+          <div style="margin-top:8px;">&copy; {{Year}} {{CompanyName}}. All rights reserved.</div>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>
