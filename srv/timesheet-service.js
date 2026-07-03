@@ -445,20 +445,36 @@ const {
 } = require('./timesheet-handler');
 
 const { startReminderCron } = require('./reminder-cron');
+const emailService = require('./services/email/email-service');
 
-let _mailer = null;
+// Back-compat shim (P3 refactor): every legacy `getMailer().sendMail(...)` call now
+// routes through the centralized EmailService — gaining retry, error handling,
+// masking and EmailLog persistence, with zero change to the 30+ call-sites. Always
+// returns a truthy mailer so existing `if (mailer)` guards take the service path
+// (which itself simulates + logs when SMTP is not configured).
 function getMailer() {
-    if (_mailer !== null) return _mailer;
-    try {
-        const nodemailer = require('nodemailer');
-        const host = process.env.SMTP_HOST;
-        const port = parseInt(process.env.SMTP_PORT || '587', 10);
-        const user = process.env.SMTP_USER;
-        const pass = process.env.SMTP_PASS;
-        if (!host || !user || !pass) { _mailer = false; return _mailer; }
-        _mailer = nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } });
-    } catch (e) { _mailer = false; }
-    return _mailer;
+    return {
+        sendMail: (opts) => emailService.sendEmail({
+            to: opts.to, cc: opts.cc, bcc: opts.bcc,
+            subject: opts.subject, text: opts.text, html: opts.html,
+            attachments: opts.attachments, icalEvent: opts.icalEvent
+        })
+    };
+}
+
+// Minimal iCalendar (VEVENT) builder for meeting invites — no external dep.
+function buildICS({ uid, title, description, start, end, organizerEmail, location, method = 'REQUEST' }) {
+    const dt = v => new Date(v).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const esc = s => String(s || '').replace(/([,;\\])/g, '\\$1').replace(/\n/g, '\\n');
+    return [
+        'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ccentrik//PM//EN', `METHOD:${method}`,
+        'BEGIN:VEVENT', `UID:${uid}`, `DTSTAMP:${dt(Date.now())}`,
+        `DTSTART:${dt(start)}`, `DTEND:${dt(end)}`,
+        `SUMMARY:${esc(title)}`, `DESCRIPTION:${esc(description)}`,
+        location ? `LOCATION:${esc(location)}` : '',
+        organizerEmail ? `ORGANIZER:mailto:${organizerEmail}` : '',
+        'END:VEVENT', 'END:VCALENDAR'
+    ].filter(Boolean).join('\r\n');
 }
 
 async function createNotification(employeeId, type, title, message, referenceId) {
@@ -2499,18 +2515,19 @@ class ManagerService extends cds.ApplicationService {
             if (!employee.email) return req.error(400, `Employee '${assigneeId}' has no email on file.`);
             const prefix = PRIORITY_PREFIX[priority] || `[${priority || 'Normal'} Priority]`;
             const subject = `${prefix} New task assigned: ${taskName}`;
-            const body = `Hi ${employee.employeeName || ''},\n\nYou have been assigned a new task by your manager.\n\nTask ID:     ${taskId}\nTask:        ${taskName}\nPriority:    ${priority || 'Normal'}\n${dueDate ? `Due Date:    ${dueDate}\n` : ''}\nDescription:\n${taskDescription || '(no description)'}\n\nPlease open your Timesheet app to view the full details.\n\n— Timesheet System`;
-            const from = process.env.SMTP_FROM || 'no-reply@timesheet.local';
-            const mailer = getMailer();
-            if (mailer) {
-                try {
-                    await mailer.sendMail({ from, to: employee.email, subject, text: body });
-                    return { sent: true, recipient: employee.email, subject, message: 'Email sent.' };
-                } catch (e) { cds.log('mail').error('Failed to send email:', e.message || e); }
-            }
+            // Branded, templated email through the central EmailService (logged + retried).
+            const r = await emailService.sendTemplateEmail('task-assigned', employee.email, {
+                EmployeeName: employee.employeeName || '', TaskName: taskName, ProjectName: '—',
+                Priority: priority || 'Normal', DueDate: dueDate || '—', Description: taskDescription || '(no description)',
+                ByLine: ' by your manager', ActionUrl: process.env.APP_URL || '#'
+            }, { subject, refType: 'TASK', refId: taskId });
             await createNotification(assigneeId, 'TASK_ASSIGNED', `New Task: ${taskName}`, `You have been assigned "${taskName}" (${priority || 'Normal'} priority).`, taskId);
-            cds.log('mail').info(`[Email simulated]\nFROM: ${from}\nTO: ${employee.email}\nSUBJECT: ${subject}\n${body}`);
-            return { sent: false, recipient: employee.email, subject, message: 'SMTP not configured — email content was logged on the server.' };
+            return {
+                sent: r.status === 'Sent', recipient: employee.email, subject,
+                message: r.status === 'Sent' ? 'Email sent.'
+                    : r.status === 'Simulated' ? 'SMTP not configured — email simulated and logged on the server.'
+                    : `Email failed: ${r.error || 'unknown error'}`
+            };
         });
 
         this.on('rejectTimesheet', async (req) => {
@@ -2651,13 +2668,12 @@ class ManagerService extends cds.ApplicationService {
 
             const emp = await SELECT.one.from(EMPLOYEE).where({ employeeId: leave.employee_employeeId });
             if (emp && emp.email) {
-                const mailer = getMailer();
-                const subject = `Your leave request has been ${newStatus}`;
-                const body = `Hi ${emp.employeeName || ''},\n\nYour leave request has been ${newStatus.toLowerCase()} by your manager.\n\nLeave Type : ${leave.leaveType}\nFrom       : ${leave.fromDate}\nTo         : ${leave.toDate}\nDays       : ${leave.days}\n${remarks ? `Remarks    : ${remarks}\n` : ''}\n— Timesheet System`;
-                if (mailer) {
-                    try { await mailer.sendMail({ from: process.env.SMTP_FROM || 'no-reply@timesheet.local', to: emp.email, subject, text: body }); }
-                    catch (e) { cds.log('mail').warn('Leave approval email failed:', e.message); }
-                } else { cds.log('leave').info(`[Email simulated] TO: ${emp.email}\n${body}`); }
+                // Branded, templated email (fire-and-forget → routes through EmailService + EmailLog).
+                emailService.sendTemplateEmailAsync(approved ? 'leave-approved' : 'leave-rejected', emp.email, {
+                    EmployeeName: emp.employeeName || '', LeaveType: leave.leaveType,
+                    FromDate: leave.fromDate, ToDate: leave.toDate, Days: String(leave.days),
+                    Remarks: remarks || '—', ByLine: ' by your manager', ActionUrl: process.env.APP_URL || '#'
+                }, { subject: `Your leave request has been ${newStatus}`, refType: 'LEAVE', refId: leaveId });
             }
             cds.log('leave').info(`Leave ${leaveId} ${newStatus} by manager`);
             return { leaveId, status: newStatus };
@@ -2949,6 +2965,22 @@ class HRService extends cds.ApplicationService {
             const scope = d.type === 'role' ? d.departmentId : (d.type === 'module' ? d.roleId : null);
             try { return JSON.stringify(await upsertTaxonomy(d.type, d.name, scope, { departmentId: d.departmentId })); }
             catch (e) { return JSON.stringify({ error: 'Could not save the value.' }); }
+        });
+        this.on('sendTestEmail', async (req) => {
+            const to = String((req.data || {}).to || '').trim();
+            if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return JSON.stringify({ error: 'Enter a valid email address.' });
+            const conn = await emailService.verifyConnection();
+            const r = await emailService.sendTemplateEmail('generic', to, {
+                Title: 'Test Email', EmployeeName: 'there',
+                Message: "This is a test email from your application's Email Service. If you received it, SMTP is configured correctly.",
+                DetailsBlock: '', ActionUrl: process.env.APP_URL || '#', ActionText: 'Open App'
+            }, { subject: 'Test Email — Email Service', refType: 'TEST' });
+            return JSON.stringify({
+                ok: r.status === 'Sent', status: r.status, connection: conn,
+                message: r.status === 'Sent' ? 'Test email sent successfully.'
+                    : r.status === 'Simulated' ? 'SMTP not configured — email was simulated and logged (set SMTP_* env vars to send for real).'
+                    : `Send failed: ${r.error || 'unknown error'}`
+            });
         });
         this.on('searchLanguages', async (req) => {
             try {
@@ -4873,6 +4905,18 @@ class ProjectService extends cds.ApplicationService {
             await UPDATE(MILESTONE).set({ status: early ? 'Completed Early' : 'Completed', progressPct: 100, actualEndDate: todayStr }).where({ milestoneId: d.milestoneId });
             await projectAudit(m.project_projectId, c.name, override ? 'Milestone Completed (override)' : 'Milestone Completed', null, m.name);
             if (acc.p.poc_employeeId) await createNotification(acc.p.poc_employeeId, 'MILESTONE_COMPLETED', 'Milestone Completed', `Milestone "${m.name}" was completed in project ${acc.p.projectName}.`, m.project_projectId);
+            // Branded email to the POC + milestone owner (fire-and-forget).
+            try {
+                const finalStatus = early ? 'Completed Early' : 'Completed';
+                const recips = [...new Set([acc.p.poc_employeeId, m.owner_employeeId].filter(Boolean))];
+                if (recips.length) {
+                    const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email').where({ employeeId: { in: recips }, isActive: true });
+                    for (const e of emps) if (e.email) emailService.sendTemplateEmailAsync('milestone-completed', e.email, {
+                        EmployeeName: e.employeeName || '', MilestoneName: m.name, ProjectName: acc.p.projectName || '',
+                        Status: finalStatus, Date: todayStr, ByLine: c.name ? ` by ${c.name}` : '', ActionUrl: process.env.APP_URL || '#'
+                    }, { subject: `Milestone ${finalStatus}: ${m.name}`, refType: 'MILESTONE', refId: m.milestoneId });
+                }
+            } catch (e) { cds.log('email').warn('milestone email skipped:', e.message); }
             return JSON.stringify({ ok: true, status: early ? 'Completed Early' : 'Completed' });
         });
 
@@ -7011,6 +7055,13 @@ class ProjectService extends cds.ApplicationService {
                 teamsJoinUrl:   teamsData.teamsJoinUrl,
                 teamsDialIn:    teamsData.teamsDialIn || null
             });
+            // Build the calendar invite once (identical for every recipient).
+            const whenStr = `${new Date(d.startDateTime).toLocaleString('en-IN')} – ${new Date(d.endDateTime).toLocaleTimeString('en-IN')}`;
+            const ics = buildICS({
+                uid: `${meetingId}@ccentrik`, title: d.title.trim(),
+                description: (d.agenda || '').trim() + (teamsData.teamsJoinUrl ? `\nJoin: ${teamsData.teamsJoinUrl}` : ''),
+                start: d.startDateTime, end: d.endDateTime, organizerEmail, location: teamsData.teamsJoinUrl || 'Online'
+            });
             // Insert participants.
             for (const emp of partEmps) {
                 const participantId = `${meetingId}-${emp.employeeId}`;
@@ -7025,6 +7076,14 @@ class ProjectService extends cds.ApplicationService {
                     'Meeting Scheduled',
                     `You are invited to "${d.title.trim()}" on ${new Date(d.startDateTime).toLocaleString('en-IN')}.`,
                     meetingId);
+                // Real email invite with .ics attachment (fire-and-forget).
+                emailService.sendTemplateEmailAsync('meeting-invite', emp.email, {
+                    EmployeeName: emp.employeeName || '', ProjectName: project.projectName || '',
+                    Title: d.title.trim(), When: whenStr, Organizer: c.name || organizerEmail,
+                    Agenda: (d.agenda || '').trim() || '—', JoinUrl: teamsData.teamsJoinUrl || (process.env.APP_URL || '#'),
+                    ByLine: c.name ? ` by ${c.name}` : ''
+                }, { subject: `Meeting Invitation: ${d.title.trim()}`, refType: 'MEETING', refId: meetingId,
+                     icalEvent: { filename: 'invite.ics', method: 'REQUEST', content: ics } });
             }
             // Advance planning lifecycle: first meeting on a Planning project → MeetingScheduled.
             if (project.status === 'Planning' && (!project.lifecycleStage || project.lifecycleStage === 'Planning') && !project.planningMeetingId) {
@@ -7042,7 +7101,7 @@ class ProjectService extends cds.ApplicationService {
             const d = req.data || {};
             const mtg = await SELECT.one.from(MEETING).where({ meetingId: d.meetingId });
             if (!mtg) return JSON.stringify({ error: 'Meeting not found.' });
-            const project = await SELECT.one.from(PROJECT).columns('poc_employeeId').where({ projectId: mtg.project_projectId });
+            const project = await SELECT.one.from(PROJECT).columns('poc_employeeId', 'projectName').where({ projectId: mtg.project_projectId });
             if (!(isFounderCaller(req, c) || (project && project.poc_employeeId === c.employeeId)))
                 return JSON.stringify({ error: 'Only the project POC or Founder can edit meetings.' });
             if (mtg.status === 'Cancelled') return JSON.stringify({ error: 'Cannot edit a cancelled meeting.' });
@@ -7068,13 +7127,27 @@ class ProjectService extends cds.ApplicationService {
                 endDateTime:   d.endDateTime   || mtg.endDateTime
             }).where({ meetingId: d.meetingId });
 
-            // Notify participants of the change.
+            // Notify participants of the change (in-app + updated email invite).
+            const newStart = d.startDateTime || mtg.startDateTime, newEnd = d.endDateTime || mtg.endDateTime;
+            const uWhen = `${new Date(newStart).toLocaleString('en-IN')} – ${new Date(newEnd).toLocaleTimeString('en-IN')}`;
+            const uIcs = buildICS({
+                uid: `${d.meetingId}@ccentrik`, title: d.title.trim(),
+                description: (d.agenda || '').trim() + (mtg.teamsJoinUrl ? `\nJoin: ${mtg.teamsJoinUrl}` : ''),
+                start: newStart, end: newEnd, organizerEmail: mtg.organizerEmail, location: mtg.teamsJoinUrl || 'Online', method: 'REQUEST'
+            });
             const parts = await SELECT.from(MEETING_PARTICIPANT).where({ meeting_meetingId: d.meetingId });
             for (const p of parts) {
                 await createNotification(p.employee_employeeId, 'MEETING_UPDATED',
                     'Meeting Updated',
-                    `Meeting "${d.title.trim()}" has been updated. New time: ${new Date(d.startDateTime || mtg.startDateTime).toLocaleString('en-IN')}.`,
+                    `Meeting "${d.title.trim()}" has been updated. New time: ${new Date(newStart).toLocaleString('en-IN')}.`,
                     d.meetingId);
+                if (p.employeeEmail) emailService.sendTemplateEmailAsync('meeting-invite', p.employeeEmail, {
+                    EmployeeName: p.employeeName || '', ProjectName: (project && project.projectName) || '',
+                    Title: d.title.trim(), When: uWhen, Organizer: mtg.organizerName || mtg.organizerEmail,
+                    Agenda: (d.agenda || '').trim() || '—', JoinUrl: mtg.teamsJoinUrl || (process.env.APP_URL || '#'),
+                    ByLine: ' (updated)'
+                }, { subject: `Meeting Updated: ${d.title.trim()}`, refType: 'MEETING', refId: d.meetingId,
+                     icalEvent: { filename: 'invite.ics', method: 'REQUEST', content: uIcs } });
             }
             founderEvents.ping('updateMeeting');
             return JSON.stringify({ ok: true });
@@ -7086,7 +7159,7 @@ class ProjectService extends cds.ApplicationService {
             const { meetingId } = req.data;
             const mtg = await SELECT.one.from(MEETING).where({ meetingId });
             if (!mtg) return JSON.stringify({ error: 'Meeting not found.' });
-            const project = await SELECT.one.from(PROJECT).columns('poc_employeeId').where({ projectId: mtg.project_projectId });
+            const project = await SELECT.one.from(PROJECT).columns('poc_employeeId', 'projectName').where({ projectId: mtg.project_projectId });
             if (!(isFounderCaller(req, c) || (project && project.poc_employeeId === c.employeeId)))
                 return JSON.stringify({ error: 'Only the project POC or Founder can cancel meetings.' });
             if (mtg.status === 'Cancelled') return JSON.stringify({ error: 'Meeting is already cancelled.' });
@@ -7098,12 +7171,23 @@ class ProjectService extends cds.ApplicationService {
             }
 
             await UPDATE(MEETING).set({ status: 'Cancelled' }).where({ meetingId });
+            // Cancellation .ics (METHOD:CANCEL) so calendars remove the original event.
+            const cWhen = `${new Date(mtg.startDateTime).toLocaleString('en-IN')} – ${new Date(mtg.endDateTime).toLocaleTimeString('en-IN')}`;
+            const cIcs = buildICS({
+                uid: `${meetingId}@ccentrik`, title: mtg.title, description: 'This meeting has been cancelled.',
+                start: mtg.startDateTime, end: mtg.endDateTime, organizerEmail: mtg.organizerEmail, method: 'CANCEL'
+            });
             const parts = await SELECT.from(MEETING_PARTICIPANT).where({ meeting_meetingId: meetingId });
             for (const p of parts) {
                 await createNotification(p.employee_employeeId, 'MEETING_CANCELLED',
                     'Meeting Cancelled',
                     `Meeting "${mtg.title}" has been cancelled.`,
                     meetingId);
+                if (p.employeeEmail) emailService.sendTemplateEmailAsync('meeting-cancelled', p.employeeEmail, {
+                    EmployeeName: p.employeeName || '', ProjectName: (project && project.projectName) || '',
+                    Title: mtg.title, When: cWhen, ByLine: c.name ? ` by ${c.name}` : ''
+                }, { subject: `Meeting Cancelled: ${mtg.title}`, refType: 'MEETING', refId: meetingId,
+                     icalEvent: { filename: 'cancel.ics', method: 'CANCEL', content: cIcs } });
             }
             founderEvents.ping('cancelMeeting');
             return JSON.stringify({ ok: true });
@@ -8005,3 +8089,5 @@ class ClientService extends cds.ApplicationService {
 
 module.exports = { EmployeeService, ManagerService, HRService, FounderService, ProjectService, ClientService };
 cds.on('served', () => startReminderCron(getMailer, createNotification));
+// Validate + log (masked) the SMTP configuration once at startup.
+cds.on('served', () => { try { require('./services/email/email-service').logStartupStatus(); } catch (e) { cds.log('email').warn('email startup check skipped:', e.message); } });

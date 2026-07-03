@@ -1,3 +1,8 @@
+// Load .env (SMTP + email branding config) into process.env BEFORE anything else,
+// since CAP does not auto-load .env. Safe if the file/dep is absent (falls back to
+// real environment variables, e.g. on BTP where they're set as service vars).
+try { require('dotenv').config(); } catch (e) { /* dotenv optional — env may come from the OS/BTP */ }
+
 const cds = require('@sap/cds');
 const express = require('express');
 const founderEvents = require('./founder-events');
