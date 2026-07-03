@@ -1,0 +1,16 @@
+<mvc:View
+    controllerName="timesheet.app.controller.PmDashboard"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    height="100%">
+
+    <!-- Project Manager Dashboard — project-specific operational view for the
+         assigned PM (project POC). Access-gated server-side; the controller
+         renders the full dashboard (KPIs, health, tasks, resources, milestones,
+         budget, issues, meetings, approvals, charts) into the HTML host. -->
+    <Page id="pmPage" showHeader="false" backgroundDesign="Transparent" class="founderPage">
+        <core:HTML id="pmHost" content="&lt;div class='fpaRoot'&gt;&lt;div class='fdLoading'&gt;Loading project dashboard…&lt;/div&gt;&lt;/div&gt;" />
+    </Page>
+
+</mvc:View>

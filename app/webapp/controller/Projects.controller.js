@@ -35,6 +35,8 @@ sap.ui.define([
         },
         onExit: function () {
             if (this._projChat) { this._projChat.destroy(); this._projChat = null; }
+            (this._pmCharts || []).forEach(function (c) { try { c.destroy(); } catch (e) { /* */ } });
+            this._pmCharts = [];
             if (window._projCtrl === this) window._projCtrl = null;
         },
         _onMatched: function () {
@@ -62,7 +64,12 @@ sap.ui.define([
                     that._view = "list"; that._load();
                     return;
                 }
-                that._detail = d; that._planning = null; that._budgetReqs = null; that._forecast = null; that._view = "detail"; that._render();
+                that._detail = d; that._planning = null; that._budgetReqs = null; that._forecast = null; that._pmDash = null; that._view = "detail"; that._render();
+                // PM Dashboard summary (KPIs/health/charts) rendered inline on the Overview tab.
+                pprojpost("getPmDashboard", { projectId: projectId }).then(function (pm) {
+                    that._pmDash = (pm && !pm.error) ? pm : { error: (pm && pm.error) || "unavailable" };
+                    if ((that._detailTab || "overview") === "overview") that._render();
+                }).catch(function () { that._pmDash = { error: "unavailable" }; if ((that._detailTab || "overview") === "overview") that._render(); });
                 // Operational resource-planning indicators (capacity/utilization, no money).
                 ppost("getProjectResourcePlanning", { projectId: projectId }).then(function (rp) {
                     that._planning = (rp && !rp.error) ? rp : null;
@@ -83,7 +90,11 @@ sap.ui.define([
 
         _render: function () {
             var h = this._host(); if (!h) return;
-            if (this._view === "detail" && this._detail) { h.setContent(this._renderDetail()); return; }
+            if (this._view === "detail" && this._detail) {
+                h.setContent(this._renderDetail());
+                if ((this._detailTab || "overview") === "overview" && this._pmDash && !this._pmDash.error) this._pmLoadChart();
+                return;
+            }
             var list = (this._data && this._data.projects) || [];
             var header = "<div class='pmHeader'><div class='pmTitle'>My Projects</div>" +
                 "<div class='pmSub'>Projects you lead or are allocated to</div></div>";
@@ -116,6 +127,174 @@ sap.ui.define([
                 this._bar(p.progress) + "<div class='pmCardFoot'>" + (p.taskCount || 0) + " task(s)</div></div>";
         },
 
+        // ── PM Dashboard (rendered inline on the Overview tab, light theme) ──────
+        _pmMoney: function (n) { n = Number(n) || 0; var a = Math.abs(n); if (a >= 1e7) return "₹" + (n / 1e7).toFixed(2) + " Cr"; if (a >= 1e5) return "₹" + (n / 1e5).toFixed(2) + " L"; if (a >= 1e3) return "₹" + (n / 1e3).toFixed(1) + " K"; return "₹" + n; },
+        // Clean line-icon set (professional; no emojis).
+        _pmSvg: function (k, sz) {
+            sz = sz || 16;
+            var P = {
+                progress: "<path d='M3 3v18h18'/><rect x='7' y='11' width='3' height='7' rx='1'/><rect x='12' y='7' width='3' height='11' rx='1'/><rect x='17' y='13' width='3' height='5' rx='1'/>",
+                health: "<path d='M22 12h-4l-3 8-4-16-3 8H4'/>",
+                clock: "<circle cx='12' cy='12' r='9'/><path d='M12 7v5l3 2'/>",
+                wallet: "<rect x='3' y='6' width='18' height='13' rx='2'/><path d='M16 12h3'/><path d='M3 8V6a2 2 0 0 1 2-2h11'/>",
+                users: "<path d='M17 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/><circle cx='9' cy='8' r='4'/><path d='M22 20v-2a4 4 0 0 0-3-3.9'/>",
+                alert: "<path d='M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z'/><path d='M12 9v4'/><path d='M12 17h.01'/>",
+                bug: "<rect x='8' y='6' width='8' height='14' rx='4'/><path d='M8 12H4M20 12h-4M8 8 5 5M16 8l3-3M9 20l-2 2M15 20l2 2'/>",
+                check: "<circle cx='12' cy='12' r='9'/><path d='m8 12 3 3 5-6'/>",
+                flag: "<path d='M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z'/><path d='M4 22V4'/>",
+                list: "<rect x='4' y='3' width='16' height='18' rx='2'/><path d='M8 8h8M8 12h8M8 16h5'/>",
+                calendar: "<rect x='3' y='4' width='18' height='17' rx='2'/><path d='M16 2v4M8 2v4M3 10h18'/>",
+                client: "<path d='M3 21V8l9-5 9 5v13'/><path d='M9 21v-6h6v6'/>",
+                plus: "<path d='M12 5v14M5 12h14'/>"
+            };
+            return "<svg width='" + sz + "' height='" + sz + "' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>" + (P[k] || "") + "</svg>";
+        },
+        _pmHealthColor: function (h) { return h >= 76 ? "#16a34a" : h >= 51 ? "#d97706" : "#dc2626"; },
+        _pmUtilColor: function (u) { return u > 100 ? "#dc2626" : u >= 90 ? "#d97706" : u >= 70 ? "#16a34a" : "#2563eb"; },
+        _pmHealthRing: function (score, size) {
+            var col = this._pmHealthColor(score); var R = (size / 2) - 6; var C = 2 * Math.PI * R; var off = C * (1 - score / 100);
+            return "<svg width='" + size + "' height='" + size + "' viewBox='0 0 " + size + " " + size + "'>" +
+                "<circle cx='" + (size / 2) + "' cy='" + (size / 2) + "' r='" + R + "' fill='none' stroke='#e5e7eb' stroke-width='7'/>" +
+                "<circle cx='" + (size / 2) + "' cy='" + (size / 2) + "' r='" + R + "' fill='none' stroke='" + col + "' stroke-width='7' stroke-linecap='round'" +
+                " stroke-dasharray='" + C.toFixed(1) + "' stroke-dashoffset='" + off.toFixed(1) + "' transform='rotate(-90 " + (size / 2) + " " + (size / 2) + ")'/>" +
+                "<text x='50%' y='47%' text-anchor='middle' font-size='" + (size * 0.26) + "' font-weight='800' fill='#111827'>" + score + "</text>" +
+                "<text x='50%' y='66%' text-anchor='middle' font-size='" + (size * 0.13) + "' fill='#6b7280'>/100</text></svg>";
+        },
+        _pmEmpty: function (iconKey, msg) { return "<div class='pmChartEmpty'><div class='pmChartEmptyIcon'>" + this._pmSvg(iconKey, 30) + "</div><div>" + esc(msg) + "</div></div>"; },
+        _pmOverview: function (d) {
+            var pm = this._pmDash, self = this;
+            if (!pm) return "<div class='pmPanel' style='margin-top:14px'><div class='pmLoading'>Loading dashboard…</div></div>";
+            if (pm.error) return "<div class='pmPanel' style='margin-top:14px'><div class='pmCardSub'>Dashboard data is unavailable for this project.</div></div>";
+            var s = pm.summary, o = pm.overview, b = pm.budget, pid = o.projectId;
+
+            // ── Hero header (identity + health ring + quick actions) ────────────
+            var overdue = s.daysRemaining != null && s.daysRemaining < 0;
+            var qa = function (label, tab, icon) { return "<button class='pmQa' onclick=\"window._projCtrl.onTab('" + tab + "')\"><span class='pmQaIco'>" + self._pmSvg(icon, 15) + "</span>" + label + "</button>"; };
+            var meta = function (icon, txt) { return "<span><span class='pmMetaIco'>" + self._pmSvg(icon, 14) + "</span>" + txt + "</span>"; };
+            var hero = "<div class='pmHero'>" +
+                "<div class='pmHeroMain'>" +
+                "<div class='pmHeroTop'><div class='pmHeroName'>" + esc(o.projectName) + "</div>" + this._statusChip(o.status) +
+                "<span class='pmHeroType'>" + esc(o.projectType) + "</span></div>" +
+                "<div class='pmHeroMeta'>" + meta("client", "<b>" + esc(o.clientName) + "</b>") + meta("users", "POC <b>" + esc(o.poc) + "</b>") +
+                meta("calendar", "<b>" + esc(String(o.startDate || "").slice(0, 10)) + " → " + esc(String(o.endDate || "").slice(0, 10)) + "</b>") +
+                meta("users", "Team <b>" + o.teamSize + "</b>") + "</div>" +
+                "<div class='pmHeroStats'>" +
+                "<div class='pmHeroStat'><span>Progress</span><b style='color:#2563eb'>" + s.progress + "%</b></div>" +
+                "<div class='pmHeroStat'><span>Days Left</span><b style='color:" + (overdue ? "#dc2626" : "#111827") + "'>" + (s.daysRemaining == null ? "—" : (overdue ? Math.abs(s.daysRemaining) + " over" : s.daysRemaining)) + "</b></div>" +
+                "<div class='pmHeroStat'><span>Budget Used</span><b style='color:" + this._pmUtilColor(s.budgetUtilizationPct) + "'>" + s.budgetUtilizationPct + "%</b></div>" +
+                "<div class='pmHeroStat'><span>Team Load</span><b style='color:" + this._pmUtilColor(s.resourceUtilizationPct) + "'>" + s.resourceUtilizationPct + "%</b></div></div>" +
+                "</div>" +
+                "<div class='pmHeroHealth'><div class='pmHeroHealthRing'>" + this._pmHealthRing(s.healthScore, 116) + "</div>" +
+                "<div class='pmHeroHealthLbl' style='color:" + this._pmHealthColor(s.healthScore) + "'>" + esc(s.healthLabel) + "</div>" +
+                "<div class='pmCardSub'>Project Health</div></div>" +
+                "</div>";
+
+            // ── KPI cards (icon + accent + status) ─────────────────────────────
+            var kpi = function (icon, l, v, sub, c) {
+                return "<div class='pmKpiCard' style='--accent:" + c + "'><div class='pmKpiHead'><span class='pmKpiIcon' style='background:" + c + "1a;color:" + c + "'>" + self._pmSvg(icon, 15) + "</span><span class='pmKpiL'>" + esc(l) + "</span></div>" +
+                    "<div class='pmKpiV' style='color:" + c + "'>" + v + "</div>" + (sub ? "<div class='pmKpiSub'>" + esc(sub) + "</div>" : "") + "</div>";
+            };
+            var cards =
+                kpi("progress", "Progress", s.progress + "%", "tasks complete", "#2563eb") +
+                kpi("health", "Health", s.healthScore + "/100", s.healthLabel, this._pmHealthColor(s.healthScore)) +
+                kpi("clock", "Days Left", (s.daysRemaining == null ? "—" : (overdue ? Math.abs(s.daysRemaining) : s.daysRemaining)), overdue ? "overdue" : "to end date", overdue ? "#dc2626" : "#0ea5e9") +
+                kpi("wallet", "Budget Util", s.budgetUtilizationPct + "%", "of approved", this._pmUtilColor(s.budgetUtilizationPct)) +
+                kpi("users", "Resource Util", s.resourceUtilizationPct + "%", "avg team load", this._pmUtilColor(s.resourceUtilizationPct)) +
+                kpi("alert", "Open Risks", s.openRisks, "high / critical", s.openRisks ? "#dc2626" : "#16a34a") +
+                kpi("bug", "Open Issues", s.openIssues, "unresolved", s.openIssues ? "#d97706" : "#16a34a") +
+                kpi("check", "Approvals", s.pendingApprovals, "pending", s.pendingApprovals ? "#d97706" : "#16a34a") +
+                kpi("flag", "Milestones", s.upcomingMilestones, "upcoming", "#7c3aed") +
+                kpi("list", "Pending Tasks", s.pendingTasks, "open", s.pendingTasks ? "#334155" : "#16a34a");
+
+            // ── Charts (with empty states) ─────────────────────────────────────
+            var taskTotal = pm.tasks.stats.total;
+            var hasRes = (pm.charts.resourceUtilization || []).length > 0;
+            var hasBudget = b.approved > 0;
+            var chartCard = function (title, id, hasData, emptyIcon, emptyMsg) {
+                var inner = hasData ? "<canvas id='" + id + "'></canvas>" : self._pmEmpty(emptyIcon, emptyMsg);
+                return "<div class='pmChartCard'><div class='pmChartTitle'>" + title + "</div><div class='pmChartBox'>" + inner + "</div></div>";
+            };
+            var charts = "<div class='pmChartRow'>" +
+                chartCard("Task Status Distribution", "pmc_task", taskTotal > 0, "list", "No task data available yet.") +
+                chartCard("Resource Utilization", "pmc_res", hasRes, "users", "No resource allocation available yet.") +
+                chartCard("Budget Consumption", "pmc_bud", hasBudget, "wallet", "No budget consumption data yet.") +
+                "</div>";
+
+            // ── Budget panel (Allocated / Consumed / Remaining) ────────────────
+            var totalAlloc = (b.deptAllocation || []).reduce(function (t, x) { return t + x.amount; }, 0);
+            var deptRows = (b.deptAllocation || []).length ? b.deptAllocation.map(function (x) {
+                // Per-dept consumption isn't tracked; show project-level utilization ratio as a proxy.
+                var consumed = Math.round(x.amount * (b.utilizationPct || 0) / 100);
+                var rem = x.amount - consumed;
+                var pct = b.approved > 0 ? Math.round(x.amount / b.approved * 100) : 0;
+                return "<tr><td>" + esc(x.name) + "</td><td style='text-align:right'>" + self._pmMoney(x.amount) + "</td>" +
+                    "<td style='text-align:right;color:#d97706'>" + self._pmMoney(consumed) + "</td><td style='text-align:right;color:#16a34a'>" + self._pmMoney(rem) + "</td>" +
+                    "<td style='text-align:right;color:#6b7280'>" + pct + "%</td></tr>";
+            }).join("") : "<tr><td colspan='5'>" + this._pmEmpty("wallet", "No department allocation set yet.") + "</td></tr>";
+            var budgetPanel = "<div class='pmPanel pmSpan2'><div class='pmPanelHead'>Budget</div>" +
+                "<div class='pmMiniStats pmBudgetStats'>" +
+                "<div><span>Approved</span><b>" + this._pmMoney(b.approved) + "</b></div>" +
+                "<div><span>Utilized</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + this._pmMoney(b.utilized) + "</b></div>" +
+                "<div><span>Remaining</span><b style='color:#16a34a'>" + this._pmMoney(b.remaining) + "</b></div>" +
+                "<div><span>Utilization</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + b.utilizationPct + "%</b></div></div>" +
+                "<div class='pmProgTrack'><div class='pmProgFill' style='width:" + Math.min(100, b.utilizationPct) + "%;background:" + this._pmUtilColor(b.utilizationPct) + "'></div></div>" +
+                "<table class='pmMiniTable'><thead><tr><th>Department / Module</th><th style='text-align:right'>Allocated</th><th style='text-align:right'>Consumed</th><th style='text-align:right'>Remaining</th><th style='text-align:right'>%</th></tr></thead><tbody>" + deptRows + "</tbody></table></div>";
+
+            // ── Meetings & milestones lists ────────────────────────────────────
+            var mList = (pm.meetings.list || []);
+            var mtgItems = mList.length ? mList.map(function (m) {
+                var when = String(m.startDateTime || "").replace("T", " ").slice(0, 16);
+                var join = m.teamsJoinUrl ? "<a href='" + esc(m.teamsJoinUrl) + "' target='_blank' class='pmListJoin'>Join</a>" : "";
+                return "<div class='pmListItem'><div><b>" + esc(m.title) + "</b>" + (m.isToday ? " <span class='pmTodayTag'>Today</span>" : "") +
+                    "<div class='pmListSub'>" + esc(m.meetingType || (m.meetingMode === "InPerson" ? "In Person" : "Teams")) + " · " + esc(when) + "</div></div>" + join + "</div>";
+            }).join("") : this._pmEmpty("calendar", "No upcoming meetings.");
+            var msUp = (pm.milestones.list || []).filter(function (x) { return x.upcoming || x.delayed; }).slice(0, 6);
+            var msItems = msUp.length ? msUp.map(function (x) {
+                var col = x.delayed ? "#dc2626" : "#2563eb";
+                return "<div class='pmListItem'><div><b>" + esc(x.name) + "</b>" + (x.delayed ? " <span class='pmDelayTag'>Delayed</span>" : "") +
+                    "<div class='pmListSub'>Target " + esc(String(x.targetDate || "").slice(0, 10)) + " · " + x.completionPct + "%</div></div>" +
+                    "<div class='pmListPct' style='color:" + col + "'>" + x.completionPct + "%</div></div>";
+            }).join("") : this._pmEmpty("flag", "No upcoming or delayed milestones.");
+            var listsPanel = "<div class='pmPanel'><div class='pmPanelHead'>Upcoming Meetings <span class='pmCount'>" + pm.meetings.upcoming + "</span></div>" +
+                "<div class='pmList'>" + mtgItems + "</div>" +
+                "<div class='pmPanelHead' style='margin-top:14px'>Milestones <span class='pmPhaseTag'>" + esc(pm.milestones.currentPhase) + "</span></div>" +
+                "<div class='pmList'>" + msItems + "</div></div>";
+
+            return "<div class='pmDash'>" +
+                "<div class='pmKpiRow'>" + cards + "</div>" + charts +
+                "<div class='pmDashCols'>" + budgetPanel + listsPanel + "</div></div>";
+        },
+        _pmInitCharts: function () {
+            if (!window.Chart || !this._pmDash || this._pmDash.error) return;
+            (this._pmCharts || []).forEach(function (c) { try { c.destroy(); } catch (e) { /* */ } });
+            this._pmCharts = [];
+            var ch = this._pmDash.charts, self = this;
+            var mk = function (id, cfg) { var el = document.getElementById(id); if (!el) return; self._pmCharts.push(new window.Chart(el.getContext("2d"), cfg)); };
+            var grid = { color: "rgba(0,0,0,0.06)" };
+            window.Chart.defaults.color = "#475569";
+            var ts = ch.taskStatus, tsTotal = Object.values(ts).reduce(function (a, b) { return a + b; }, 0);
+            // Center-total plugin for the task donut.
+            var centerText = { id: "pmCenter", afterDraw: function (chart) { var a = chart.chartArea; if (!a) return; var cc = chart.ctx, cx = (a.left + a.right) / 2, cy = (a.top + a.bottom) / 2; cc.save(); cc.textAlign = "center"; cc.fillStyle = "#111827"; cc.font = "800 22px Inter, Arial"; cc.fillText(String(tsTotal), cx, cy - 2); cc.fillStyle = "#6b7280"; cc.font = "11px Inter, Arial"; cc.fillText("Tasks", cx, cy + 15); cc.restore(); } };
+            if (tsTotal > 0) mk("pmc_task", { type: "doughnut", data: { labels: Object.keys(ts), datasets: [{ data: Object.values(ts), backgroundColor: ["#16a34a", "#2563eb", "#7c3aed", "#f59e0b", "#dc2626"], borderColor: "#fff", borderWidth: 2 }] },
+                options: { maintainAspectRatio: false, cutout: "64%", plugins: { legend: { position: "bottom", labels: { boxWidth: 10, padding: 8, font: { size: 10 } } } } }, plugins: [centerText] });
+            var ru = ch.resourceUtilization;
+            if (ru.length) mk("pmc_res", { type: "bar", data: { labels: ru.map(function (x) { return x.name; }), datasets: [{ data: ru.map(function (x) { return x.value; }), backgroundColor: ru.map(function (x) { return self._pmUtilColor(x.value); }), borderRadius: 5, maxBarThickness: 46 }] },
+                options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (c) { return "Allocation: " + c.raw + "%"; } } } }, scales: { y: { grid: grid, ticks: { callback: function (v) { return v + "%"; } } }, x: { grid: { display: false } } } } });
+            var b = this._pmDash.budget;
+            if (b.approved > 0) mk("pmc_bud", { type: "bar", data: { labels: ["Approved", "Utilized", "Remaining"], datasets: [{ data: [b.approved, b.utilized, b.remaining], backgroundColor: ["#2563eb", "#dc2626", "#16a34a"], borderRadius: 5, maxBarThickness: 60 }] },
+                options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (c) { return c.label + ": " + self._pmMoney(c.raw) + (c.dataIndex === 1 ? "  (" + b.utilizationPct + "%)" : ""); } } } }, scales: { y: { grid: grid, ticks: { callback: function (v) { return self._pmMoney(v); } } }, x: { grid: { display: false } } } } });
+        },
+        _pmLoadChart: function () {
+            if (window.Chart) { var t = this; setTimeout(function () { t._pmInitCharts(); }, 40); return; }
+            if (this._pmChartLoading) return;
+            this._pmChartLoading = true;
+            var that = this, s = document.createElement("script");
+            s.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"; s.async = true;
+            s.onload = function () { that._pmChartLoading = false; that._pmInitCharts(); };
+            s.onerror = function () { that._pmChartLoading = false; };
+            document.head.appendChild(s);
+        },
+
         _renderDetail: function () {
             var d = this._detail, p = d.project || {};
             var activeTab = this._detailTab || "overview";
@@ -137,15 +316,8 @@ sap.ui.define([
 
             var body = "";
             if (activeTab === "overview") {
-                body = "<div class='pmPanel'><div class='pmPanelHead'>" + esc(p.projectName) + " " + this._statusChip(p.status) + "</div>" +
-                    "<div class='pmInfo'><span>Customer: <b>" + esc(p.customerName || "—") + "</b></span>" +
-                    "<span>POC: <b>" + esc(p.pocName || "—") + "</b></span>" +
-                    "<span>Priority: <b>" + esc(p.priority) + "</b></span>" +
-                    "<span>Timeline: <b>" + esc(p.startDate || "—") + " → " + esc(p.endDate || "—") + "</b></span></div>" +
-                    (p.description ? "<div class='pmDesc'>" + esc(p.description) + "</div>" : "") +
-                    (p.status === "Planning"
-                        ? "<div class='pmLcNotice'>⏳ This project is in the Planning Phase. Progress tracking and the project dashboard become available once the project is Active.</div>"
-                        : this._bar(d.progress)) + "</div>";
+                // Project Manager Dashboard (hero header + KPIs + charts + panels).
+                body = this._pmOverview(d);
             } else if (activeTab === "resources") {
                 var resCount = (d.resources || []).length;
                 var p2 = d.project || {};
@@ -154,7 +326,9 @@ sap.ui.define([
                     ? "<div class='pmLcNotice'>⏳ Resource allocation will be unlocked once the Founder completes the planning meeting and allocates the budget.</div>"
                     : "";
                 var resHead = "<div class='pmPanelHead'>Resources <span class='pmCount'>" + resCount + "</span>" +
-                    (canAllocate ? " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onAllocate()\">⚙ Manage Resources</button>" : "") + "</div>";
+                    (canAllocate ? " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onAllocateByMilestone()\">＋ Allocate by Hours</button>" : "") +
+                    (canAllocate ? " <button class='pmBtn ghost sm' onclick=\"window._projCtrl.onAllocate()\">Manage (FTE)</button>" : "") +
+                    " <button class='pmBtn ghost sm' onclick=\"window._projCtrl.onResourceForecast()\">Capacity Forecast</button></div>";
                 var msList = d.milestones || [];
                 var resRows = (d.resources || []).map(function (r) {
                     var u = r.utilizationPct || 0;
@@ -1148,6 +1322,96 @@ sap.ui.define([
         },
 
         // POC resource allocation — light-themed DOM overlay.
+        // ── Resource Planning v2 — allocate by milestone + estimated hours ───────
+        onAllocateByMilestone: function () {
+            var that = this, pid = this._detail.project.projectId;
+            var msList = (this._detail.milestones || []);
+            if (!msList.length) { MessageToast.show("Add project milestones first — hours are allocated against a milestone."); return; }
+            ppost("getAllocatableEmployees", { projectId: pid }).then(function (d) {
+                if (d && d.error) { MessageToast.show(d.error); return; }
+                // Flatten employees whether grouped by department or a flat list.
+                var emps = [];
+                if (d.departments && d.departments.length) d.departments.forEach(function (g) { (g.employees || []).forEach(function (e) { emps.push(e); }); });
+                else if (d.employees) emps = d.employees;
+                emps.sort(function (a, b) { return (a.employeeName || "").localeCompare(b.employeeName || ""); });
+                if (!emps.length) { MessageToast.show("No allocatable employees found."); return; }
+
+                var empOpts = emps.map(function (e) { return "<option value='" + esc(e.employeeId) + "'>" + esc(e.employeeName) + " · " + esc(e.department || e.specializationName || "") + "</option>"; }).join("");
+                var msOpts = msList.map(function (m) {
+                    var win = (m.plannedStartDate || m.startDate || "") + " → " + (m.plannedEndDate || m.endDate || "");
+                    return "<option value='" + esc(m.milestoneId) + "' data-win='" + esc(win) + "'>#" + (m.sequence || 0) + " " + esc(m.name) + "</option>";
+                }).join("");
+
+                var ov = document.createElement("div"); ov.className = "pmOverlay";
+                ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>Allocate Resource by Hours</div>" +
+                    "<div class='pmDialogBody'>" +
+                    "<label class='pmLbl'>Employee</label><select id='amEmp' class='pmSelect wide'>" + empOpts + "</select>" +
+                    "<label class='pmLbl'>Milestone</label><select id='amMs' class='pmSelect wide'>" + msOpts + "</select>" +
+                    "<div class='pmMuted' id='amWin' style='margin:2px 0 8px'></div>" +
+                    "<label class='pmLbl'>Estimated Hours</label><input id='amHrs' type='number' min='1' step='1' class='pmInput' placeholder='e.g. 60'/>" +
+                    "<label class='pmLbl'>Allocation Type</label>" +
+                    "<div class='amTypeRow'><label class='amRadio'><input type='radio' name='amType' value='Hard' checked/> Hard <span class='pmMuted'>(confirmed, consumes capacity)</span></label>" +
+                    "<label class='amRadio'><input type='radio' name='amType' value='Soft'/> Soft <span class='pmMuted'>(tentative reservation)</span></label></div>" +
+                    "<div id='amPreview' class='amPreview'></div>" +
+                    "<div id='amErr' class='pmErr' style='display:none'></div>" +
+                    "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>Allocate</button></div></div>";
+                document.body.appendChild(ov);
+                var close = function () { ov.remove(); };
+                var $ = function (s) { return ov.querySelector(s); };
+                var showWin = function () { var o = $("#amMs").selectedOptions[0]; $("#amWin").textContent = o ? ("Window: " + o.getAttribute("data-win")) : ""; };
+                $("#amMs").addEventListener("change", showWin); showWin();
+                ov.querySelector("#pmCancel").addEventListener("click", close);
+                var save = function (force, reason) {
+                    var employeeId = $("#amEmp").value, milestoneId = $("#amMs").value;
+                    var hrs = parseFloat($("#amHrs").value) || 0;
+                    var type = (ov.querySelector("input[name='amType']:checked") || {}).value || "Hard";
+                    var err = $("#amErr");
+                    if (hrs <= 0) { err.style.display = "block"; err.textContent = "Enter estimated hours greater than 0."; return; }
+                    var btn = ov.querySelector("#pmSave"); btn.disabled = true; btn.textContent = "Allocating…";
+                    ppost("allocateResourceToMilestone", { projectId: pid, employeeId: employeeId, milestoneId: milestoneId, estimatedHours: hrs, allocationType: type, force: !!force, overrideReason: reason || "" })
+                        .then(function (res) {
+                            btn.disabled = false; btn.textContent = "Allocate";
+                            if (res && res.overallocation) {
+                                var r = window.prompt(res.error + "\n\nEnter an override reason to proceed (or Cancel):", "");
+                                if (r) save(true, r);
+                                return;
+                            }
+                            if (res && res.error) { err.style.display = "block"; err.textContent = res.error; return; }
+                            close(); MessageToast.show("Allocated " + hrs + "h. Monthly plan generated.");
+                            that._open(pid);
+                        }).catch(function () { btn.disabled = false; btn.textContent = "Allocate"; err.style.display = "block"; err.textContent = "Could not allocate — please try again."; });
+                };
+                ov.querySelector("#pmSave").addEventListener("click", function () { save(false, ""); });
+            }).catch(function () { MessageToast.show("Could not load employees."); });
+        },
+
+        // ── Resource Planning v2 — 3-month hours capacity forecast ───────────────
+        onResourceForecast: function () {
+            var that = this, pid = this._detail.project.projectId;
+            ppost("getResourceForecast", { projectId: pid, months: 3 }).then(function (d) {
+                if (d && d.error) { MessageToast.show(d.error); return; }
+                var fc = d.forecast || [];
+                var monthLabels = fc.length && fc[0].months ? fc[0].months.map(function (m) { return m.label; }) : [];
+                var utilCol = function (u) { return u > 100 ? "#dc2626" : u >= 90 ? "#a16207" : u >= 70 ? "#16a34a" : "#2563eb"; };
+                var head = "<tr><th>Employee</th>" + monthLabels.map(function (l) { return "<th style='text-align:center'>" + esc(l) + "</th>"; }).join("") + "</tr>";
+                var rows = fc.length ? fc.map(function (e) {
+                    var cells = (e.months || []).map(function (m) {
+                        return "<td style='text-align:center'>" +
+                            "<div class='fcAvail' style='color:" + (m.overbooked ? "#dc2626" : "#16a34a") + "'>" + m.availableHours + "h free</div>" +
+                            "<div class='fcSub'>Cap " + m.effectiveCapacityHours + " · <span style='color:" + utilCol(m.utilizationPct) + "'>H " + m.hardHours + "</span>" + (m.softHours ? " · S " + m.softHours : "") + "</div></td>";
+                    }).join("");
+                    return "<tr><td><b>" + esc(e.employeeName) + "</b><div class='fcSub'>" + esc(e.department || "") + "</div></td>" + cells + "</tr>";
+                }).join("") : "<tr><td colspan='" + (monthLabels.length + 1) + "' class='pmMuted' style='text-align:center;padding:14px'>No resources to forecast.</td></tr>";
+                var ov = document.createElement("div"); ov.className = "pmOverlay";
+                ov.innerHTML = "<div class='pmDialog wide'><div class='pmDialogHead'>Capacity Forecast — Hours (next 3 months)</div>" +
+                    "<div class='pmDialogBody'><div class='pmMuted' style='margin-bottom:8px'>Hours are the source of truth. <b>H</b> = Hard (confirmed), <b>S</b> = Soft (tentative). Free = effective capacity − hard.</div>" +
+                    "<table class='pmTable fcTable'><thead>" + head + "</thead><tbody>" + rows + "</tbody></table></div>" +
+                    "<div class='pmDialogFoot'><button class='pmBtn primary' id='pmCancel'>Close</button></div></div>";
+                document.body.appendChild(ov);
+                ov.querySelector("#pmCancel").addEventListener("click", function () { ov.remove(); });
+            }).catch(function () { MessageToast.show("Could not load the forecast."); });
+        },
+
         onAllocate: function () {
             var that = this, pid = this._detail.project.projectId;
             ppost("getAllocatableEmployees", { projectId: pid }).then(function (d) {

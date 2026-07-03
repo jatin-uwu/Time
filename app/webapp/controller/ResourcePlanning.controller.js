@@ -54,13 +54,15 @@ sap.ui.define([
             Promise.all([
                 ppost("getResourcePool", this._filters),
                 ppost("getOverUtilizedResources", {}).catch(function () { return {}; }),
-                ppost("getResourceCapacityRisks", {}).catch(function () { return {}; })
+                ppost("getResourceCapacityRisks", {}).catch(function () { return {}; }),
+                ppost("getResourceDemandOverview", {}).catch(function () { return {}; })
             ]).then(function (rr) {
                 var d = rr[0];
                 if (d && d.error) { if (h) h.setContent("<div class='rpWrap'><div class='rpEmpty'>" + esc(d.error) + "</div></div>"); return; }
                 that._data = d || { resources: [], kpis: {} };
                 that._over = (rr[1] && !rr[1].error) ? rr[1] : { overUtilized: [], overrides: [] };
                 that._risks = (rr[2] && !rr[2].error) ? rr[2] : { risks: [], shortages: [] };
+                that._demand = (rr[3] && !rr[3].error) ? rr[3] : { kpis: {}, demand: [] };
                 that._render();
             }).catch(function () { if (h) h.setContent("<div class='rpWrap'><div class='rpEmpty'>Could not load the resource pool.</div></div>"); });
         },
@@ -73,10 +75,11 @@ sap.ui.define([
                 "<div class='rpSub'>Capacity, utilization & availability across the workforce</div></div>" +
                 "<div class='rpModeTabs'>" +
                 "<button class='rpModeTab" + (this._mode === "pool" ? " active" : "") + "' onclick=\"window._rpCtrl.onMode('pool')\">Resource Pool</button>" +
+                "<button class='rpModeTab" + (this._mode === "demand" ? " active" : "") + "' onclick=\"window._rpCtrl.onMode('demand')\">Demand &amp; Supply</button>" +
                 "<button class='rpModeTab" + (this._mode === "recommend" ? " active" : "") + "' onclick=\"window._rpCtrl.onMode('recommend')\">🎯 Recommend</button>" +
                 "</div></div>";
-            var body = (this._mode === "recommend")
-                ? this._renderRecommend()
+            var body = (this._mode === "recommend") ? this._renderRecommend()
+                : (this._mode === "demand") ? this._renderDemand()
                 : (this._renderKpis(d.kpis) + this._renderUtilOverview(d.kpis) + this._renderRisks() + this._renderFilters() + this._renderGrid(d.resources, false) + this._renderOverUtilized());
             h.setContent("<div class='rpWrap'>" + header + body + "</div>");
         },
@@ -109,6 +112,58 @@ sap.ui.define([
             return "<div class='rpSecTitle'>Resource Utilization Overview</div><div class='rpKpis'>" + tiles.map(function (t) {
                 return "<div class='rpKpi " + t.cls + "'><div class='rpKpiVal'>" + esc(t.value) + "</div><div class='rpKpiLbl'>" + esc(t.label) + "</div></div>";
             }).join("") + "</div>";
+        },
+
+        // Confidence-score factor breakdown (Phase 7): skill / availability /
+        // experience / certification / previous-project — each as a mini bar.
+        _recoBreakdown: function (r) {
+            var factors = [
+                { l: "Skill", v: r.skillMatchPct || 0, c: "#2563eb" },
+                { l: "Availability", v: r.availabilityPct || 0, c: "#16a34a" },
+                { l: "Experience", v: r.experiencePct || 0, c: "#7c3aed" },
+                { l: "Certification", v: r.certificationPct || 0, c: "#d97706" },
+                { l: "Prev. Project", v: r.previousProjectPct || 0, c: "#0ea5e9" }
+            ];
+            return "<div class='rpBreakdown'>" + factors.map(function (f) {
+                return "<div class='rpBd'><div class='rpBdTop'><span>" + f.l + "</span><b>" + f.v + "%</b></div>" +
+                    "<div class='rpBdTrack'><div class='rpBdFill' style='width:" + Math.min(100, f.v) + "%;background:" + f.c + "'></div></div></div>";
+            }).join("") + "</div>";
+        },
+
+        // ── Resource Demand vs Supply (Phase 6) ─────────────────────────────────
+        _renderDemand: function () {
+            var dm = this._demand || { kpis: {}, demand: [] };
+            var k = dm.kpis || {};
+            var tiles = [
+                { label: "Total Demand (heads)", value: k.totalDemandHeads || 0, cls: "" },
+                { label: "Total Demand (hours)", value: (k.totalDemandHours || 0), cls: "" },
+                { label: "Available Resources", value: k.availableResources || 0, cls: "ok" },
+                { label: "Resource Shortages", value: k.resourceShortages || 0, cls: (k.resourceShortages ? "bad" : "ok") },
+                { label: "Hiring Requirements", value: k.hiringRequirements || 0, cls: (k.hiringRequirements ? "warn" : "ok") },
+                { label: "Open Requirements", value: k.openRequirements || 0, cls: "" }
+            ];
+            var kpis = "<div class='rpKpis'>" + tiles.map(function (t) {
+                return "<div class='rpKpi " + t.cls + "'><div class='rpKpiVal'>" + esc(t.value) + "</div><div class='rpKpiLbl'>" + esc(t.label) + "</div></div>";
+            }).join("") + "</div>";
+
+            var rows = (dm.demand || []).length ? dm.demand.map(function (r) {
+                var gap = (r.structuralGap || 0) + (r.availabilityGap || 0);
+                var status = r.structuralGap > 0 ? "<span class='rpBadge bad'>Hire " + r.structuralGap + "</span>"
+                    : r.availabilityGap > 0 ? "<span class='rpBadge warn'>Busy " + r.availabilityGap + "</span>"
+                    : "<span class='rpBadge ok'>Covered</span>";
+                var rec = (r.recommended || []).map(function (e) { return esc(e.employeeName) + " <span class='rpMuted'>(" + e.freeHours + "h free)</span>"; }).join(", ") || "<span class='rpMuted'>None available — hire</span>";
+                return "<tr><td><b>" + esc(r.projectName) + "</b></td>" +
+                    "<td>" + esc([r.department, r.role, r.specialization].filter(Boolean).join(" · ") || "—") + "</td>" +
+                    "<td style='text-align:center'>" + r.requiredCount + "</td>" +
+                    "<td style='text-align:center'>" + (r.requiredHours || 0) + "h</td>" +
+                    "<td style='text-align:center'>" + r.matchedCount + "</td>" +
+                    "<td style='text-align:center'>" + r.availableCount + "</td>" +
+                    "<td style='text-align:center'>" + status + "</td>" +
+                    "<td>" + rec + "</td></tr>";
+            }).join("") : "<tr><td colspan='8' class='rpMuted' style='text-align:center;padding:16px'>No open resource demand declared. PMs can declare demand from a project's Resources tab.</td></tr>";
+
+            return "<div class='rpSecTitle'>Resource Demand &amp; Supply</div>" + kpis +
+                "<table class='rpTable'><thead><tr><th>Project</th><th>Demand (Dept · Role · Spec)</th><th style='text-align:center'>Need</th><th style='text-align:center'>Hours</th><th style='text-align:center'>Matched</th><th style='text-align:center'>Available</th><th style='text-align:center'>Status</th><th>Recommended</th></tr></thead><tbody>" + rows + "</tbody></table>";
         },
 
         // Upcoming Capacity Risks + Projects with Resource Shortages.
@@ -221,7 +276,8 @@ sap.ui.define([
                 (isReco ? "<div class='rpRecMeta'>Skill match <b>" + (r.skillMatchPct || 0) + "%</b> · Capacity <b>" + (r.capacityPct || 0) + "%</b>" +
                     (r.requiredRole ? " · Role " + (r.roleMatched ? "<b style='color:#16a34a'>✓ match</b>" : "<span style='color:#dc2626'>no match</span>") : "") +
                     (r.costRatePerHour > 0 ? " · Rate <b>₹" + Number(r.costRatePerHour).toLocaleString("en-IN") + "/hr</b>" + (r.estimatedAllocationCost > 0 ? " · Est <b>₹" + Number(r.estimatedAllocationCost).toLocaleString("en-IN") + "</b>" : "") : "") +
-                    (r.fitsBandwidth ? "" : " · <span style='color:#dc2626'>exceeds bandwidth</span>") + "</div>" + missing : "") +
+                    (r.fitsBandwidth ? "" : " · <span style='color:#dc2626'>exceeds bandwidth</span>") + "</div>" +
+                    this._recoBreakdown(r) + missing : "") +
                 "<div class='rpUtilRow'><div class='rpBar'><div class='rpBarFill' style='width:" + Math.min(100, r.utilizationPct) + "%;background:" + uc + "'></div></div>" +
                 "<span class='rpUtilPct' style='color:" + uc + "'>" + r.utilizationPct + "%</span></div>" +
                 "<div class='rpStats'>" +

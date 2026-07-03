@@ -159,6 +159,7 @@ async function ensureProjectTypes() {
     } catch (e) { cds.log('project').warn('ensureProjectTypes skipped:', e.message || e); }
 }
 const PROJECT_RESOURCE = 'ccentrik.employee.timesheet.schema.timesheet.ProjectResource';
+const RESOURCE_MONTHLY_ALLOCATION = 'ccentrik.employee.timesheet.schema.timesheet.ResourceMonthlyAllocation';
 const RESOURCE_OVERRIDE = 'ccentrik.employee.timesheet.schema.timesheet.ResourceOverride';
 const RP_CONFIG = 'ccentrik.employee.timesheet.schema.timesheet.ResourcePlanningConfig';
 const COMPANY_EVENT = 'ccentrik.employee.timesheet.schema.timesheet.CompanyEvent';
@@ -4326,6 +4327,107 @@ async function sendProjectMail(employeeId, email, subject, body, refId, notifTyp
     }
 }
 
+// ── Calendar invite (.ics) + meeting-email helpers ──────────────────────────
+// Convert a wall-clock ISO string in `tz` to the equivalent UTC Date.
+function zonedToUtc(localISO, tz) {
+    if (!localISO) return null;
+    const s = String(localISO).replace(' ', 'T');
+    const hasTz = /[zZ]$|[+-]\d\d:?\d\d$/.test(s);
+    const base = new Date(hasTz ? s : s + 'Z');
+    if (isNaN(base)) return null;
+    if (hasTz) return base;
+    try {
+        const shown = new Date(base.toLocaleString('en-US', { timeZone: tz || 'Asia/Kolkata' }));
+        return new Date(base.getTime() + (base.getTime() - shown.getTime()));
+    } catch (e) { return base; }
+}
+function _icsStamp(d) { return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
+function _icsEsc(s) { return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n'); }
+
+// Build a Teams/Outlook-compatible VCALENDAR for one meeting.
+function buildMeetingIcs(m, attendees, opts) {
+    opts = opts || {};
+    const method = opts.method || 'REQUEST';
+    const tz = m.timeZone || 'Asia/Kolkata';
+    const start = zonedToUtc(m.startDateTime, tz);
+    const end = zonedToUtc(m.endDateTime, tz) || (start ? new Date(start.getTime() + 3600000) : null);
+    const now = new Date();
+    const joinUrl = m.teamsJoinUrl || '';
+    const loc = m.meetingMode === 'InPerson' ? (m.location || '') : (joinUrl ? 'Microsoft Teams Meeting' : '');
+    const descParts = [];
+    if (m.meetingType) descParts.push('Type: ' + m.meetingType);
+    if (m.agenda) descParts.push('Agenda: ' + m.agenda);
+    if (joinUrl) descParts.push('Join Microsoft Teams Meeting: ' + joinUrl);
+    if (m.meetingMode === 'InPerson' && m.location) descParts.push('Location: ' + m.location);
+    const lines = [
+        'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ccentrik//Timesheet//EN',
+        'CALSCALE:GREGORIAN', 'METHOD:' + method,
+        'BEGIN:VEVENT',
+        'UID:' + m.meetingId + '@ccentrik',
+        'SEQUENCE:' + (opts.sequence || 0),
+        'DTSTAMP:' + _icsStamp(now),
+        start ? 'DTSTART:' + _icsStamp(start) : '',
+        end ? 'DTEND:' + _icsStamp(end) : '',
+        'SUMMARY:' + _icsEsc(m.title),
+        'DESCRIPTION:' + _icsEsc(descParts.join('\n')),
+        loc ? 'LOCATION:' + _icsEsc(loc) : '',
+        (m.organizerEmail ? 'ORGANIZER;CN=' + _icsEsc(m.organizerName || m.organizerEmail) + ':mailto:' + m.organizerEmail : '')
+    ];
+    (attendees || []).forEach(a => {
+        if (a.email) lines.push('ATTENDEE;CN=' + _icsEsc(a.name || a.email) + ';RSVP=TRUE:mailto:' + a.email);
+    });
+    lines.push('STATUS:' + (opts.cancelled ? 'CANCELLED' : 'CONFIRMED'));
+    lines.push('END:VEVENT', 'END:VCALENDAR');
+    return lines.filter(Boolean).join('\r\n');
+}
+
+// Email a meeting invitation (+ .ics calendar attachment) to every attendee.
+// attendees: [{ name, email }]. Best-effort; never throws into the caller.
+async function sendMeetingInvites(m, attendees, opts) {
+    opts = opts || {};
+    const mailer = getMailer();
+    const recips = (attendees || []).map(a => a.email).filter(Boolean);
+    if (!mailer || !recips.length) return;
+    const cancelled = !!opts.cancelled;
+    const method = cancelled ? 'CANCEL' : (opts.method || 'REQUEST');
+    const modeLine = m.meetingMode === 'InPerson'
+        ? `Location : ${m.location || '—'}`
+        : `Join Link: ${m.teamsJoinUrl || '—'}`;
+    const subject = (cancelled ? '[Cancelled] ' : '') + `${m.title}${m.meetingType ? ' · ' + m.meetingType : ''}`;
+    const text =
+        `${cancelled ? 'This meeting has been cancelled.\n\n' : ''}` +
+        `Meeting  : ${m.title}\n` +
+        `Type     : ${m.meetingType || '—'}\n` +
+        (m.agenda ? `Agenda   : ${m.agenda}\n` : '') +
+        `Date     : ${new Date(m.startDateTime).toLocaleString('en-IN')}\n` +
+        `Timezone : ${m.timeZone || 'Asia/Kolkata'}\n` +
+        `Mode     : ${m.meetingMode === 'InPerson' ? 'In Person' : 'Microsoft Teams'}\n` +
+        `${modeLine}\n` +
+        `Organizer: ${m.organizerName || ''} <${m.organizerEmail || ''}>\n`;
+    const html =
+        `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#222">` +
+        (cancelled ? `<p style="color:#c0392b;font-weight:600">This meeting has been cancelled.</p>` : '') +
+        `<h2 style="margin:0 0 4px">${_icsEsc(m.title)}</h2>` +
+        (m.meetingType ? `<div style="color:#666;margin-bottom:10px">${_icsEsc(m.meetingType)}</div>` : '') +
+        (m.agenda ? `<p><b>Agenda:</b> ${_icsEsc(m.agenda)}</p>` : '') +
+        `<p><b>Date:</b> ${new Date(m.startDateTime).toLocaleString('en-IN')}<br/>` +
+        `<b>Timezone:</b> ${_icsEsc(m.timeZone || 'Asia/Kolkata')}<br/>` +
+        `<b>Mode:</b> ${m.meetingMode === 'InPerson' ? 'In Person' : 'Microsoft Teams'}</p>` +
+        (m.meetingMode === 'InPerson'
+            ? `<p><b>Location:</b> ${_icsEsc(m.location || '—')}</p>`
+            : (m.teamsJoinUrl ? `<p><a href="${m.teamsJoinUrl}" style="background:#5b5fc7;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">Join Microsoft Teams Meeting</a></p>` : '')) +
+        `<p style="color:#888">Organizer: ${_icsEsc(m.organizerName || '')} &lt;${_icsEsc(m.organizerEmail || '')}&gt;</p></div>`;
+    const ics = buildMeetingIcs(m, attendees, { method, cancelled, sequence: opts.sequence || 0 });
+    try {
+        await mailer.sendMail({
+            from: process.env.SMTP_FROM || 'no-reply@timesheet.local',
+            to: recips.join(','), subject, text, html,
+            icalEvent: { method, filename: 'invite.ics', content: ics },
+            attachments: [{ filename: 'invite.ics', content: ics, contentType: 'text/calendar; method=' + method }]
+        });
+    } catch (e) { cds.log('meeting').warn('meeting invite email failed:', e.message || e); }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // CLIENT PORTAL & REQUIREMENT — shared helpers (used by ClientService +
 // ProjectService). Authorization is enforced by each caller; these helpers
@@ -5166,8 +5268,14 @@ class ProjectService extends cds.ApplicationService {
             const { projectId, totalBudget, departmentBudgets, otherBudgets, categoryBudgets } = req.data;
             const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'lifecycleStage', 'status', 'executionBudget').where({ projectId });
             if (!project) return JSON.stringify({ error: 'Project not found.' });
+            // Budget allocation (and editing it) is a planning-phase activity.
             if (project.status !== 'Planning') return JSON.stringify({ error: 'Budget can only be set for Planning projects.' });
-            if (project.lifecycleStage !== 'MeetingCompleted') return JSON.stringify({ error: 'Complete the planning meeting before allocating budget.' });
+            // Prerequisite: the planning meeting must be completed. Once satisfied, the
+            // lifecycle advances to MeetingCompleted → BudgetAllocated, and both stages
+            // (and any later planning stage) keep the prerequisite satisfied — so
+            // EDITING an already-allocated budget must not re-trigger this check.
+            const meetingDone = ['MeetingCompleted', 'BudgetAllocated'].includes(project.lifecycleStage);
+            if (!meetingDone) return JSON.stringify({ error: 'Complete the planning meeting before allocating budget.' });
 
             // The allocation ceiling is the EXECUTION BUDGET (contract − profit reserve),
             // NOT the contract value. Fall back to the entered total when no execution
@@ -5218,13 +5326,23 @@ class ProjectService extends cds.ApplicationService {
             const project = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId', 'budget',
                 'projectType_code', 'projectTypeName', 'contractValue', 'profitMarginPct', 'profitReserveAmount', 'executionBudget').where({ projectId });
             if (!project) return JSON.stringify({ error: 'Project not found.' });
-            // Resource categories = ROLES derived DYNAMICALLY from active employees'
-            // designations in the project type's department(s). Never hardcoded.
-            // Empty type departments → UI falls back to departments (legacy).
+            // Budget allocation is driven ENTIRELY by the project type's own
+            // configuration (modules / resource categories / departments) — never by
+            // generic org departments or employee designations. Priority:
+            //   1. configured resourceCategories  2. configured modules  3. departments
+            // If none are configured → empty (UI shows a proper empty state).
             await ensureProjectTypes();
-            const ptype = await SELECT.one.from(PROJECT_TYPE).columns('planningModel').where({ code: project.projectType_code || 'OTHER' });
-            const typeDepts = await typeDepartments(project.projectType_code);
-            const typeResourceCategories = typeDepts.length ? await rolesForDepartments(typeDepts) : [];
+            const ptype = await SELECT.one.from(PROJECT_TYPE).columns('planningModel', 'resourceCategories', 'modules', 'departments')
+                .where({ code: project.projectType_code || 'OTHER' });
+            const _parse = (s) => { try { return JSON.parse(s || '[]') || []; } catch (_) { return []; } };
+            const cfgResourceCats = _parse(ptype && ptype.resourceCategories);
+            const cfgModules = _parse(ptype && ptype.modules);
+            const cfgDepts = _parse(ptype && ptype.departments);
+            let typeResourceCategories, allocationUnitKind;
+            if (cfgResourceCats.length) { typeResourceCategories = cfgResourceCats; allocationUnitKind = 'Resource Category'; }
+            else if (cfgModules.length) { typeResourceCategories = cfgModules; allocationUnitKind = 'Module'; }
+            else if (cfgDepts.length) { typeResourceCategories = cfgDepts; allocationUnitKind = 'Department'; }
+            else { typeResourceCategories = []; allocationUnitKind = 'Department'; }
             const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: projectId });
             const isAlloc = resources.some(r => r.employee_employeeId === c.employeeId);
             if (!isFounderCaller(req, c) && project.poc_employeeId !== c.employeeId && !isAlloc)
@@ -5251,10 +5369,11 @@ class ProjectService extends cds.ApplicationService {
                 executionBudget,
                 // Legacy total kept = executionBudget for older readers.
                 totalBudget: executionBudget,
-                // Resource categories driven by Project Type (SAP roles / dev roles).
-                // Non-resource cost buckets are the standard COST_CATEGORIES minus the
-                // generic "Resource Cost" line (resources are now the type roles).
+                // Allocation units driven ENTIRELY by Project Type config (SAP modules,
+                // dev resource categories, …). Empty when the type has none configured.
                 resourceCategories: typeResourceCategories,
+                allocationUnitKind, // 'Module' | 'Resource Category' | 'Department'
+                typeConfigured: typeResourceCategories.length > 0,
                 planningModel: ptype ? ptype.planningModel : 'MonthlyCapacity',
                 costCategories: COST_CATEGORIES.filter(x => x !== 'Resource Cost'),
                 categories: COST_CATEGORIES,
@@ -5973,6 +6092,71 @@ class ProjectService extends cds.ApplicationService {
         // Recommend & rank employees for a project allocation. Skill weight 70% +
         // capacity weight 30%. requiredSkills override the project's stored skills
         // when provided (lets the PM tune the search live).
+        // ══════════════════════════════════════════════════════════════════════
+        // RESOURCE DEMAND PLANNING (Phase 6) — Founder demand-vs-supply analytics.
+        // Reuses the existing Phase-4 requirement CRUD (getResourceRequirements /
+        // createResourceRequirement / deleteResourceRequirement); adds only the
+        // company-wide supply/shortage/hiring aggregation.
+        // ══════════════════════════════════════════════════════════════════════
+        this.on('getResourceDemandOverview', async (req) => {
+          try {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can view resource demand.' });
+            const reqs = await SELECT.from(PROJ_REQ).where({ status: 'Open' });
+            const projIds = [...new Set((reqs || []).map(r => r.project_projectId))];
+            const projNames = {};
+            if (projIds.length) (await SELECT.from(PROJECT).columns('projectId', 'projectName').where({ projectId: { in: projIds } })).forEach(p => { projNames[p.projectId] = p.projectName; });
+
+            // Supply: active employees + availability profiles.
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'designation', 'skills').where({ isActive: true });
+            const profiles = await rp.computeProfiles(emps.map(e => e.employeeId));
+            const norm = s => String(s || '').toLowerCase().trim();
+            // Match an employee to a requirement (department + role/spec keyword).
+            const matches = (emp, r) => {
+                const dept = norm(r.departmentName);
+                if (dept && norm(emp.department).indexOf(dept) === -1 && dept.indexOf(norm(emp.department)) === -1) return false;
+                const key = norm(r.specializationName || r.roleCategoryName);
+                if (!key) return true;
+                const hay = (norm(emp.designation) + ' ' + norm(emp.skills) + ' ' + norm(emp.department));
+                return hay.indexOf(key) >= 0;
+            };
+
+            let totalHeads = 0, totalHours = 0, totalShortage = 0, totalHiring = 0;
+            const availableSet = new Set();
+            const demand = (reqs || []).map(r => {
+                totalHeads += Number(r.requiredCount) || 0;
+                totalHours += Number(r.requiredHours) || 0;
+                const matched = emps.filter(e => matches(e, r));
+                const available = matched.filter(e => { const p = profiles.get(e.employeeId); return p && (p.availableToday || p.availableNextMonth); });
+                available.forEach(e => availableSet.add(e.employeeId));
+                const need = Number(r.requiredCount) || 1;
+                const structuralGap = Math.max(0, need - matched.length);          // must hire (no such skill on bench)
+                const availabilityGap = Math.max(0, Math.min(need, matched.length) - available.length); // have skill but busy
+                totalShortage += structuralGap + availabilityGap;
+                totalHiring += structuralGap;
+                return {
+                    requirementId: r.requirementId, projectName: projNames[r.project_projectId] || r.project_projectId,
+                    department: r.departmentName, role: r.roleCategoryName, specialization: r.specializationName,
+                    requiredCount: need, requiredHours: Number(r.requiredHours) || 0,
+                    matchedCount: matched.length, availableCount: available.length,
+                    structuralGap, availabilityGap,
+                    recommended: available.slice(0, 5).map(e => { const p = profiles.get(e.employeeId) || {}; return { employeeId: e.employeeId, employeeName: e.employeeName, freeHours: p.freeHours || 0, utilizationPct: p.utilizationPct || 0 }; })
+                };
+            });
+            return JSON.stringify({
+                kpis: {
+                    totalDemandHeads: totalHeads, totalDemandHours: Math.round(totalHours),
+                    availableResources: availableSet.size, resourceShortages: totalShortage, hiringRequirements: totalHiring,
+                    openRequirements: (reqs || []).length
+                },
+                demand
+            });
+          } catch (err) {
+            cds.log('resource-demand').error('getResourceDemandOverview failed:', err);
+            return JSON.stringify({ error: 'Could not load resource demand: ' + (err && err.message ? err.message : String(err)) });
+          }
+        });
+
         this.on('recommendResources', async (req) => {
             const c = await projectCaller(req);
             const d = req.data || {};
@@ -6576,6 +6760,131 @@ class ProjectService extends cds.ApplicationService {
             return JSON.stringify({ ok: true, projectId, allocated: allocations.length, notified: newlyAdded.length, activated: project.status === 'Planning', overridden: overallocations.length });
         });
 
+        // ══════════════════════════════════════════════════════════════════════
+        // RESOURCE PLANNING v2 — milestone-hours allocation + monthly engine +
+        // hard/soft split + hours-based availability forecast. Fully additive:
+        // it populates ResourceMonthlyAllocation and keeps the derived bandwidth on
+        // ProjectResource so every existing dashboard/report keeps working.
+        // ══════════════════════════════════════════════════════════════════════
+
+        // Allocate a resource to a MILESTONE with total estimated hours. The system
+        // auto-generates month-wise allocations by working days (no weekly split).
+        this.on('allocateResourceToMilestone', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'status', 'startDate', 'endDate').where({ projectId: d.projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            if (!(isFounderCaller(req, c) || project.poc_employeeId === c.employeeId))
+                return JSON.stringify({ error: 'Only the project POC or Founder can allocate resources.' });
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'monthlyCapacityHours', 'isActive').where({ employeeId: d.employeeId });
+            if (!emp || emp.isActive === false) return JSON.stringify({ error: 'Employee not found or inactive.' });
+            const ms = await SELECT.one.from(MILESTONE).columns('milestoneId', 'name', 'plannedStartDate', 'plannedEndDate').where({ milestoneId: d.milestoneId });
+            if (!ms) return JSON.stringify({ error: 'Milestone not found.' });
+            const hours = Math.max(0, Number(d.estimatedHours) || 0);
+            if (hours <= 0) return JSON.stringify({ error: 'Estimated hours must be greater than 0.' });
+            const type = d.allocationType === 'Soft' ? 'Soft' : 'Hard';
+            const start = ms.plannedStartDate || project.startDate;
+            const end = ms.plannedEndDate || project.endDate;
+            if (!start || !end) return JSON.stringify({ error: 'The milestone (or project) needs start and end dates before hours can be allocated.' });
+
+            let holidays = [];
+            try { holidays = (await SELECT.from(HOLIDAY).columns('holidayDate')).map(h => String(h.holidayDate).slice(0, 10)); } catch (e) { /* */ }
+            const monthly = rp.generateMonthlyAllocations(String(start).slice(0, 10), String(end).slice(0, 10), hours, holidays);
+            if (!monthly.length) return JSON.stringify({ error: 'Could not generate a monthly plan for this milestone window.' });
+
+            const cap = Number(emp.monthlyCapacityHours) > 0 ? Number(emp.monthlyCapacityHours) : 160;
+            const allocationId = `${d.projectId}-${d.employeeId}-${d.milestoneId}`.slice(0, 45);
+
+            // ── Availability guard (HARD only): no month may exceed capacity unless
+            // an override is supplied. Soft reservations never block.
+            if (type === 'Hard' && !d.force) {
+                const others = await SELECT.from(RESOURCE_MONTHLY_ALLOCATION)
+                    .columns('yearMonth', 'allocatedHours', 'allocationType', 'allocation_allocationId')
+                    .where({ employee_employeeId: d.employeeId, allocationType: 'Hard' });
+                const bookedByMonth = {};
+                (others || []).forEach(r => { if (r.allocation_allocationId === allocationId) return; bookedByMonth[r.yearMonth] = (bookedByMonth[r.yearMonth] || 0) + Number(r.allocatedHours || 0); });
+                const clash = monthly.find(m => (bookedByMonth[m.yearMonth] || 0) + m.hours > cap);
+                if (clash) {
+                    return JSON.stringify({
+                        error: `${emp.employeeName} would be over-allocated in ${clash.yearMonth}: ${Math.round((bookedByMonth[clash.yearMonth] || 0) + clash.hours)}h booked vs ${cap}h capacity. Provide an override reason to proceed, or reduce hours / use a Soft reservation.`,
+                        overallocation: true, month: clash.yearMonth
+                    });
+                }
+            }
+
+            const peakMonth = Math.max(...monthly.map(m => m.hours));
+            const bandwidth = Math.max(0, Math.min(100, Math.round(peakMonth / cap * 100)));
+
+            await UPSERT.into(PROJECT_RESOURCE).entries({
+                allocationId, project_projectId: d.projectId, employee_employeeId: d.employeeId,
+                employeeName: emp.employeeName, department: emp.department || '',
+                milestone_milestoneId: d.milestoneId, estimatedHours: hours, allocationType: type,
+                bandwidth, startDate: String(start).slice(0, 10), endDate: String(end).slice(0, 10),
+                status: 'Active', role: d.role || null,
+                isOverridden: !!d.force, overrideReason: d.force ? (d.overrideReason || 'Override') : null
+            });
+            // Regenerate the month-wise rows for this allocation.
+            await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ allocation_allocationId: allocationId });
+            for (const m of monthly) {
+                await INSERT.into(RESOURCE_MONTHLY_ALLOCATION).entries({
+                    monthlyId: `${allocationId}-${m.yearMonth.replace('-', '')}`,
+                    allocation_allocationId: allocationId, project_projectId: d.projectId,
+                    employee_employeeId: d.employeeId, milestone_milestoneId: d.milestoneId,
+                    yearMonth: m.yearMonth, allocatedHours: m.hours, allocationType: type
+                });
+            }
+            await projectAudit(d.projectId, c.name, 'Resource Allocated (hours)', null,
+                `${emp.employeeName} · ${ms.name} · ${hours}h (${type})`);
+            founderEvents.ping('allocateResourceToMilestone');
+            return JSON.stringify({ ok: true, allocationId, allocationType: type, bandwidth, monthly });
+        });
+
+        // Hours-based availability forecast (current + next N months) with the
+        // hard/soft split. Scope: explicit employees, a project's team, or the caller.
+        this.on('getResourceForecast', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            let empIds = (d.employeeIds && d.employeeIds.length) ? d.employeeIds : null;
+            if (!empIds && d.projectId) {
+                const rs = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: d.projectId });
+                empIds = [...new Set((rs || []).map(r => r.employee_employeeId))];
+            }
+            if (!empIds || !empIds.length) empIds = [c.employeeId];
+            const nMonths = Math.max(1, Math.min(12, Number(d.months) || 3));
+            const now = new Date();
+            const fromStr = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+            const toStr = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + nMonths, 0)).toISOString().slice(0, 10);
+
+            const tl = await rp.computeCapacityTimeline(empIds, fromStr, toStr);
+            const rma = await SELECT.from(RESOURCE_MONTHLY_ALLOCATION)
+                .columns('employee_employeeId', 'yearMonth', 'allocatedHours', 'allocationType')
+                .where({ employee_employeeId: { in: empIds } });
+            const hardBy = {}, softBy = {};
+            (rma || []).forEach(r => {
+                const k = r.employee_employeeId + '|' + r.yearMonth;
+                if (r.allocationType === 'Soft') softBy[k] = (softBy[k] || 0) + Number(r.allocatedHours || 0);
+                else hardBy[k] = (hardBy[k] || 0) + Number(r.allocatedHours || 0);
+            });
+            const forecast = [];
+            for (const [empId, row] of tl) {
+                const months = (row.months || []).map(m => {
+                    const ym = m.year + '-' + String(m.month).padStart(2, '0');
+                    const eff = Math.round(m.effectiveCapacityHours);
+                    const hard = Math.round(hardBy[empId + '|' + ym] || 0);
+                    const soft = Math.round(softBy[empId + '|' + ym] || 0);
+                    return {
+                        yearMonth: ym, label: m.label, effectiveCapacityHours: eff,
+                        hardHours: hard, softHours: soft,
+                        availableHours: Math.max(0, eff - hard),
+                        utilizationPct: eff > 0 ? Math.round(hard / eff * 100) : (hard > 0 ? 100 : 0),
+                        overbooked: hard > eff
+                    };
+                });
+                forecast.push({ employeeId: empId, employeeName: row.employeeName, department: row.department, months });
+            }
+            return JSON.stringify({ from: fromStr, to: toStr, months: nMonths, forecast });
+        });
+
         // ── POC (or Founder): remove a resource ─────────────────────────────────
         this.on('removeResource', async (req) => {
             const c = await projectCaller(req);
@@ -6618,6 +6927,10 @@ class ProjectService extends cds.ApplicationService {
             }
 
             await DELETE.from(PROJECT_RESOURCE).where({ allocationId: `${projectId}-${employeeId}` });
+            // Also clear any milestone-hours allocations + their monthly rows for this
+            // employee on this project (Resource Planning v2 additive cleanup).
+            await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ project_projectId: projectId, employee_employeeId: employeeId });
+            await DELETE.from(PROJECT_RESOURCE).where({ project_projectId: projectId, employee_employeeId: employeeId });
             await projectAudit(projectId, c.name, 'Resource Removed', row.employeeName, null);
             const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'email').where({ employeeId: employeeId });
             if (emp) await sendProjectMail(emp.employeeId, emp.email,
@@ -6695,6 +7008,191 @@ class ProjectService extends cds.ApplicationService {
                 };
             });
             return JSON.stringify({ projects: rows, isFounder: isFounderCaller(req, c), isPocOf: projects.filter(p => p.poc_employeeId === c.employeeId).map(p => p.projectId) });
+        });
+
+        // ══════════════════════════════════════════════════════════════════════
+        // PROJECT MANAGER DASHBOARD — project-specific operational view for the
+        // assigned PM (project POC). Access-gated to that POC + Founder/admin ONLY.
+        // Deliberately PM-SAFE: never exposes contract value, profit, margin or
+        // any portfolio/founder financials — only operational budget (approved /
+        // utilized / remaining / department split).
+        // ══════════════════════════════════════════════════════════════════════
+        this.on('getPmDashboard', async (req) => {
+          try {
+            const c = await projectCaller(req);
+            const { projectId } = req.data;
+            const p = await SELECT.one.from(PROJECT).where({ projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            // ── Access control ────────────────────────────────────────────────
+            const isFounder = isFounderCaller(req, c);
+            const isPoc = p.poc_employeeId === c.employeeId;
+            if (!isFounder && !isPoc) return JSON.stringify({ error: 'You are not authorized to access this project.', unauthorized: true });
+
+            const today = new Date(); const todayStr = today.toISOString().slice(0, 10);
+            const clientRow = p.client_clientId ? await SELECT.one.from(CLIENT_MASTER).columns('companyName', 'clientName').where({ clientId: p.client_clientId }) : null;
+
+            // ── Tasks ─────────────────────────────────────────────────────────
+            const tasks = await SELECT.from(PROJECT_TASK).where({ project_projectId: projectId });
+            const norm = s => String(s || '').toLowerCase().trim();
+            const taskStats = { total: tasks.length, completed: 0, inProgress: 0, review: 0, pending: 0, blocked: 0, overdue: 0 };
+            tasks.forEach(t => {
+                const s = norm(t.status);
+                if (s === 'completed') taskStats.completed++;
+                else if (s === 'in progress' || s === 'inprogress') taskStats.inProgress++;
+                else if (s === 'in review' || s === 'review') taskStats.review++;
+                else if (s === 'blocked') taskStats.blocked++;
+                else taskStats.pending++;
+                if (s !== 'completed' && t.dueDate && String(t.dueDate).slice(0, 10) < todayStr) taskStats.overdue++;
+            });
+            const pendingTasks = taskStats.total - taskStats.completed;
+            const progress = projectProgress(tasks);
+
+            // ── Resources + utilization ───────────────────────────────────────
+            const resources = await SELECT.from(PROJECT_RESOURCE).where({ project_projectId: projectId }).orderBy('department asc', 'employeeName asc');
+            const util = await committedBandwidthByEmployee(resources.map(r => r.employee_employeeId));
+            let over = 0, full = 0, underU = 0;
+            const resList = resources.map(r => {
+                const u = Math.round(util[r.employee_employeeId] || 0);
+                if (u > 100) over++; else if (u >= 90) full++; else underU++;
+                return {
+                    employeeId: r.employee_employeeId, employeeName: r.employeeName, department: r.department || '—',
+                    role: r.role || '—', allocationPct: Number(r.bandwidth) || 0, utilizationPct: u,
+                    availabilityPct: Math.max(0, 100 - u),
+                    startDate: r.startDate || p.startDate || null, endDate: r.endDate || p.endDate || null
+                };
+            });
+
+            // ── Milestones ────────────────────────────────────────────────────
+            const ms = await SELECT.from(MILESTONE).where({ project_projectId: projectId }).orderBy('sequence asc');
+            const msList = ms.map(m => {
+                const done = norm(m.status) === 'completed' || norm(m.status) === 'completed early';
+                const delayed = !done && m.plannedEndDate && String(m.plannedEndDate).slice(0, 10) < todayStr;
+                return { name: m.name, targetDate: m.plannedEndDate, status: m.status || 'Not Started',
+                    completionPct: Number(m.progressPct) || 0, owner: m.ownerName || '—', done, delayed,
+                    upcoming: !done && !delayed && m.plannedEndDate && String(m.plannedEndDate).slice(0, 10) >= todayStr };
+            });
+            const msCompleted = msList.filter(m => m.done).length;
+            const msDelayed = msList.filter(m => m.delayed).length;
+            const msUpcoming = msList.filter(m => m.upcoming).length;
+            const currentPhase = (msList.find(m => !m.done) || {}).name || (msList.length ? 'All milestones complete' : '—');
+
+            // ── Budget (PM-safe: no contract/profit) ──────────────────────────
+            const { actualCost } = await projectActualCost(projectId);
+            const execBudget = Number(p.executionBudget) || Number(p.budget) || 0;
+            let deptAlloc = [];
+            const bRow = await SELECT.one.from(PROJECT_BUDGET).columns('categoryBudgets', 'departmentBudgets').where({ budgetId: `${projectId}-BUDGET` });
+            if (bRow) {
+                try {
+                    const cat = JSON.parse(bRow.categoryBudgets || '[]') || [];
+                    const dep = JSON.parse(bRow.departmentBudgets || '[]') || [];
+                    const src = (dep.length ? dep : cat);
+                    deptAlloc = src.map(x => ({ name: x.department || x.category || x.name || '—', amount: Number(x.amount) || 0 })).filter(x => x.amount > 0);
+                } catch (_) { /* */ }
+            }
+            const budget = {
+                approved: execBudget, utilized: actualCost,
+                remaining: Math.max(0, execBudget - actualCost),
+                utilizationPct: execBudget > 0 ? Math.round(actualCost / execBudget * 100) : 0,
+                deptAllocation: deptAlloc
+            };
+
+            // ── Issues (used as the risk/issue register) ──────────────────────
+            const issues = await SELECT.from(PROJECT_ISSUE).where({ project_projectId: projectId }).orderBy('createdAt desc');
+            const openIssues = issues.filter(i => !['resolved', 'closed'].includes(norm(i.status)));
+            const sevCount = { Critical: 0, High: 0, Medium: 0, Low: 0 };
+            openIssues.forEach(i => { const s = i.severity || 'Medium'; if (sevCount[s] != null) sevCount[s]++; });
+            const issueList = issues.slice(0, 50).map(i => ({ issueId: i.issueId, title: i.title, severity: i.severity || 'Medium',
+                owner: i.ownerName || '—', status: i.status || 'Open', createdAt: i.createdAt }));
+
+            // ── Meetings ──────────────────────────────────────────────────────
+            const mtgs = await SELECT.from(MEETING).where({ project_projectId: projectId }).orderBy('startDateTime asc');
+            let mUpcoming = 0, mToday = 0, mCompleted = 0;
+            const upcomingMeetings = [];
+            mtgs.forEach(m => {
+                if (m.status === 'Completed') mCompleted++;
+                else if (m.status === 'Scheduled') {
+                    mUpcoming++;
+                    const isToday = String(m.startDateTime || '').slice(0, 10) === todayStr;
+                    if (isToday) mToday++;
+                    if (upcomingMeetings.length < 5) upcomingMeetings.push({
+                        title: m.title, meetingType: m.meetingType || '', startDateTime: m.startDateTime,
+                        isToday, teamsJoinUrl: m.teamsJoinUrl || null, meetingMode: m.meetingMode || 'Teams'
+                    });
+                }
+            });
+
+            // ── Approvals (pending timesheets from allocated members) ─────────
+            let pendingTimesheets = 0;
+            try {
+                const memberIds = resources.map(r => r.employee_employeeId);
+                if (memberIds.length) {
+                    const subs = await SELECT.from(HEADER).columns('timesheetId', 'status').where({ employee_employeeId: { in: memberIds }, status: 'Submitted' });
+                    pendingTimesheets = (subs || []).length;
+                }
+            } catch (_) { /* */ }
+
+            // ── Health score (0-100) ──────────────────────────────────────────
+            const daysTotal = p.startDate && p.endDate ? Math.max(1, (new Date(p.endDate) - new Date(p.startDate)) / 86400000) : 0;
+            const daysElapsed = p.startDate ? Math.max(0, (today - new Date(p.startDate)) / 86400000) : 0;
+            const timePct = daysTotal ? Math.min(100, Math.round(daysElapsed / daysTotal * 100)) : 0;
+            // Component scores (higher = better).
+            const schedScore = Math.max(0, 100 - Math.max(0, timePct - progress) * 1.5);       // ahead/behind schedule
+            const budgetScore = budget.utilizationPct <= 100 ? 100 - Math.max(0, budget.utilizationPct - progress) : Math.max(0, 100 - (budget.utilizationPct - 100) * 2);
+            const resScore = over > 0 ? Math.max(0, 100 - over * 20) : 100;
+            const riskScore = Math.max(0, 100 - (sevCount.Critical * 25 + sevCount.High * 12 + sevCount.Medium * 5));
+            const taskScore = taskStats.total ? Math.max(0, 100 - Math.round(taskStats.overdue / taskStats.total * 100) - taskStats.blocked * 8) : 100;
+            const mileScore = msList.length ? Math.max(0, 100 - msDelayed * 20) : 100;
+            const healthScore = Math.round((schedScore * 0.2 + budgetScore * 0.2 + resScore * 0.15 + riskScore * 0.15 + taskScore * 0.15 + mileScore * 0.15));
+            const healthLabel = healthScore >= 76 ? 'Healthy' : healthScore >= 51 ? 'At Risk' : 'Critical';
+
+            const daysRemaining = p.endDate ? Math.round((new Date(p.endDate) - today) / 86400000) : null;
+
+            // ── Task completion trend (last 6 months, by completedAt/modifiedAt) ─
+            const months = [];
+            for (let i = 5; i >= 0; i--) { const d = new Date(today.getFullYear(), today.getMonth() - i, 1); months.push({ key: d.toISOString().slice(0, 7), label: d.toLocaleString('en-US', { month: 'short' }) }); }
+            const trendMap = {}; months.forEach(m => trendMap[m.key] = 0);
+            tasks.forEach(t => { if (norm(t.status) === 'completed') { const k = String(t.modifiedAt || t.createdAt || '').slice(0, 7); if (trendMap[k] != null) trendMap[k]++; } });
+
+            return JSON.stringify({
+                canEdit: isFounder || isPoc, isFounder,
+                overview: {
+                    projectId: p.projectId, projectName: p.projectName,
+                    clientName: clientRow ? (clientRow.companyName || clientRow.clientName) : (p.clientName || p.customerName || '—'),
+                    projectType: p.projectTypeName || 'Other', startDate: p.startDate, endDate: p.endDate,
+                    durationDays: daysTotal ? Math.round(daysTotal) : null, status: p.status,
+                    poc: p.pocName || '—', deliveryManager: p.pocName || '—', teamSize: resources.length
+                },
+                summary: {
+                    progress, healthScore, healthLabel, daysRemaining,
+                    budgetUtilizationPct: budget.utilizationPct,
+                    resourceUtilizationPct: resources.length ? Math.round(resList.reduce((s, r) => s + r.utilizationPct, 0) / resList.length) : 0,
+                    openRisks: openIssues.filter(i => (i.severity === 'Critical' || i.severity === 'High')).length,
+                    openIssues: openIssues.length, pendingApprovals: pendingTimesheets,
+                    upcomingMilestones: msUpcoming, pendingTasks
+                },
+                tasks: { stats: taskStats, list: tasks.slice(0, 100).map(t => ({
+                    taskId: t.taskId, taskName: t.taskName, assignedTo: t.assignedToName || '—',
+                    priority: t.priority || 'Medium', status: t.status || 'Not Started', dueDate: t.dueDate,
+                    completionPct: norm(t.status) === 'completed' ? 100 : (Number(t.actualHours) > 0 && Number(t.estimatedHours) > 0 ? Math.min(99, Math.round(t.actualHours / t.estimatedHours * 100)) : 0)
+                })) },
+                resources: { total: resources.length, overallocated: over, fullyUtilized: full, underutilized: underU, available: resList.filter(r => r.availabilityPct > 0).length, list: resList },
+                milestones: { total: msList.length, completed: msCompleted, delayed: msDelayed, upcoming: msUpcoming, currentPhase, list: msList },
+                budget,
+                issues: { open: openIssues.length, high: sevCount.High, critical: sevCount.Critical, severity: sevCount, list: issueList },
+                meetings: { upcoming: mUpcoming, today: mToday, completed: mCompleted, list: upcomingMeetings },
+                charts: {
+                    taskStatus: { Completed: taskStats.completed, 'In Progress': taskStats.inProgress, Review: taskStats.review, Pending: taskStats.pending, Blocked: taskStats.blocked },
+                    milestoneProgress: { Completed: msCompleted, Remaining: Math.max(0, msList.length - msCompleted) },
+                    resourceUtilization: resList.map(r => ({ name: r.employeeName, value: r.utilizationPct })),
+                    budgetConsumption: { utilized: budget.utilized, remaining: budget.remaining },
+                    issueSeverity: sevCount,
+                    taskTrend: months.map(m => ({ label: m.label, value: trendMap[m.key] }))
+                }
+            });
+          } catch (err) {
+            cds.log('pm-dashboard').error('getPmDashboard failed:', err);
+            return JSON.stringify({ error: 'Could not load the project dashboard: ' + (err && err.message ? err.message : String(err)) });
+          }
         });
 
         // ── Project detail (access-checked): project + resources + tasks + progress
@@ -7009,50 +7507,95 @@ class ProjectService extends cds.ApplicationService {
             if (!(isFounderCaller(req, c) || project.poc_employeeId === c.employeeId))
                 return JSON.stringify({ error: 'Only the project POC or Founder can schedule meetings.' });
 
+            const isDraft = d.isDraft === true;
+            const mode = (d.meetingMode === 'InPerson') ? 'InPerson' : 'Teams';
+            const tz = (d.timeZone || 'Asia/Kolkata').trim();
+
             // Validation.
             if (!(d.title || '').trim()) return JSON.stringify({ error: 'Meeting title is required.' });
-            if (!d.startDateTime)        return JSON.stringify({ error: 'Start date/time is required.' });
-            if (!d.endDateTime)          return JSON.stringify({ error: 'End date/time is required.' });
-            if (d.endDateTime <= d.startDateTime) return JSON.stringify({ error: 'End time must be after start time.' });
-            if (new Date(d.startDateTime) < new Date()) return JSON.stringify({ error: 'Cannot schedule a meeting in the past.' });
-            // The POC is auto-included in every project meeting and de-duplicated —
-            // even if the client also sent them. A Set guarantees one record per
-            // employee regardless of how the request was built.
-            const partSet = new Set((d.participantIds || []).filter(Boolean));
-            if (project.poc_employeeId) partSet.add(project.poc_employeeId);
-            const participantIds = [...partSet];
-            if (!participantIds.length)  return JSON.stringify({ error: 'At least one participant is required.' });
+            if (!d.startDateTime)        return JSON.stringify({ error: 'Date and Start time are required.' });
+            if (!isDraft) {
+                if (!d.endDateTime)          return JSON.stringify({ error: 'End time is required.' });
+                if (d.endDateTime <= d.startDateTime) return JSON.stringify({ error: 'End time must be after start time.' });
+                if (new Date(d.startDateTime) < new Date()) return JSON.stringify({ error: 'Cannot schedule a meeting in the past.' });
+                if (mode === 'InPerson' && !(d.location || '').trim()) return JSON.stringify({ error: 'Meeting location is required for an in-person meeting.' });
+            }
 
-            // Resolve participants.
-            const partEmps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email')
-                .where({ employeeId: { in: participantIds }, isActive: true });
-            if (!partEmps.length) return JSON.stringify({ error: 'No valid participants found.' });
+            // ── Participants: internal (employees) + external guests ──────────────
+            const requiredSet = new Set((d.requiredIds || []).filter(Boolean));
+            const partSet = new Set((d.participantIds || []).filter(Boolean));
+            if (project.poc_employeeId) { partSet.add(project.poc_employeeId); requiredSet.add(project.poc_employeeId); }
+            const participantIds = [...partSet];
+            const partEmps = participantIds.length
+                ? await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email').where({ employeeId: { in: participantIds }, isActive: true })
+                : [];
+            // External participants: JSON array of { name, email }.
+            let externals = [];
+            try { externals = JSON.parse(d.externalJson || '[]') || []; } catch (e) { externals = []; }
+            const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            externals = externals.filter(x => x && x.email && EMAIL_RE.test(String(x.email).trim()))
+                .map(x => ({ name: (x.name || '').trim(), email: String(x.email).trim().toLowerCase() }));
+            const badExternal = (JSON.parse(d.externalJson || '[]') || []).some(x => x && x.email && !EMAIL_RE.test(String(x.email).trim()));
+            if (badExternal) return JSON.stringify({ error: 'One or more external participant emails are invalid.' });
+            if (!partEmps.length && !externals.length && !isDraft) return JSON.stringify({ error: 'At least one participant is required.' });
+
+            // ── Overlap check for internal participants (skip for drafts) ─────────
+            if (!isDraft && partEmps.length) {
+                const overlapIds = partEmps.map(e => e.employeeId);
+                const clashParts = await SELECT.from(MEETING_PARTICIPANT).columns('meeting_meetingId', 'employee_employeeId', 'employeeName')
+                    .where({ employee_employeeId: { in: overlapIds } });
+                if (clashParts.length) {
+                    const clashMtgIds = [...new Set(clashParts.map(p => p.meeting_meetingId))];
+                    const clashMtgs = await SELECT.from(MEETING).columns('meetingId', 'startDateTime', 'endDateTime', 'status')
+                        .where({ meetingId: { in: clashMtgIds }, status: { in: ['Scheduled'] } });
+                    const s0 = new Date(d.startDateTime).getTime(), e0 = new Date(d.endDateTime).getTime();
+                    const overlapMtg = clashMtgs.find(mm => {
+                        const s1 = new Date(mm.startDateTime).getTime(), e1 = new Date(mm.endDateTime).getTime();
+                        return s0 < e1 && s1 < e0;
+                    });
+                    if (overlapMtg) {
+                        const who = clashParts.filter(p => p.meeting_meetingId === overlapMtg.meetingId).map(p => p.employeeName).filter(Boolean)[0] || 'a participant';
+                        return JSON.stringify({ error: `${who} already has an overlapping meeting at this time. Please choose a different slot.` });
+                    }
+                }
+            }
 
             const organizerEmail = c.email || '';
-            // Call Teams Graph API (or mock).
-            let teamsData;
-            try {
-                teamsData = await teamsMkMeeting({
-                    title: d.title.trim(), agenda: (d.agenda || '').trim(),
-                    startDateTime: d.startDateTime, endDateTime: d.endDateTime,
-                    organizerEmail,
-                    participants: partEmps.map(e => ({ email: e.email, name: e.employeeName }))
-                });
-            } catch (e) {
-                cds.log('teams').error('Graph API createMeeting failed:', e.message);
-                return JSON.stringify({ error: `Could not create Teams meeting: ${e.message}` });
+            // ── Teams meeting: only for Teams mode & non-draft. Manual link fallback. ─
+            let teamsData = { teamsMeetingId: null, teamsJoinUrl: (d.manualJoinUrl || '').trim() || null, teamsDialIn: null };
+            let manualLink = !!(d.manualJoinUrl || '').trim();
+            let teamsError = null;
+            if (mode === 'Teams' && !isDraft && !manualLink) {
+                try {
+                    teamsData = await teamsMkMeeting({
+                        title: d.title.trim(), agenda: (d.agenda || '').trim(),
+                        startDateTime: d.startDateTime, endDateTime: d.endDateTime,
+                        organizerEmail,
+                        participants: [...partEmps.map(e => ({ email: e.email, name: e.employeeName })), ...externals]
+                    });
+                } catch (e) {
+                    cds.log('teams').error('Graph API createMeeting failed:', e.message);
+                    // Don't break scheduling — surface a flag so the UI can offer a manual link.
+                    teamsError = e.message || 'Teams integration unavailable';
+                    if (!(d.manualJoinUrl || '').trim()) {
+                        return JSON.stringify({ error: `Could not create the Teams meeting (${teamsError}). You can enter a Teams link manually, or save as In Person.`, teamsFailed: true });
+                    }
+                }
             }
 
             const meetingId = await nextMeetingId(d.projectId);
             await INSERT.into(MEETING).entries({
                 meetingId, project_projectId: d.projectId,
-                title: d.title.trim(), agenda: (d.agenda || '').trim(),
-                startDateTime: d.startDateTime, endDateTime: d.endDateTime,
+                title: d.title.trim(), meetingType: (d.meetingType || '').trim(),
+                agenda: (d.agenda || '').trim(),
+                startDateTime: d.startDateTime, endDateTime: d.endDateTime || null,
+                timeZone: tz, meetingMode: mode, location: (d.location || '').trim(),
                 organizerEmail, organizerName: c.name || '',
                 organizer_employeeId: c.employeeId,
-                status: 'Scheduled',
+                status: isDraft ? 'Draft' : 'Scheduled',
+                manualLink,
                 teamsMeetingId: teamsData.teamsMeetingId,
-                teamsJoinUrl:   teamsData.teamsJoinUrl,
+                teamsJoinUrl:   mode === 'Teams' ? teamsData.teamsJoinUrl : null,
                 teamsDialIn:    teamsData.teamsDialIn || null
             });
             // Build the calendar invite once (identical for every recipient).
@@ -7064,12 +7607,11 @@ class ProjectService extends cds.ApplicationService {
             });
             // Insert participants.
             for (const emp of partEmps) {
-                const participantId = `${meetingId}-${emp.employeeId}`;
                 await INSERT.into(MEETING_PARTICIPANT).entries({
-                    participantId, meeting_meetingId: meetingId,
+                    participantId: `${meetingId}-${emp.employeeId}`, meeting_meetingId: meetingId,
                     employee_employeeId: emp.employeeId,
                     employeeName: emp.employeeName, employeeEmail: emp.email,
-                    attendanceStatus: 'Invited'
+                    isExternal: false, isRequired: requiredSet.has(emp.employeeId), attendanceStatus: 'Invited'
                 });
                 // In-app notification.
                 await createNotification(emp.employeeId, 'MEETING_CREATED',
@@ -7091,8 +7633,13 @@ class ProjectService extends cds.ApplicationService {
                 await projectAudit(d.projectId, c.name, 'Planning Meeting Scheduled', 'Planning', d.title.trim());
             }
             founderEvents.ping('scheduleMeeting');
-            return JSON.stringify({ ok: true, meetingId, teamsJoinUrl: teamsData.teamsJoinUrl,
-                isMock: MOCK_MODE, message: MOCK_MODE ? 'Meeting created (dev mock mode — no real Teams meeting).' : 'Teams meeting created successfully.' });
+            return JSON.stringify({
+                ok: true, meetingId, isDraft, meetingMode: mode,
+                teamsJoinUrl: mode === 'Teams' ? teamsData.teamsJoinUrl : null,
+                manualLink, teamsError, isMock: MOCK_MODE,
+                message: isDraft ? 'Draft saved.' : (mode === 'InPerson' ? 'In-person meeting scheduled. Invites sent.'
+                    : (MOCK_MODE ? 'Meeting created (dev mock — no real Teams meeting). Invites sent.' : 'Teams meeting created. Invites sent.'))
+            });
         });
 
         // ── Update a scheduled meeting ────────────────────────────────────────────
@@ -7106,35 +7653,56 @@ class ProjectService extends cds.ApplicationService {
                 return JSON.stringify({ error: 'Only the project POC or Founder can edit meetings.' });
             if (mtg.status === 'Cancelled') return JSON.stringify({ error: 'Cannot edit a cancelled meeting.' });
             if (!(d.title || '').trim()) return JSON.stringify({ error: 'Title is required.' });
-            if (d.endDateTime && d.startDateTime && d.endDateTime <= d.startDateTime)
+            const newStart = d.startDateTime || mtg.startDateTime;
+            const newEnd = d.endDateTime || mtg.endDateTime;
+            if (newEnd && newStart && newEnd <= newStart)
                 return JSON.stringify({ error: 'End time must be after start time.' });
 
-            try {
-                await teamsUpdMeeting({
-                    teamsMeetingId: mtg.teamsMeetingId, organizerEmail: mtg.organizerEmail,
-                    title: d.title.trim(), agenda: (d.agenda || '').trim(),
-                    startDateTime: d.startDateTime || mtg.startDateTime,
-                    endDateTime:   d.endDateTime   || mtg.endDateTime
-                });
-            } catch (e) {
-                cds.log('teams').error('Graph API updateMeeting failed:', e.message);
-                return JSON.stringify({ error: `Could not update Teams meeting: ${e.message}` });
+            const newMode = d.meetingMode ? (d.meetingMode === 'InPerson' ? 'InPerson' : 'Teams') : (mtg.meetingMode || 'Teams');
+            const manualJoin = (d.manualJoinUrl || '').trim();
+            const set = {
+                title: d.title.trim(),
+                meetingType: d.meetingType != null ? String(d.meetingType).trim() : mtg.meetingType,
+                agenda: (d.agenda || '').trim(),
+                startDateTime: newStart, endDateTime: newEnd,
+                timeZone: d.timeZone ? String(d.timeZone).trim() : (mtg.timeZone || 'Asia/Kolkata'),
+                meetingMode: newMode,
+                location: d.location != null ? String(d.location).trim() : mtg.location
+            };
+
+            // Teams: try to update the existing meeting; if unsupported/failed, create
+            // a fresh one and invalidate the old link (per spec).
+            if (newMode === 'Teams') {
+                if (manualJoin) { set.teamsJoinUrl = manualJoin; set.manualLink = true; }
+                else if (mtg.teamsMeetingId && !mtg.manualLink) {
+                    try {
+                        await teamsUpdMeeting({ teamsMeetingId: mtg.teamsMeetingId, organizerEmail: mtg.organizerEmail,
+                            title: set.title, agenda: set.agenda, startDateTime: newStart, endDateTime: newEnd });
+                    } catch (e) {
+                        cds.log('teams').warn('updateMeeting failed, recreating:', e.message);
+                        try {
+                            const parts0 = await SELECT.from(MEETING_PARTICIPANT).where({ meeting_meetingId: d.meetingId });
+                            const fresh = await teamsMkMeeting({ title: set.title, agenda: set.agenda, startDateTime: newStart, endDateTime: newEnd,
+                                organizerEmail: mtg.organizerEmail, participants: parts0.map(p => ({ email: p.employeeEmail, name: p.employeeName })) });
+                            set.teamsMeetingId = fresh.teamsMeetingId; set.teamsJoinUrl = fresh.teamsJoinUrl; set.manualLink = false;
+                        } catch (e2) { /* keep old link */ }
+                    }
+                } else if (!mtg.teamsMeetingId) {
+                    // Switching In-Person → Teams: create a new meeting.
+                    try {
+                        const parts0 = await SELECT.from(MEETING_PARTICIPANT).where({ meeting_meetingId: d.meetingId });
+                        const fresh = await teamsMkMeeting({ title: set.title, agenda: set.agenda, startDateTime: newStart, endDateTime: newEnd,
+                            organizerEmail: mtg.organizerEmail, participants: parts0.map(p => ({ email: p.employeeEmail, name: p.employeeName })) });
+                        set.teamsMeetingId = fresh.teamsMeetingId; set.teamsJoinUrl = fresh.teamsJoinUrl; set.manualLink = false;
+                    } catch (e) { /* leave without link; UI can add manual */ }
+                }
+            } else {
+                // In-Person: drop any Teams link.
+                set.teamsJoinUrl = null;
             }
 
-            await UPDATE(MEETING).set({
-                title: d.title.trim(), agenda: (d.agenda || '').trim(),
-                startDateTime: d.startDateTime || mtg.startDateTime,
-                endDateTime:   d.endDateTime   || mtg.endDateTime
-            }).where({ meetingId: d.meetingId });
+            await UPDATE(MEETING).set(set).where({ meetingId: d.meetingId });
 
-            // Notify participants of the change (in-app + updated email invite).
-            const newStart = d.startDateTime || mtg.startDateTime, newEnd = d.endDateTime || mtg.endDateTime;
-            const uWhen = `${new Date(newStart).toLocaleString('en-IN')} – ${new Date(newEnd).toLocaleTimeString('en-IN')}`;
-            const uIcs = buildICS({
-                uid: `${d.meetingId}@ccentrik`, title: d.title.trim(),
-                description: (d.agenda || '').trim() + (mtg.teamsJoinUrl ? `\nJoin: ${mtg.teamsJoinUrl}` : ''),
-                start: newStart, end: newEnd, organizerEmail: mtg.organizerEmail, location: mtg.teamsJoinUrl || 'Online', method: 'REQUEST'
-            });
             const parts = await SELECT.from(MEETING_PARTICIPANT).where({ meeting_meetingId: d.meetingId });
             for (const p of parts) {
                 await createNotification(p.employee_employeeId, 'MEETING_UPDATED',
@@ -7150,7 +7718,7 @@ class ProjectService extends cds.ApplicationService {
                      icalEvent: { filename: 'invite.ics', method: 'REQUEST', content: uIcs } });
             }
             founderEvents.ping('updateMeeting');
-            return JSON.stringify({ ok: true });
+            return JSON.stringify({ ok: true, teamsJoinUrl: set.teamsJoinUrl !== undefined ? set.teamsJoinUrl : mtg.teamsJoinUrl });
         });
 
         // ── Cancel a meeting ──────────────────────────────────────────────────────
@@ -7192,6 +7760,29 @@ class ProjectService extends cds.ApplicationService {
             founderEvents.ping('cancelMeeting');
             return JSON.stringify({ ok: true });
         });
+
+        // ── DEV-ONLY: complete every onboarding meeting & advance the workflow ─────
+        // Never registered in production so it can never be invoked there.
+        if (String(process.env.NODE_ENV || '').toLowerCase() !== 'production') {
+            this.on('completeAllProjectMeetings', async (req) => {
+                const c = await projectCaller(req);
+                const { projectId } = req.data;
+                const project = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId', 'status', 'lifecycleStage').where({ projectId });
+                if (!project) return JSON.stringify({ error: 'Project not found.' });
+                if (!(isFounderCaller(req, c) || project.poc_employeeId === c.employeeId))
+                    return JSON.stringify({ error: 'Not authorised.' });
+                // Mark all non-cancelled meetings completed.
+                await UPDATE(MEETING).set({ status: 'Completed' }).where({ project_projectId: projectId, status: { in: ['Scheduled', 'Draft'] } });
+                // Advance onboarding: if still in the meeting phase, jump to MeetingCompleted
+                // so the next action (Allocate Budget) is unlocked.
+                if (project.status === 'Planning' && ['Planning', 'MeetingScheduled'].includes(project.lifecycleStage || 'Planning')) {
+                    await UPDATE(PROJECT).set({ lifecycleStage: 'MeetingCompleted' }).where({ projectId });
+                    await projectAudit(projectId, c.name, 'Meetings Completed (dev)', project.lifecycleStage, 'MeetingCompleted');
+                }
+                founderEvents.ping('completeAllMeetings');
+                return JSON.stringify({ ok: true, message: 'All meetings marked completed. Onboarding advanced.' });
+            });
+        }
 
         // ── Get all meetings for a project ────────────────────────────────────────
         this.on('getProjectMeetings', async (req) => {

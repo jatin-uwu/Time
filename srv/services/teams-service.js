@@ -110,13 +110,27 @@ function formatMeetingForDisplay(m) {
     const start = new Date(m.startDateTime);
     const end   = m.endDateTime ? new Date(m.endDateTime) : null;
     const now   = new Date();
+    // Human-friendly duration ("1 Hour 30 Minutes").
+    let durationMins = 0, durationLabel = '';
+    if (end && !isNaN(start) && !isNaN(end)) {
+        durationMins = Math.max(0, Math.round((end - start) / 60000));
+        const h = Math.floor(durationMins / 60), mm = durationMins % 60;
+        durationLabel = [h ? `${h} Hour${h > 1 ? 's' : ''}` : '', mm ? `${mm} Minute${mm > 1 ? 's' : ''}` : ''].filter(Boolean).join(' ') || '0 Minutes';
+    }
     return {
         meetingId:    m.meetingId,
         title:        m.title,
+        meetingType:  m.meetingType || '',
         agenda:       m.agenda || '',
         dateLabel:    _fmtDate(start),
         timeLabel:    end ? `${_fmtTime(start)} – ${_fmtTime(end)}` : _fmtTime(start),
+        durationMins, durationLabel,
+        meetingMode:  m.meetingMode || 'Teams',
+        location:     m.location || '',
+        timeZone:     m.timeZone || '',
         teamsJoinUrl: m.teamsJoinUrl || null,
+        teamsMeetingId: m.teamsMeetingId || null,
+        manualLink:   m.manualLink === true,
         organizer:    m.organizerName || m.organizerEmail || '',
         organizerEmail: m.organizerEmail || '',
         status:       m.status || 'Scheduled',

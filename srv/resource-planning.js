@@ -41,7 +41,8 @@ const DEFAULT_MONTHLY_CAPACITY = 160;
 // non-billable reserve all come from here — never hardcoded. Safe defaults are
 // returned when no row exists so the engine works before admin setup.
 const CONFIG_DEFAULTS = {
-    skillWeight: 60, availabilityWeight: 20, utilizationWeight: 10, experienceWeight: 10,
+    skillWeight: 40, availabilityWeight: 30, experienceWeight: 15, certificationWeight: 10,
+    previousProjectWeight: 5, utilizationWeight: 0,
     maxUtilizationThreshold: 100, standardDailyHours: 8, standardWorkingDays: 20, nonBillablePct: 0,
     monthlyOverhead: 10000
 };
@@ -54,6 +55,8 @@ async function loadConfig() {
             availabilityWeight: Number(row.availabilityWeight) || 0,
             utilizationWeight: Number(row.utilizationWeight) || 0,
             experienceWeight: Number(row.experienceWeight) || 0,
+            certificationWeight: row.certificationWeight != null ? Number(row.certificationWeight) : 10,
+            previousProjectWeight: row.previousProjectWeight != null ? Number(row.previousProjectWeight) : 5,
             maxUtilizationThreshold: Number(row.maxUtilizationThreshold) || 100,
             standardDailyHours: Number(row.standardDailyHours) || 8,
             standardWorkingDays: Number(row.standardWorkingDays) || 20,
@@ -133,6 +136,48 @@ function monthsInRange(fromStr, toStr) {
     }
     return out;
 }
+// Working (business) days of [rangeStart,rangeEnd] that fall inside a month window,
+// excluding weekends and the supplied holiday set (YYYY-MM-DD strings).
+function workingDaysInWindow(rangeStart, rangeEnd, win, holidaySet) {
+    const s = rangeStart > win.start ? rangeStart : win.start;
+    const e = rangeEnd < win.end ? rangeEnd : win.end;
+    if (e < s) return 0;
+    let count = 0;
+    for (let d = new Date(s); d <= e; d = new Date(d.getTime() + 86400000)) {
+        const dow = d.getUTCDay();
+        if (dow === 0 || dow === 6) continue;               // weekend
+        if (holidaySet && holidaySet.has(d.toISOString().slice(0, 10))) continue;
+        count++;
+    }
+    return count;
+}
+// ── Monthly Allocation Engine ─────────────────────────────────────────────────
+// Spread a milestone's total estimated hours across the calendar months in
+// [startStr,endStr], proportional to each month's WORKING days. No weekly split.
+// Returns [{ yearMonth:'YYYY-MM', hours, workingDays }]. The last month absorbs the
+// rounding remainder so the parts always sum back to totalHours.
+function generateMonthlyAllocations(startStr, endStr, totalHours, holidays) {
+    totalHours = Number(totalHours) || 0;
+    if (!startStr || !endStr || totalHours <= 0) return [];
+    const rs = new Date(startStr), re = new Date(endStr);
+    if (isNaN(rs) || isNaN(re) || re < rs) return [];
+    const holidaySet = new Set(holidays || []);
+    const months = monthsInRange(startStr, endStr);
+    if (!months.length) return [];
+    const wd = months.map(win => Math.max(0, workingDaysInWindow(rs, re, win, holidaySet)));
+    const totalWd = wd.reduce((a, b) => a + b, 0);
+    const out = [];
+    if (totalWd <= 0) { return [{ yearMonth: months[0].startStr.slice(0, 7), hours: Math.round(totalHours * 100) / 100, workingDays: 0 }]; }
+    let assigned = 0;
+    months.forEach((win, i) => {
+        let h;
+        if (i === months.length - 1) h = Math.round((totalHours - assigned) * 100) / 100;
+        else { h = Math.round(totalHours * wd[i] / totalWd * 100) / 100; assigned += h; }
+        out.push({ yearMonth: win.startStr.slice(0, 7), hours: h, workingDays: wd[i] });
+    });
+    return out.filter(x => x.hours > 0 || x.workingDays > 0);
+}
+
 // Does an allocation's [start,end] window overlap a month? Null dates (legacy /
 // "for the whole project") always count — preserving existing behaviour.
 function allocCoversMonth(a, win) {
@@ -194,7 +239,7 @@ async function computeProfiles(employeeIds, opts = {}) {
         ? { employeeId: { in: employeeIds }, isActive: true }
         : { isActive: true };
     const employees = await SELECT.from(EMPLOYEE)
-        .columns('employeeId', 'employeeName', 'department', 'designation', 'skills',
+        .columns('employeeId', 'employeeName', 'department', 'designation', 'skills', 'certifications',
             'monthlyCapacityHours', 'monthlyTrainingHours')
         .where(empWhere);
     const ids = employees.map(e => e.employeeId);
@@ -273,6 +318,7 @@ async function computeProfiles(employeeIds, opts = {}) {
             employeeId: e.employeeId, employeeName: e.employeeName,
             department: e.department || 'Unassigned', designation: e.designation || '',
             skills: parseSkills(e.skills),
+            certifications: parseSkills(e.certifications),
             monthlyCapacityHours: capacity,
             leaveHours, trainingHours, meetingHours, holidayEventHours, reserveHours,
             effectiveCapacityHours: effectiveCapacity,
@@ -378,13 +424,16 @@ function utilizationBand(pct) {
 //   score = w_skill·skillMatch + w_avail·availability + w_util·(1−utilization)
 //         + w_exp·experience            (weights from ResourcePlanningConfig)
 // Factors are each 0..1; weights are normalised so any config still sums to 100%.
-function scoreProfile(profile, requiredSkills, config) {
+function scoreProfile(profile, requiredSkills, config, opts) {
     const cfg = config || CONFIG_DEFAULTS;
+    opts = opts || {};
     const wSkill = Number(cfg.skillWeight) || 0;
     const wAvail = Number(cfg.availabilityWeight) || 0;
     const wUtil = Number(cfg.utilizationWeight) || 0;
     const wExp = Number(cfg.experienceWeight) || 0;
-    const wTotal = (wSkill + wAvail + wUtil + wExp) || 1;
+    const wCert = Number(cfg.certificationWeight) || 0;
+    const wPrev = Number(cfg.previousProjectWeight) || 0;
+    const wTotal = (wSkill + wAvail + wUtil + wExp + wCert + wPrev) || 1;
 
     const sm = skillMatchRatio(requiredSkills, profile.skills.join(','));
     // Availability: free now → 1; available within ~30 days → 0.5; else 0.
@@ -393,9 +442,22 @@ function scoreProfile(profile, requiredSkills, config) {
     const utilHeadroom = Math.max(0, Math.min(1, 1 - (profile.utilizationPct || 0) / 100));
     // Project experience: saturates at 3 prior projects.
     const experience = Math.max(0, Math.min(1, (profile.experienceProjects || 0) / 3));
+    // Certification: matches required certs when provided, else "has any valid cert".
+    let certScore;
+    const empCerts = profile.certifications || [];
+    if (opts.requiredCerts && opts.requiredCerts.length) {
+        const need = opts.requiredCerts.map(x => String(x).toLowerCase().trim());
+        const have = empCerts.map(x => String(x).toLowerCase().trim());
+        const hit = need.filter(n => have.some(h => h.indexOf(n) >= 0 || n.indexOf(h) >= 0)).length;
+        certScore = need.length ? hit / need.length : (empCerts.length ? 1 : 0);
+    } else certScore = empCerts.length ? 1 : 0;
+    // Previous project: prior work with THIS client (if known) else any prior project.
+    const prevScore = (opts.priorWithClient != null)
+        ? (opts.priorWithClient ? 1 : 0)
+        : ((profile.experienceProjects || 0) > 0 ? 1 : 0);
 
     const score = Math.round(
-        (wSkill * sm.ratio + wAvail * availability + wUtil * utilHeadroom + wExp * experience) / wTotal * 100
+        (wSkill * sm.ratio + wAvail * availability + wUtil * utilHeadroom + wExp * experience + wCert * certScore + wPrev * prevScore) / wTotal * 100
     );
     return {
         score,
@@ -403,6 +465,8 @@ function scoreProfile(profile, requiredSkills, config) {
         utilizationHeadroomPct: Math.round(utilHeadroom * 100),
         experiencePct: Math.round(experience * 100),
         experienceProjects: profile.experienceProjects || 0,
+        certificationPct: Math.round(certScore * 100),
+        previousProjectPct: Math.round(prevScore * 100),
         skillMatchPct: Math.round(sm.ratio * 100),
         capacityPct: Math.round(utilHeadroom * 100),   // headroom = capacity component (back-compat)
         matchedSkills: sm.matched, missingSkills: sm.missing
@@ -447,4 +511,5 @@ function computeKpis(profiles) {
 module.exports = {
     parseSkills, skillMatchRatio, computeProfiles, computeCapacityTimeline, statusBadge, utilizationBand, scoreProfile,
     computeKpis, loadConfig, loadedHourlyRate, baseHourlyRate, CONFIG_DEFAULTS, DEFAULT_MONTHLY_CAPACITY,
+    generateMonthlyAllocations, workingDaysInWindow, monthsInRange, monthWindow,
 };

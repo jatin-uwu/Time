@@ -660,6 +660,27 @@ entity ProjectResource : managed {
     // "Overridden" badge; the full audit trail lives in ResourceOverride.
     isOverridden     : Boolean default false;
     overrideReason   : String(500);
+    // ── Milestone-hours allocation model (additive, Resource Planning v2) ──────
+    // When a PM allocates by milestone+hours, estimatedHours holds the total and the
+    // system spreads it into ResourceMonthlyAllocation rows by working days. bandwidth
+    // stays populated (derived) so every existing dashboard/report keeps working.
+    estimatedHours   : Decimal(9,2) default 0;       // total hours booked for this allocation
+    allocationType   : String(10) default 'Hard';    // Hard (confirmed) | Soft (tentative)
+    monthlyRows      : Composition of many ResourceMonthlyAllocation on monthlyRows.allocation = $self;
+}
+
+// System-generated month-wise allocation (never entered by hand). One row per
+// (allocation, month). Source of truth for availability, forecasting, utilization
+// and recommendations. Regenerated whenever the parent allocation/milestone changes.
+entity ResourceMonthlyAllocation : managed {
+    key monthlyId    : String(60);                   // <allocationId>-<YYYYMM>
+    allocation       : Association to ProjectResource;
+    project          : Association to Project;
+    employee         : Association to EmployeeMaster;
+    milestone        : Association to Milestone;
+    yearMonth        : String(7);                    // "2026-07"
+    allocatedHours   : Decimal(9,2) default 0;
+    allocationType   : String(10) default 'Hard';    // Hard | Soft (mirrors parent)
 }
 
 // ── Centralized Resource Planning configuration (singleton, configId='GLOBAL') ──
@@ -668,10 +689,12 @@ entity ProjectResource : managed {
 // global non-billable reserve. Admin-editable — never hardcoded.
 entity ResourcePlanningConfig : managed {
     key configId             : String(20) default 'GLOBAL';
-    skillWeight              : Integer default 60;   // recommendation: skill match
-    availabilityWeight       : Integer default 20;   // recommendation: future availability
-    utilizationWeight        : Integer default 10;   // recommendation: current utilization
-    experienceWeight         : Integer default 10;   // recommendation: project experience
+    skillWeight              : Integer default 40;   // recommendation: skill match
+    availabilityWeight       : Integer default 30;   // recommendation: future availability
+    experienceWeight         : Integer default 15;   // recommendation: project experience
+    certificationWeight      : Integer default 10;   // recommendation: certification match
+    previousProjectWeight    : Integer default 5;    // recommendation: prior work w/ this client
+    utilizationWeight        : Integer default 0;    // legacy headroom factor (kept, off by default)
     maxUtilizationThreshold  : Integer default 100;  // overallocation threshold %
     standardDailyHours       : Decimal(4,2) default 8;
     standardWorkingDays      : Integer default 20;    // working days per month basis
@@ -984,13 +1007,18 @@ entity Meeting : managed {
     key meetingId       : String(45);           // MTG-<projectId>-<seq>
     project             : Association to Project;
     title               : String(200);
+    meetingType         : String(150);           // free-text: Kick-off, UAT Sign-off, custom…
     agenda              : String(2000);
     startDateTime       : DateTime;
     endDateTime         : DateTime;
+    timeZone            : String(60);            // IANA zone the wall-times are in
+    meetingMode         : String(20) default 'Teams'; // Teams | InPerson
+    location            : String(300);           // room / address for In-Person meetings
     organizerEmail      : String(150);           // Azure AD UPN / employee email
     organizerName       : String(100);
     organizer           : Association to EmployeeMaster;
-    status              : String(20) default 'Scheduled'; // Scheduled|Completed|Cancelled
+    status              : String(20) default 'Scheduled'; // Draft|Scheduled|Completed|Cancelled
+    manualLink          : Boolean default false; // Teams link was entered manually (fallback)
     teamsMeetingId      : String(500);           // Graph API id
     teamsJoinUrl        : String(1000);          // Graph API joinWebUrl
     teamsDialIn         : String(500);           // optional dial-in URL
@@ -1001,9 +1029,11 @@ entity Meeting : managed {
 entity MeetingParticipant : managed {
     key participantId   : String(50);
     meeting             : Association to Meeting;
-    employee            : Association to EmployeeMaster;
+    employee            : Association to EmployeeMaster;  // null for external participants
     employeeName        : String(100);
     employeeEmail       : String(150);
+    isExternal          : Boolean default false;          // guest / non-employee
+    isRequired          : Boolean default false;          // required vs additional
     attendanceStatus    : String(20) default 'Invited'; // Invited|Accepted|Declined|Attended
 }
 }
