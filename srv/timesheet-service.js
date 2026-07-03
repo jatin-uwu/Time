@@ -159,6 +159,7 @@ async function ensureProjectTypes() {
     } catch (e) { cds.log('project').warn('ensureProjectTypes skipped:', e.message || e); }
 }
 const PROJECT_RESOURCE = 'ccentrik.employee.timesheet.schema.timesheet.ProjectResource';
+const RESOURCE_MONTHLY_ALLOCATION = 'ccentrik.employee.timesheet.schema.timesheet.ResourceMonthlyAllocation';
 const RESOURCE_OVERRIDE = 'ccentrik.employee.timesheet.schema.timesheet.ResourceOverride';
 const RP_CONFIG = 'ccentrik.employee.timesheet.schema.timesheet.ResourcePlanningConfig';
 const COMPANY_EVENT = 'ccentrik.employee.timesheet.schema.timesheet.CompanyEvent';
@@ -6047,6 +6048,71 @@ class ProjectService extends cds.ApplicationService {
         // Recommend & rank employees for a project allocation. Skill weight 70% +
         // capacity weight 30%. requiredSkills override the project's stored skills
         // when provided (lets the PM tune the search live).
+        // ══════════════════════════════════════════════════════════════════════
+        // RESOURCE DEMAND PLANNING (Phase 6) — Founder demand-vs-supply analytics.
+        // Reuses the existing Phase-4 requirement CRUD (getResourceRequirements /
+        // createResourceRequirement / deleteResourceRequirement); adds only the
+        // company-wide supply/shortage/hiring aggregation.
+        // ══════════════════════════════════════════════════════════════════════
+        this.on('getResourceDemandOverview', async (req) => {
+          try {
+            const c = await projectCaller(req);
+            if (!isFounderCaller(req, c)) return JSON.stringify({ error: 'Only the Founder can view resource demand.' });
+            const reqs = await SELECT.from(PROJ_REQ).where({ status: 'Open' });
+            const projIds = [...new Set((reqs || []).map(r => r.project_projectId))];
+            const projNames = {};
+            if (projIds.length) (await SELECT.from(PROJECT).columns('projectId', 'projectName').where({ projectId: { in: projIds } })).forEach(p => { projNames[p.projectId] = p.projectName; });
+
+            // Supply: active employees + availability profiles.
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'designation', 'skills').where({ isActive: true });
+            const profiles = await rp.computeProfiles(emps.map(e => e.employeeId));
+            const norm = s => String(s || '').toLowerCase().trim();
+            // Match an employee to a requirement (department + role/spec keyword).
+            const matches = (emp, r) => {
+                const dept = norm(r.departmentName);
+                if (dept && norm(emp.department).indexOf(dept) === -1 && dept.indexOf(norm(emp.department)) === -1) return false;
+                const key = norm(r.specializationName || r.roleCategoryName);
+                if (!key) return true;
+                const hay = (norm(emp.designation) + ' ' + norm(emp.skills) + ' ' + norm(emp.department));
+                return hay.indexOf(key) >= 0;
+            };
+
+            let totalHeads = 0, totalHours = 0, totalShortage = 0, totalHiring = 0;
+            const availableSet = new Set();
+            const demand = (reqs || []).map(r => {
+                totalHeads += Number(r.requiredCount) || 0;
+                totalHours += Number(r.requiredHours) || 0;
+                const matched = emps.filter(e => matches(e, r));
+                const available = matched.filter(e => { const p = profiles.get(e.employeeId); return p && (p.availableToday || p.availableNextMonth); });
+                available.forEach(e => availableSet.add(e.employeeId));
+                const need = Number(r.requiredCount) || 1;
+                const structuralGap = Math.max(0, need - matched.length);          // must hire (no such skill on bench)
+                const availabilityGap = Math.max(0, Math.min(need, matched.length) - available.length); // have skill but busy
+                totalShortage += structuralGap + availabilityGap;
+                totalHiring += structuralGap;
+                return {
+                    requirementId: r.requirementId, projectName: projNames[r.project_projectId] || r.project_projectId,
+                    department: r.departmentName, role: r.roleCategoryName, specialization: r.specializationName,
+                    requiredCount: need, requiredHours: Number(r.requiredHours) || 0,
+                    matchedCount: matched.length, availableCount: available.length,
+                    structuralGap, availabilityGap,
+                    recommended: available.slice(0, 5).map(e => { const p = profiles.get(e.employeeId) || {}; return { employeeId: e.employeeId, employeeName: e.employeeName, freeHours: p.freeHours || 0, utilizationPct: p.utilizationPct || 0 }; })
+                };
+            });
+            return JSON.stringify({
+                kpis: {
+                    totalDemandHeads: totalHeads, totalDemandHours: Math.round(totalHours),
+                    availableResources: availableSet.size, resourceShortages: totalShortage, hiringRequirements: totalHiring,
+                    openRequirements: (reqs || []).length
+                },
+                demand
+            });
+          } catch (err) {
+            cds.log('resource-demand').error('getResourceDemandOverview failed:', err);
+            return JSON.stringify({ error: 'Could not load resource demand: ' + (err && err.message ? err.message : String(err)) });
+          }
+        });
+
         this.on('recommendResources', async (req) => {
             const c = await projectCaller(req);
             const d = req.data || {};
@@ -6650,6 +6716,131 @@ class ProjectService extends cds.ApplicationService {
             return JSON.stringify({ ok: true, projectId, allocated: allocations.length, notified: newlyAdded.length, activated: project.status === 'Planning', overridden: overallocations.length });
         });
 
+        // ══════════════════════════════════════════════════════════════════════
+        // RESOURCE PLANNING v2 — milestone-hours allocation + monthly engine +
+        // hard/soft split + hours-based availability forecast. Fully additive:
+        // it populates ResourceMonthlyAllocation and keeps the derived bandwidth on
+        // ProjectResource so every existing dashboard/report keeps working.
+        // ══════════════════════════════════════════════════════════════════════
+
+        // Allocate a resource to a MILESTONE with total estimated hours. The system
+        // auto-generates month-wise allocations by working days (no weekly split).
+        this.on('allocateResourceToMilestone', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'status', 'startDate', 'endDate').where({ projectId: d.projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            if (!(isFounderCaller(req, c) || project.poc_employeeId === c.employeeId))
+                return JSON.stringify({ error: 'Only the project POC or Founder can allocate resources.' });
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'monthlyCapacityHours', 'isActive').where({ employeeId: d.employeeId });
+            if (!emp || emp.isActive === false) return JSON.stringify({ error: 'Employee not found or inactive.' });
+            const ms = await SELECT.one.from(MILESTONE).columns('milestoneId', 'name', 'plannedStartDate', 'plannedEndDate').where({ milestoneId: d.milestoneId });
+            if (!ms) return JSON.stringify({ error: 'Milestone not found.' });
+            const hours = Math.max(0, Number(d.estimatedHours) || 0);
+            if (hours <= 0) return JSON.stringify({ error: 'Estimated hours must be greater than 0.' });
+            const type = d.allocationType === 'Soft' ? 'Soft' : 'Hard';
+            const start = ms.plannedStartDate || project.startDate;
+            const end = ms.plannedEndDate || project.endDate;
+            if (!start || !end) return JSON.stringify({ error: 'The milestone (or project) needs start and end dates before hours can be allocated.' });
+
+            let holidays = [];
+            try { holidays = (await SELECT.from(HOLIDAY).columns('holidayDate')).map(h => String(h.holidayDate).slice(0, 10)); } catch (e) { /* */ }
+            const monthly = rp.generateMonthlyAllocations(String(start).slice(0, 10), String(end).slice(0, 10), hours, holidays);
+            if (!monthly.length) return JSON.stringify({ error: 'Could not generate a monthly plan for this milestone window.' });
+
+            const cap = Number(emp.monthlyCapacityHours) > 0 ? Number(emp.monthlyCapacityHours) : 160;
+            const allocationId = `${d.projectId}-${d.employeeId}-${d.milestoneId}`.slice(0, 45);
+
+            // ── Availability guard (HARD only): no month may exceed capacity unless
+            // an override is supplied. Soft reservations never block.
+            if (type === 'Hard' && !d.force) {
+                const others = await SELECT.from(RESOURCE_MONTHLY_ALLOCATION)
+                    .columns('yearMonth', 'allocatedHours', 'allocationType', 'allocation_allocationId')
+                    .where({ employee_employeeId: d.employeeId, allocationType: 'Hard' });
+                const bookedByMonth = {};
+                (others || []).forEach(r => { if (r.allocation_allocationId === allocationId) return; bookedByMonth[r.yearMonth] = (bookedByMonth[r.yearMonth] || 0) + Number(r.allocatedHours || 0); });
+                const clash = monthly.find(m => (bookedByMonth[m.yearMonth] || 0) + m.hours > cap);
+                if (clash) {
+                    return JSON.stringify({
+                        error: `${emp.employeeName} would be over-allocated in ${clash.yearMonth}: ${Math.round((bookedByMonth[clash.yearMonth] || 0) + clash.hours)}h booked vs ${cap}h capacity. Provide an override reason to proceed, or reduce hours / use a Soft reservation.`,
+                        overallocation: true, month: clash.yearMonth
+                    });
+                }
+            }
+
+            const peakMonth = Math.max(...monthly.map(m => m.hours));
+            const bandwidth = Math.max(0, Math.min(100, Math.round(peakMonth / cap * 100)));
+
+            await UPSERT.into(PROJECT_RESOURCE).entries({
+                allocationId, project_projectId: d.projectId, employee_employeeId: d.employeeId,
+                employeeName: emp.employeeName, department: emp.department || '',
+                milestone_milestoneId: d.milestoneId, estimatedHours: hours, allocationType: type,
+                bandwidth, startDate: String(start).slice(0, 10), endDate: String(end).slice(0, 10),
+                status: 'Active', role: d.role || null,
+                isOverridden: !!d.force, overrideReason: d.force ? (d.overrideReason || 'Override') : null
+            });
+            // Regenerate the month-wise rows for this allocation.
+            await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ allocation_allocationId: allocationId });
+            for (const m of monthly) {
+                await INSERT.into(RESOURCE_MONTHLY_ALLOCATION).entries({
+                    monthlyId: `${allocationId}-${m.yearMonth.replace('-', '')}`,
+                    allocation_allocationId: allocationId, project_projectId: d.projectId,
+                    employee_employeeId: d.employeeId, milestone_milestoneId: d.milestoneId,
+                    yearMonth: m.yearMonth, allocatedHours: m.hours, allocationType: type
+                });
+            }
+            await projectAudit(d.projectId, c.name, 'Resource Allocated (hours)', null,
+                `${emp.employeeName} · ${ms.name} · ${hours}h (${type})`);
+            founderEvents.ping('allocateResourceToMilestone');
+            return JSON.stringify({ ok: true, allocationId, allocationType: type, bandwidth, monthly });
+        });
+
+        // Hours-based availability forecast (current + next N months) with the
+        // hard/soft split. Scope: explicit employees, a project's team, or the caller.
+        this.on('getResourceForecast', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            let empIds = (d.employeeIds && d.employeeIds.length) ? d.employeeIds : null;
+            if (!empIds && d.projectId) {
+                const rs = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: d.projectId });
+                empIds = [...new Set((rs || []).map(r => r.employee_employeeId))];
+            }
+            if (!empIds || !empIds.length) empIds = [c.employeeId];
+            const nMonths = Math.max(1, Math.min(12, Number(d.months) || 3));
+            const now = new Date();
+            const fromStr = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+            const toStr = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + nMonths, 0)).toISOString().slice(0, 10);
+
+            const tl = await rp.computeCapacityTimeline(empIds, fromStr, toStr);
+            const rma = await SELECT.from(RESOURCE_MONTHLY_ALLOCATION)
+                .columns('employee_employeeId', 'yearMonth', 'allocatedHours', 'allocationType')
+                .where({ employee_employeeId: { in: empIds } });
+            const hardBy = {}, softBy = {};
+            (rma || []).forEach(r => {
+                const k = r.employee_employeeId + '|' + r.yearMonth;
+                if (r.allocationType === 'Soft') softBy[k] = (softBy[k] || 0) + Number(r.allocatedHours || 0);
+                else hardBy[k] = (hardBy[k] || 0) + Number(r.allocatedHours || 0);
+            });
+            const forecast = [];
+            for (const [empId, row] of tl) {
+                const months = (row.months || []).map(m => {
+                    const ym = m.year + '-' + String(m.month).padStart(2, '0');
+                    const eff = Math.round(m.effectiveCapacityHours);
+                    const hard = Math.round(hardBy[empId + '|' + ym] || 0);
+                    const soft = Math.round(softBy[empId + '|' + ym] || 0);
+                    return {
+                        yearMonth: ym, label: m.label, effectiveCapacityHours: eff,
+                        hardHours: hard, softHours: soft,
+                        availableHours: Math.max(0, eff - hard),
+                        utilizationPct: eff > 0 ? Math.round(hard / eff * 100) : (hard > 0 ? 100 : 0),
+                        overbooked: hard > eff
+                    };
+                });
+                forecast.push({ employeeId: empId, employeeName: row.employeeName, department: row.department, months });
+            }
+            return JSON.stringify({ from: fromStr, to: toStr, months: nMonths, forecast });
+        });
+
         // ── POC (or Founder): remove a resource ─────────────────────────────────
         this.on('removeResource', async (req) => {
             const c = await projectCaller(req);
@@ -6692,6 +6883,10 @@ class ProjectService extends cds.ApplicationService {
             }
 
             await DELETE.from(PROJECT_RESOURCE).where({ allocationId: `${projectId}-${employeeId}` });
+            // Also clear any milestone-hours allocations + their monthly rows for this
+            // employee on this project (Resource Planning v2 additive cleanup).
+            await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ project_projectId: projectId, employee_employeeId: employeeId });
+            await DELETE.from(PROJECT_RESOURCE).where({ project_projectId: projectId, employee_employeeId: employeeId });
             await projectAudit(projectId, c.name, 'Resource Removed', row.employeeName, null);
             const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'email').where({ employeeId: employeeId });
             if (emp) await sendProjectMail(emp.employeeId, emp.email,
@@ -6866,13 +7061,19 @@ class ProjectService extends cds.ApplicationService {
                 owner: i.ownerName || '—', status: i.status || 'Open', createdAt: i.createdAt }));
 
             // ── Meetings ──────────────────────────────────────────────────────
-            const mtgs = await SELECT.from(MEETING).where({ project_projectId: projectId });
+            const mtgs = await SELECT.from(MEETING).where({ project_projectId: projectId }).orderBy('startDateTime asc');
             let mUpcoming = 0, mToday = 0, mCompleted = 0;
+            const upcomingMeetings = [];
             mtgs.forEach(m => {
                 if (m.status === 'Completed') mCompleted++;
                 else if (m.status === 'Scheduled') {
                     mUpcoming++;
-                    if (String(m.startDateTime || '').slice(0, 10) === todayStr) mToday++;
+                    const isToday = String(m.startDateTime || '').slice(0, 10) === todayStr;
+                    if (isToday) mToday++;
+                    if (upcomingMeetings.length < 5) upcomingMeetings.push({
+                        title: m.title, meetingType: m.meetingType || '', startDateTime: m.startDateTime,
+                        isToday, teamsJoinUrl: m.teamsJoinUrl || null, meetingMode: m.meetingMode || 'Teams'
+                    });
                 }
             });
 
@@ -6934,7 +7135,7 @@ class ProjectService extends cds.ApplicationService {
                 milestones: { total: msList.length, completed: msCompleted, delayed: msDelayed, upcoming: msUpcoming, currentPhase, list: msList },
                 budget,
                 issues: { open: openIssues.length, high: sevCount.High, critical: sevCount.Critical, severity: sevCount, list: issueList },
-                meetings: { upcoming: mUpcoming, today: mToday, completed: mCompleted },
+                meetings: { upcoming: mUpcoming, today: mToday, completed: mCompleted, list: upcomingMeetings },
                 charts: {
                     taskStatus: { Completed: taskStats.completed, 'In Progress': taskStats.inProgress, Review: taskStats.review, Pending: taskStats.pending, Blocked: taskStats.blocked },
                     milestoneProgress: { Completed: msCompleted, Remaining: Math.max(0, msList.length - msCompleted) },

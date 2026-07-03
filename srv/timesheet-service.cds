@@ -1026,6 +1026,13 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
                             },
                             allowOverride: Boolean,
                             overrideReason: String(500))                           returns LargeString;
+    // Resource Planning v2 — milestone-hours allocation (auto monthly split) + forecast.
+    action allocateResourceToMilestone(projectId: String(20), employeeId: String(10),
+                            milestoneId: String(40), estimatedHours: Decimal(9,2),
+                            allocationType: String(10), role: String(60),
+                            force: Boolean, overrideReason: String(500))            returns LargeString;
+    action getResourceForecast(projectId: String(20), employeeIds: many String(10),
+                            months: Integer)                                        returns LargeString;
     action removeResource(projectId: String(20), employeeId: String(10))          returns LargeString;
 
     // ── Resource Planning & Recommendation (Manager / Founder; POC for recommend) ──
@@ -1061,6 +1068,8 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
     action recommendResources(projectId: String(20), requiredSkills: String(500),
                               requiredRole: String(100),
                               neededBandwidth: Integer, limit: Integer)          returns LargeString;
+    // Resource Demand Planning (Phase 6) — supply/shortage/hiring analytics.
+    action getResourceDemandOverview()                                            returns LargeString;
 
     // ── Assigned employee ─────────────────────────────────────────────────────
     action updateProjectTaskStatus(taskId: String(25), status: String(20),

@@ -660,6 +660,27 @@ entity ProjectResource : managed {
     // "Overridden" badge; the full audit trail lives in ResourceOverride.
     isOverridden     : Boolean default false;
     overrideReason   : String(500);
+    // ── Milestone-hours allocation model (additive, Resource Planning v2) ──────
+    // When a PM allocates by milestone+hours, estimatedHours holds the total and the
+    // system spreads it into ResourceMonthlyAllocation rows by working days. bandwidth
+    // stays populated (derived) so every existing dashboard/report keeps working.
+    estimatedHours   : Decimal(9,2) default 0;       // total hours booked for this allocation
+    allocationType   : String(10) default 'Hard';    // Hard (confirmed) | Soft (tentative)
+    monthlyRows      : Composition of many ResourceMonthlyAllocation on monthlyRows.allocation = $self;
+}
+
+// System-generated month-wise allocation (never entered by hand). One row per
+// (allocation, month). Source of truth for availability, forecasting, utilization
+// and recommendations. Regenerated whenever the parent allocation/milestone changes.
+entity ResourceMonthlyAllocation : managed {
+    key monthlyId    : String(60);                   // <allocationId>-<YYYYMM>
+    allocation       : Association to ProjectResource;
+    project          : Association to Project;
+    employee         : Association to EmployeeMaster;
+    milestone        : Association to Milestone;
+    yearMonth        : String(7);                    // "2026-07"
+    allocatedHours   : Decimal(9,2) default 0;
+    allocationType   : String(10) default 'Hard';    // Hard | Soft (mirrors parent)
 }
 
 // ── Centralized Resource Planning configuration (singleton, configId='GLOBAL') ──
@@ -668,10 +689,12 @@ entity ProjectResource : managed {
 // global non-billable reserve. Admin-editable — never hardcoded.
 entity ResourcePlanningConfig : managed {
     key configId             : String(20) default 'GLOBAL';
-    skillWeight              : Integer default 60;   // recommendation: skill match
-    availabilityWeight       : Integer default 20;   // recommendation: future availability
-    utilizationWeight        : Integer default 10;   // recommendation: current utilization
-    experienceWeight         : Integer default 10;   // recommendation: project experience
+    skillWeight              : Integer default 40;   // recommendation: skill match
+    availabilityWeight       : Integer default 30;   // recommendation: future availability
+    experienceWeight         : Integer default 15;   // recommendation: project experience
+    certificationWeight      : Integer default 10;   // recommendation: certification match
+    previousProjectWeight    : Integer default 5;    // recommendation: prior work w/ this client
+    utilizationWeight        : Integer default 0;    // legacy headroom factor (kept, off by default)
     maxUtilizationThreshold  : Integer default 100;  // overallocation threshold %
     standardDailyHours       : Decimal(4,2) default 8;
     standardWorkingDays      : Integer default 20;    // working days per month basis

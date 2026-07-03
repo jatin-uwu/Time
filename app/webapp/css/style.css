@@ -3605,11 +3605,93 @@ html .sapUiBlockLayer {
     .fpaRoot { color: #000; }
 }
 
-/* ── Project Manager Dashboard ───────────────────────────────────────────── */
-.pmDashCta { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
-    margin: 14px 0; padding: 14px 18px; border-radius: 12px;
-    background: linear-gradient(135deg, rgba(99,102,241,0.14), rgba(56,189,248,0.08)); border: 1px solid rgba(99,102,241,0.32); }
-.pmDashCtaSub { font-size: 0.8rem; color: #6b7280; margin-top: 3px; }
+/* ── Resource Planning v2 — allocate-by-hours modal + forecast ────────────── */
+.pmLbl { display: block; font-size: 0.76rem; font-weight: 600; color: #475569; margin: 10px 0 4px; }
+.pmSelect.wide, .pmInput { width: 100%; box-sizing: border-box; background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 8px 10px; font-size: 0.86rem; color: #111827; }
+.amTypeRow { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+.amRadio { display: flex; align-items: center; gap: 7px; font-size: 0.86rem; color: #334155; cursor: pointer; }
+.amRadio input { accent-color: #2563eb; }
+.amPreview { margin-top: 10px; }
+.pmErr { color: #dc2626; font-size: 0.82rem; margin-top: 8px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 8px 10px; }
+.pmDialog.wide { max-width: 860px; width: 92vw; }
+.fcTable td { vertical-align: top; }
+.fcAvail { font-weight: 800; font-size: 0.92rem; }
+.fcSub { color: #64748b; font-size: 0.72rem; margin-top: 2px; }
+
+/* ── PM Dashboard — inline on Projects Overview tab (enterprise, light) ────── */
+.pmDash { margin-top: 4px; }
+/* Remove the SplitApp master-toggle arrow so there's one clean Back nav. */
+.sapMSplitContainerMasterBtn, .sapMSplitContainerShowMasterBtn { display: none !important; }
+
+/* Hero header */
+.pmHero { display: flex; gap: 20px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+    border: 1px solid #e5e7eb; border-radius: 16px; padding: 20px 22px; box-shadow: 0 2px 10px rgba(15,23,42,0.05); }
+.pmHeroMain { flex: 1; min-width: 0; }
+.pmHeroTop { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pmHeroName { font-size: 1.4rem; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+.pmHeroType { background: #eef2ff; color: #4f46e5; border-radius: 20px; padding: 3px 12px; font-size: 0.74rem; font-weight: 600; }
+.pmHeroMeta { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 10px; color: #64748b; font-size: 0.84rem; }
+.pmHeroMeta > span { display: inline-flex; align-items: center; gap: 6px; }
+.pmHeroMeta b { color: #0f172a; }
+.pmMetaIco { color: #94a3b8; display: inline-flex; }
+.pmMetaIco svg, .pmQaIco svg, .pmKpiIcon svg { display: block; }
+.pmQaIco { display: inline-flex; margin-right: 6px; }
+.pmHeroStats { display: flex; flex-wrap: wrap; gap: 26px; margin-top: 16px; padding-top: 14px; border-top: 1px solid #eef1f5; }
+.pmHeroStat { display: flex; flex-direction: column; }
+.pmHeroStat span { color: #94a3b8; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600; }
+.pmHeroStat b { font-size: 1.25rem; font-weight: 800; color: #0f172a; }
+.pmHeroActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.pmQa { display: inline-flex; align-items: center; background: #fff; border: 1px solid #d9dee7; color: #334155; border-radius: 9px; padding: 8px 14px; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all .15s; }
+.pmQa:hover { border-color: #2563eb; color: #2563eb; background: #eff6ff; }
+.pmHeroHealth { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 150px; border-left: 1px solid #eef1f5; padding-left: 20px; }
+.pmHeroHealthLbl { font-size: 1rem; font-weight: 800; }
+
+/* KPI cards */
+.pmKpiRow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-top: 16px; }
+.pmKpiCard { position: relative; background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px 16px;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.05); overflow: hidden; transition: transform .15s, box-shadow .15s; }
+.pmKpiCard::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--accent, #2563eb); }
+.pmKpiCard:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(15,23,42,0.10); }
+.pmKpiHead { display: flex; align-items: center; gap: 8px; }
+.pmKpiIcon { width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.9rem; flex: 0 0 26px; }
+.pmKpiL { color: #64748b; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 700; }
+.pmKpiV { font-size: 1.5rem; font-weight: 800; margin-top: 8px; letter-spacing: -0.01em; }
+.pmKpiSub { color: #94a3b8; font-size: 0.72rem; margin-top: 2px; }
+
+/* Charts */
+.pmChartRow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 16px; }
+.pmChartCard { background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 16px 18px; box-shadow: 0 1px 3px rgba(15,23,42,0.05); }
+.pmChartTitle { font-size: 0.88rem; font-weight: 700; color: #1e293b; margin-bottom: 10px; }
+.pmChartBox { position: relative; height: 200px; }
+.pmChartEmpty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #94a3b8; font-size: 0.83rem; text-align: center; border: 1px dashed #e2e8f0; border-radius: 10px; background: #fafbfc; }
+.pmChartEmptyIcon { color: #cbd5e1; }
+.pmChartEmptyIcon svg { display: block; }
+
+/* Panels + lists */
+.pmDashCols { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; margin-top: 16px; }
+.pmDashCols .pmPanel { margin-top: 0; }
+.pmSpan2 { }
+.pmMiniStats { display: flex; flex-wrap: wrap; gap: 22px; }
+.pmMiniStats > div { display: flex; flex-direction: column; }
+.pmMiniStats span { color: #64748b; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
+.pmMiniStats b { color: #0f172a; font-size: 1.1rem; margin-top: 2px; }
+.pmProgTrack { height: 8px; background: #eef1f5; border-radius: 6px; overflow: hidden; margin: 12px 0 4px; }
+.pmProgFill { height: 100%; border-radius: 6px; transition: width .3s; }
+.pmMiniTable { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.pmMiniTable th { text-align: left; padding: 7px 8px; color: #64748b; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; border-bottom: 1px solid #e5e7eb; }
+.pmMiniTable td { padding: 7px 8px; color: #334155; font-size: 0.84rem; border-bottom: 1px solid #f3f4f6; }
+.pmList { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.pmListItem { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; background: #f8fafc; border: 1px solid #eef1f5; border-radius: 10px; }
+.pmListItem b { color: #0f172a; font-size: 0.86rem; }
+.pmListSub { color: #64748b; font-size: 0.74rem; margin-top: 2px; }
+.pmListJoin { background: #5b5fc7; color: #fff; border-radius: 7px; padding: 4px 12px; font-size: 0.74rem; font-weight: 600; text-decoration: none; }
+.pmListPct { font-weight: 800; font-size: 0.95rem; }
+.pmTodayTag { background: #dbeafe; color: #2563eb; border-radius: 5px; padding: 1px 7px; font-size: 0.66rem; font-weight: 700; }
+.pmDelayTag { background: #fee2e2; color: #dc2626; border-radius: 5px; padding: 1px 7px; font-size: 0.66rem; font-weight: 700; }
+.pmPhaseTag { background: #ede9fe; color: #7c3aed; border-radius: 20px; padding: 2px 10px; font-size: 0.72rem; font-weight: 600; }
+
+@media (max-width: 1200px) { .pmKpiRow { grid-template-columns: repeat(3, 1fr); } .pmChartRow { grid-template-columns: 1fr; } .pmDashCols { grid-template-columns: 1fr; } .pmHero { flex-direction: column; } .pmHeroHealth { border-left: none; border-top: 1px solid #eef1f5; padding-left: 0; padding-top: 14px; flex-direction: row; gap: 14px; } }
+@media (max-width: 700px) { .pmKpiRow { grid-template-columns: repeat(2, 1fr); } .pmHeroStats { gap: 18px; } }
 .fpaRoot.pmDash { padding-left: 0; min-height: 100vh; color: #e6edf8;
     background:
         radial-gradient(1200px 600px at 12% -8%, rgba(99,102,241,0.22), transparent 60%),
@@ -4123,6 +4205,13 @@ body.tsClientMode.tsRailOpen { padding-left: 0 !important; }
 .rpScoreLbl { font-size: 0.6rem; color: #64748b; text-transform: uppercase; }
 .rpRecMeta { font-size: 0.76rem; color: #475569; margin-top: 8px; }
 .rpMissing { font-size: 0.72rem; color: #dc2626; margin-top: 2px; }
+/* Confidence-score factor breakdown (Phase 7) */
+.rpBreakdown { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 8px; }
+.rpBd .rpBdTop { display: flex; justify-content: space-between; font-size: 0.68rem; color: #64748b; margin-bottom: 3px; }
+.rpBd .rpBdTop b { color: #334155; }
+.rpBdTrack { height: 5px; background: #eef1f5; border-radius: 4px; overflow: hidden; }
+.rpBdFill { height: 100%; border-radius: 4px; }
+@media (max-width: 700px) { .rpBreakdown { grid-template-columns: repeat(2, 1fr); } }
 .rpUtilRow { display: flex; align-items: center; gap: 8px; margin: 12px 0 8px; }
 .rpBar { flex: 1; height: 8px; background: #eef2f7; border-radius: 5px; overflow: hidden; }
 .rpBarFill { height: 100%; border-radius: 5px; transition: width .3s; }
