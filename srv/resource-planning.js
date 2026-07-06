@@ -178,6 +178,51 @@ function generateMonthlyAllocations(startStr, endStr, totalHours, holidays) {
     return out.filter(x => x.hours > 0 || x.workingDays > 0);
 }
 
+// ── Time-phased monthly plan (enterprise resource costing) ────────────────────
+// Produces one row per calendar month in [start,end] with hours, FROZEN cost and
+// the month's allocation %. Two modes:
+//   • pct mode      → month cost = monthlyLoadedCost × pct% × (workingDays / fullMonthWorkingDays)
+//   • totalHours    → spread hours by working days; cost = hours × loadedRate
+// Partial (start/end) months are prorated by working days. Returns
+// [{ yearMonth, hours, cost, pct, workingDays }].
+function generateTimePhasedPlan(startStr, endStr, opts) {
+    opts = opts || {};
+    if (!startStr || !endStr) return [];
+    const rs = new Date(startStr), re = new Date(endStr);
+    if (isNaN(rs) || isNaN(re) || re < rs) return [];
+    const holidaySet = new Set(opts.holidays || []);
+    const capacity = Number(opts.capacity) > 0 ? Number(opts.capacity) : DEFAULT_MONTHLY_CAPACITY;
+    const loadedRate = Number(opts.loadedRate) || 0;                 // ₹/hour fully-loaded
+    const monthlyLoadedCost = Number(opts.monthlyLoadedCost) || (loadedRate * capacity);  // ₹/month
+    const months = monthsInRange(startStr, endStr);
+    if (!months.length) return [];
+    const wdIn = months.map(win => Math.max(0, workingDaysInWindow(rs, re, win, holidaySet)));
+
+    if (opts.pct != null) {
+        const pct = Math.max(0, Number(opts.pct) || 0);
+        return months.map((win, i) => {
+            const fullWd = Math.max(1, workingDaysInWindow(win.start, win.end, win, holidaySet));
+            const frac = Math.min(1, wdIn[i] / fullWd);
+            const cost = Math.round(monthlyLoadedCost * pct / 100 * frac);
+            const hours = Math.round(capacity * pct / 100 * frac * 100) / 100;
+            return { yearMonth: win.startStr.slice(0, 7), hours, cost, pct, workingDays: wdIn[i] };
+        }).filter(x => x.workingDays > 0 || x.hours > 0);
+    }
+
+    // Hours mode — distribute total hours by working days.
+    const totalHours = Number(opts.totalHours) || 0;
+    const totalWd = wdIn.reduce((a, b) => a + b, 0);
+    if (totalHours <= 0) return [];
+    if (totalWd <= 0) { const h = Math.round(totalHours * 100) / 100; return [{ yearMonth: months[0].startStr.slice(0, 7), hours: h, cost: Math.round(h * loadedRate), pct: Math.round(h / capacity * 100), workingDays: 0 }]; }
+    let assigned = 0;
+    return months.map((win, i) => {
+        let h;
+        if (i === months.length - 1) h = Math.round((totalHours - assigned) * 100) / 100;
+        else { h = Math.round(totalHours * wdIn[i] / totalWd * 100) / 100; assigned += h; }
+        return { yearMonth: win.startStr.slice(0, 7), hours: h, cost: Math.round(h * loadedRate), pct: Math.round(h / capacity * 100), workingDays: wdIn[i] };
+    }).filter(x => x.hours > 0 || x.workingDays > 0);
+}
+
 // Does an allocation's [start,end] window overlap a month? Null dates (legacy /
 // "for the whole project") always count — preserving existing behaviour.
 function allocCoversMonth(a, win) {
@@ -511,5 +556,5 @@ function computeKpis(profiles) {
 module.exports = {
     parseSkills, skillMatchRatio, computeProfiles, computeCapacityTimeline, statusBadge, utilizationBand, scoreProfile,
     computeKpis, loadConfig, loadedHourlyRate, baseHourlyRate, CONFIG_DEFAULTS, DEFAULT_MONTHLY_CAPACITY,
-    generateMonthlyAllocations, workingDaysInWindow, monthsInRange, monthWindow,
+    generateMonthlyAllocations, generateTimePhasedPlan, workingDaysInWindow, monthsInRange, monthWindow,
 };

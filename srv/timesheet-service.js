@@ -160,6 +160,7 @@ async function ensureProjectTypes() {
 }
 const PROJECT_RESOURCE = 'ccentrik.employee.timesheet.schema.timesheet.ProjectResource';
 const RESOURCE_MONTHLY_ALLOCATION = 'ccentrik.employee.timesheet.schema.timesheet.ResourceMonthlyAllocation';
+const RESOURCE_ALLOCATION_HISTORY = 'ccentrik.employee.timesheet.schema.timesheet.ResourceAllocationHistory';
 const RESOURCE_OVERRIDE = 'ccentrik.employee.timesheet.schema.timesheet.ResourceOverride';
 const RP_CONFIG = 'ccentrik.employee.timesheet.schema.timesheet.ResourcePlanningConfig';
 const COMPANY_EVENT = 'ccentrik.employee.timesheet.schema.timesheet.CompanyEvent';
@@ -4203,6 +4204,38 @@ function healthColor(ratio, greenBelow, yellowBelow) {
 }
 // Actual cost consumed by a project = Σ(logged hours on its tasks × active hourlyCost).
 // Returns { actualCost, actualHours, hourly } (hourly map reused by planned-cost calc).
+// Current calendar month key ("YYYY-MM"), the spent/forecast boundary.
+function currentYearMonth() { return new Date().toISOString().slice(0, 7); }
+
+// ── Time-phased resource cost (enterprise) ──────────────────────────────────
+// Splits the project's frozen ResourceMonthlyAllocation costs into:
+//   spent     = Σ month cost where yearMonth <  current month (never rewritten)
+//   forecast  = Σ month cost where yearMonth >= current month (recalculated on change)
+//   estimated = spent + forecast
+// Hard allocations only (Soft = tentative, ₹0). Returns rounded rupees.
+async function projectTimePhasedCost(projectId) {
+    const rows = await SELECT.from(RESOURCE_MONTHLY_ALLOCATION)
+        .columns('yearMonth', 'allocatedCost', 'allocationType')
+        .where({ project_projectId: projectId });
+    const curYM = currentYearMonth();
+    let spent = 0, forecast = 0;
+    (rows || []).forEach(r => {
+        if (r.allocationType === 'Soft') return;
+        const cost = Number(r.allocatedCost) || 0;
+        if (r.yearMonth < curYM) spent += cost; else forecast += cost;
+    });
+    spent = Math.round(spent); forecast = Math.round(forecast);
+    return { spent, forecast, estimated: spent + forecast };
+}
+// Same split for a single allocation (used by the change-history record).
+async function allocationTimePhasedCost(allocationId) {
+    const rows = await SELECT.from(RESOURCE_MONTHLY_ALLOCATION).columns('yearMonth', 'allocatedCost', 'allocationType').where({ allocation_allocationId: allocationId });
+    const curYM = currentYearMonth();
+    let spent = 0, forecast = 0;
+    (rows || []).forEach(r => { if (r.allocationType === 'Soft') return; const c = Number(r.allocatedCost) || 0; if (r.yearMonth < curYM) spent += c; else forecast += c; });
+    return { spent: Math.round(spent), forecast: Math.round(forecast), estimated: Math.round(spent + forecast) };
+}
+
 async function projectActualCost(projectId) {
     const tasks = await SELECT.from(PROJECT_TASK).columns('taskId').where({ project_projectId: projectId });
     const taskIds = tasks.map(t => t.taskId);
@@ -4873,7 +4906,9 @@ class ProjectService extends cds.ApplicationService {
                 sequence: d.sequence != null ? Number(d.sequence) : cnt + 1, status: 'Not Started', progressPct: 0,
                 progressMode: d.progressMode || 'manual', plannedStartDate: d.plannedStartDate || null, plannedEndDate: d.plannedEndDate || null,
                 owner_employeeId: d.ownerId || null, ownerName, remarks: (d.remarks || '').trim(),
-                isCritical: d.isCritical === true, isBillable: d.isBillable !== false, plannedBudget: Number(d.plannedBudget) || 0, approvalStatus: 'None'
+                isCritical: d.isCritical === true, isBillable: d.isBillable !== false, plannedBudget: Number(d.plannedBudget) || 0, approvalStatus: 'None',
+                priority: d.priority || 'Medium', completionCriteria: (d.completionCriteria || '').trim() || null,
+                deliverables: (d.deliverables || '').trim() || null, estimatedEffort: Number(d.estimatedEffort) || 0
             });
             await projectAudit(d.projectId, c.name, 'Milestone Created', null, String(d.name).trim());
             if (d.ownerId) await createNotification(d.ownerId, 'MILESTONE_CREATED', 'Milestone Assigned', `You own milestone "${String(d.name).trim()}" in project ${acc.p.projectName}.`, d.projectId);
@@ -4907,6 +4942,10 @@ class ProjectService extends cds.ApplicationService {
                 set.plannedBudget = Number(d.plannedBudget) || 0;
             }
             if (d.ownerId !== undefined) { set.owner_employeeId = d.ownerId || null; const o = d.ownerId ? await SELECT.one.from(EMPLOYEE).columns('employeeName').where({ employeeId: d.ownerId }) : null; set.ownerName = o ? o.employeeName : ''; }
+            if (d.priority != null) set.priority = d.priority;
+            if (d.completionCriteria != null) set.completionCriteria = String(d.completionCriteria).trim() || null;
+            if (d.deliverables != null) set.deliverables = String(d.deliverables).trim() || null;
+            if (d.estimatedEffort != null) set.estimatedEffort = Number(d.estimatedEffort) || 0;
             await UPDATE(MILESTONE).set(set).where({ milestoneId: d.milestoneId });
             await projectAudit(m.project_projectId, c.name, 'Milestone Updated', null, set.name || m.name);
             return JSON.stringify({ ok: true });
@@ -5110,7 +5149,8 @@ class ProjectService extends cds.ApplicationService {
                     roleCategoryId: r.roleCategory_roleId, roleCategoryName: r.roleCategoryName,
                     specializationId: r.specialization_specId, specializationName: r.specializationName,
                     requiredCount: r.requiredCount, requiredHours: r.requiredHours,
-                    startDate: r.startDate, endDate: r.endDate, notes: r.notes, status: r.status
+                    startDate: r.startDate, endDate: r.endDate, notes: r.notes, status: r.status,
+                    skillCategory: r.skillCategory, skills: r.skills, experienceRange: r.experienceRange, allocationPct: r.allocationPct
                 })),
                 canManage: acc.canManage
             });
@@ -5136,7 +5176,11 @@ class ProjectService extends cds.ApplicationService {
                 specialization_specId: d.specializationId || null, specializationName: spec ? spec.name : null,
                 requiredCount: Math.max(1, parseInt(d.requiredCount, 10) || 1),
                 requiredHours: Number(d.requiredHours) || 0,
-                startDate: d.startDate || null, endDate: d.endDate || null, notes: (d.notes || '').trim() || null, status: 'Open'
+                startDate: d.startDate || null, endDate: d.endDate || null, notes: (d.notes || '').trim() || null, status: 'Open',
+                skillCategory: (d.skillCategory || '').trim() || null,
+                skills: (d.skills || '').trim() || null,
+                experienceRange: (d.experienceRange || '').trim() || null,
+                allocationPct: Math.min(100, Math.max(1, parseInt(d.allocationPct, 10) || 100))
             });
             await projectAudit(d.projectId, c.name, 'Resource Requirement Added', null, `${dept ? dept.name : ''} ${role ? '· ' + role.name : ''} ${spec ? '· ' + spec.name : ''} ×${Math.max(1, parseInt(d.requiredCount, 10) || 1)}`);
             return JSON.stringify({ ok: true, requirementId });
@@ -5813,6 +5857,7 @@ class ProjectService extends cds.ApplicationService {
             const statusBuckets = { Planning: 0, Ongoing: 0, 'On Hold': 0, Completed: 0 };
             const clientRev = {}; const table = []; const revVsCost = [];
             let totalContract = 0, forecastProfit = 0, currentSpendTot = 0, committedSpendTot = 0, execBudgetTot = 0, expectedProfitTot = 0, forecastSpendTot = 0, revenueRealized = 0, revenueAtRisk = 0;
+            let spentTot = 0, forecastTot = 0, estimatedTot = 0;   // time-phased resource cost
             let cntTotal = 0, cntActive = 0, cntCompleted = 0, cntDelayed = 0, cntAtRisk = 0, cntOverBudget = 0, cntBlocked = 0, cntCritical = 0, cntUnderResourced = 0;
             let newTotal = 0, newActive = 0, newCompleted = 0;
             const projName = {}; (projects || []).forEach(p => { projName[p.projectId] = p.projectName; });
@@ -5850,9 +5895,10 @@ class ProjectService extends cds.ApplicationService {
                 const realized = Math.round(fin.contractValue * completion / 100);
                 totalContract += fin.contractValue;
                 forecastProfit += fin.projectedMargin;
-                // Budget "consumed" is driven by committed resource allocation cost
-                // (Σ totalAllocationCost); timesheet actuals are tracked separately.
-                committedSpendTot += (Number(fin.allocatedResourceCost) || 0);
+                // Time-phased: Spent (past, frozen) + Forecast (future) = Estimated.
+                const tpp = await projectTimePhasedCost(p.projectId);
+                spentTot += tpp.spent; forecastTot += tpp.forecast; estimatedTot += tpp.estimated;
+                committedSpendTot += tpp.estimated;
                 currentSpendTot += actualCost;
                 forecastSpendTot += forecastedSpend;
                 execBudgetTot += fin.executionBudget;
@@ -5907,9 +5953,14 @@ class ProjectService extends cds.ApplicationService {
                     portfolioMarginPct: pct(forecastProfit, totalContract),
                     revenueRealized: Math.round(revenueRealized), revenueAtRisk: Math.round(revenueAtRisk),
                     cashCollectionPct: pct(revenueRealized, totalContract),
-                    budgetUtilizationPct: pct(committedSpendTot, execBudgetTot),
-                    committedSpend: Math.round(committedSpendTot), actualSpend: Math.round(currentSpendTot),
-                    currentSpend: Math.round(committedSpendTot), executionBudget: Math.round(execBudgetTot),
+                    budgetUtilizationPct: pct(estimatedTot, execBudgetTot),
+                    // Time-phased resource cost (enterprise): approved / estimated / spent / forecast / available.
+                    approvedBudget: Math.round(execBudgetTot),
+                    estimatedCost: Math.round(estimatedTot), spentCost: Math.round(spentTot),
+                    forecastCost: Math.round(forecastTot), forecastRemaining: Math.round(forecastTot),
+                    availableBudget: Math.round(Math.max(0, execBudgetTot - estimatedTot)),
+                    committedSpend: Math.round(estimatedTot), actualSpend: Math.round(currentSpendTot),
+                    currentSpend: Math.round(estimatedTot), executionBudget: Math.round(execBudgetTot),
                     forecastedSpend: Math.round(forecastSpendTot), expectedProfit: Math.round(expectedProfitTot)
                 },
                 health: { score: portfolioHealth, label: portfolioHealth >= 90 ? 'Healthy' : portfolioHealth >= 70 ? 'Moderate' : 'Needs Attention', penalties: { delay: Math.round(portDelay), budget: Math.round(portBudget), risk: Math.round(portRisk), resource: Math.round(portRes) } },
@@ -6797,96 +6848,213 @@ class ProjectService extends cds.ApplicationService {
             if (!project) return JSON.stringify({ error: 'Project not found.' });
             if (!(isFounderCaller(req, c) || project.poc_employeeId === c.employeeId))
                 return JSON.stringify({ error: 'Only the project POC or Founder can allocate resources.' });
+            // ── Planning-first gate ───────────────────────────────────────────────
+            // Resources may only be allocated after Resource Requirement Planning:
+            // at least one requirement must exist (demand defined before staffing).
+            const reqCount = await SELECT.from(PROJ_REQ).columns('requirementId').where({ project_projectId: d.projectId });
+            if (!(reqCount || []).length) {
+                return JSON.stringify({ error: 'Define at least one Resource Requirement before allocating employees. Planning must precede staffing.', requirementFirst: true });
+            }
+            return await allocateToMilestoneCore(c, d, project);
+        });
+
+        // Core allocation write (shared by allocateResourceToMilestone and
+        // replaceResourceOnMilestone). Assumes caller/project/planning-first checks
+        // already passed. Returns the same JSON string the action returns.
+        const allocateToMilestoneCore = async (c, d, project) => {
             const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'monthlyCapacityHours', 'isActive').where({ employeeId: d.employeeId });
             if (!emp || emp.isActive === false) return JSON.stringify({ error: 'Employee not found or inactive.' });
             const ms = await SELECT.one.from(MILESTONE).columns('milestoneId', 'name', 'plannedStartDate', 'plannedEndDate').where({ milestoneId: d.milestoneId });
             if (!ms) return JSON.stringify({ error: 'Milestone not found.' });
-            const hours = Math.max(0, Number(d.estimatedHours) || 0);
-            if (hours <= 0) return JSON.stringify({ error: 'Estimated hours must be greater than 0.' });
             const type = d.allocationType === 'Soft' ? 'Soft' : 'Hard';
+            const hours = Math.max(0, Number(d.estimatedHours) || 0);
+            const pct = (d.allocationPct != null && d.allocationPct !== '') ? Math.max(0, Number(d.allocationPct) || 0) : null;
+            if (pct == null && hours <= 0) return JSON.stringify({ error: 'Provide either an allocation % or estimated hours (> 0).' });
             const start = ms.plannedStartDate || project.startDate;
             const end = ms.plannedEndDate || project.endDate;
-            if (!start || !end) return JSON.stringify({ error: 'The milestone (or project) needs start and end dates before hours can be allocated.' });
-
-            let holidays = [];
-            try { holidays = (await SELECT.from(HOLIDAY).columns('holidayDate')).map(h => String(h.holidayDate).slice(0, 10)); } catch (e) { /* */ }
-            const monthly = rp.generateMonthlyAllocations(String(start).slice(0, 10), String(end).slice(0, 10), hours, holidays);
-            if (!monthly.length) return JSON.stringify({ error: 'Could not generate a monthly plan for this milestone window.' });
+            if (!start || !end) return JSON.stringify({ error: 'The milestone (or project) needs start and end dates before a resource can be allocated.' });
 
             const cap = Number(emp.monthlyCapacityHours) > 0 ? Number(emp.monthlyCapacityHours) : 160;
             const allocationId = `${d.projectId}-${d.employeeId}-${d.milestoneId}`.slice(0, 45);
+            const curYM = currentYearMonth();
 
-            // ── Availability guard (HARD only): no month may exceed capacity unless
-            // an override is supplied. Soft reservations never block.
+            // ── Cost basis (PM-safe): fully-loaded hourly + monthly cost ──────────
+            const cfg = await rp.loadConfig();
+            const overhead = Number(cfg.monthlyOverhead) || 0;
+            const salRow = await SELECT.one.from(SALARY_MASTER).columns('employee_employeeId', 'monthlySalary', 'hourlyCost', 'isActive').where({ employee_employeeId: d.employeeId });
+            const rate = rp.loadedHourlyRate((salRow && salRow.isActive !== false) ? salRow : null, cap, overhead);
+            const monthlyLoadedCost = Math.round(rate * cap);   // ₹/full month
+
+            let holidays = [];
+            try { holidays = (await SELECT.from(HOLIDAY).columns('holidayDate')).map(h => String(h.holidayDate).slice(0, 10)); } catch (e) { /* */ }
+            // Time-phased plan: per-month hours + FROZEN cost + %.
+            const plan = rp.generateTimePhasedPlan(String(start).slice(0, 10), String(end).slice(0, 10),
+                (pct != null) ? { pct, capacity: cap, loadedRate: rate, monthlyLoadedCost, holidays }
+                              : { totalHours: hours, capacity: cap, loadedRate: rate, holidays });
+            if (!plan.length) return JSON.stringify({ error: 'Could not generate a monthly plan for this window.' });
+
+            // ── Existing allocation snapshot (for preserve-history + audit) ───────
+            const existing = await SELECT.from(RESOURCE_MONTHLY_ALLOCATION)
+                .columns('yearMonth', 'allocatedCost', 'allocatedHours', 'allocationPct', 'allocationType')
+                .where({ allocation_allocationId: allocationId });
+            const existingByYM = {}; (existing || []).forEach(r => { existingByYM[r.yearMonth] = r; });
+            const oldTP = await allocationTimePhasedCost(allocationId);
+            const oldPR = await SELECT.one.from(PROJECT_RESOURCE).columns('bandwidth').where({ allocationId });
+            const oldPct = oldPR ? (Number(oldPR.bandwidth) || 0) : 0;
+
+            // ── Availability guard (HARD, FUTURE months only — the past is locked) ─
             if (type === 'Hard' && !d.force) {
                 const others = await SELECT.from(RESOURCE_MONTHLY_ALLOCATION)
                     .columns('yearMonth', 'allocatedHours', 'allocationType', 'allocation_allocationId')
                     .where({ employee_employeeId: d.employeeId, allocationType: 'Hard' });
                 const bookedByMonth = {};
                 (others || []).forEach(r => { if (r.allocation_allocationId === allocationId) return; bookedByMonth[r.yearMonth] = (bookedByMonth[r.yearMonth] || 0) + Number(r.allocatedHours || 0); });
-                const clash = monthly.find(m => (bookedByMonth[m.yearMonth] || 0) + m.hours > cap);
+                const clash = plan.filter(m => m.yearMonth >= curYM).find(m => (bookedByMonth[m.yearMonth] || 0) + m.hours > cap);
                 if (clash) {
                     return JSON.stringify({
-                        error: `${emp.employeeName} would be over-allocated in ${clash.yearMonth}: ${Math.round((bookedByMonth[clash.yearMonth] || 0) + clash.hours)}h booked vs ${cap}h capacity. Provide an override reason to proceed, or reduce hours / use a Soft reservation.`,
+                        error: `${emp.employeeName} would be over-allocated in ${clash.yearMonth}: ${Math.round((bookedByMonth[clash.yearMonth] || 0) + clash.hours)}h vs ${cap}h capacity. Provide an override reason, reduce the allocation, or use a Soft reservation.`,
                         overallocation: true, month: clash.yearMonth
                     });
                 }
             }
 
-            const peakMonth = Math.max(...monthly.map(m => m.hours));
-            const bandwidth = Math.max(0, Math.min(100, Math.round(peakMonth / cap * 100)));
+            // ── New time-phased cost: SPENT (past, frozen) + FORECAST (current+future) ─
+            const isHard = type === 'Hard';
+            let newSpent = 0, newForecast = 0, totalHoursNew = 0;
+            plan.forEach(m => {
+                totalHoursNew += m.hours;
+                const cost = isHard ? m.cost : 0;
+                if (m.yearMonth < curYM) {
+                    // Preserve any already-recorded historical cost; only book first-time past.
+                    newSpent += existingByYM[m.yearMonth] ? (Number(existingByYM[m.yearMonth].allocatedCost) || 0) : cost;
+                } else newForecast += cost;
+            });
+            newSpent = Math.round(newSpent); newForecast = Math.round(newForecast);
+            const newEstimated = newSpent + newForecast;
 
-            // ── Cost & budget consumption ─────────────────────────────────────────
-            // Cost = estimatedHours × fully-loaded hourly rate ((salary+overhead)/capacity).
-            // Only HARD allocations consume budget; SOFT is a tentative reservation (₹0),
-            // so committed budget = Σ totalAllocationCost stays hard-only automatically.
-            const cfg = await rp.loadConfig();
-            const overhead = Number(cfg.monthlyOverhead) || 0;
-            const salRow = await SELECT.one.from(SALARY_MASTER).columns('employee_employeeId', 'monthlySalary', 'hourlyCost', 'isActive').where({ employee_employeeId: d.employeeId });
-            const rate = rp.loadedHourlyRate((salRow && salRow.isActive !== false) ? salRow : null, cap, overhead);
-            const allocCost = type === 'Hard' ? Math.round(rate * hours) : 0;
-
-            // Budget guard (HARD only): committed cost may not exceed the execution
-            // budget unless an override reason is provided.
+            // ── Budget guard (HARD): project ESTIMATED must fit the execution budget ─
             const execB = Number(project.executionBudget) || Number(project.budget) || 0;
-            const priorRows = await SELECT.from(PROJECT_RESOURCE).columns('allocationId', 'totalAllocationCost').where({ project_projectId: d.projectId });
-            const priorCommitted = (priorRows || []).filter(r => r.allocationId !== allocationId).reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0);
-            if (type === 'Hard' && !d.force && allocCost > 0 && execB > 0 && priorCommitted + allocCost > execB) {
+            const prRows = await SELECT.from(PROJECT_RESOURCE).columns('allocationId', 'totalAllocationCost').where({ project_projectId: d.projectId });
+            const otherCommitted = (prRows || []).filter(r => r.allocationId !== allocationId).reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0);
+            if (isHard && !d.force && execB > 0 && otherCommitted + newEstimated > execB) {
                 return JSON.stringify({
-                    error: `Allocating ${emp.employeeName} for ${hours}h (₹${allocCost.toLocaleString('en-IN')}) would exceed the execution budget — committed ₹${(priorCommitted + allocCost).toLocaleString('en-IN')} vs ₹${execB.toLocaleString('en-IN')}. Provide an override reason, reduce the hours, or use a Soft reservation.`,
-                    budgetOverrun: true, committed: Math.round(priorCommitted + allocCost), executionBudget: execB
+                    error: `This allocation would push the project estimate to ₹${(otherCommitted + newEstimated).toLocaleString('en-IN')} vs the ₹${execB.toLocaleString('en-IN')} budget. Provide an override reason, reduce the allocation, or use a Soft reservation.`,
+                    budgetOverrun: true, estimated: Math.round(otherCommitted + newEstimated), executionBudget: execB
                 });
             }
+
+            const peakFuture = Math.max(0, ...plan.filter(m => m.yearMonth >= curYM).map(m => m.pct), ...plan.map(m => m.pct));
+            const bandwidth = Math.max(0, Math.min(100, Math.round(peakFuture)));
 
             await UPSERT.into(PROJECT_RESOURCE).entries({
                 allocationId, project_projectId: d.projectId, employee_employeeId: d.employeeId,
                 employeeName: emp.employeeName, department: emp.department || '',
-                milestone_milestoneId: d.milestoneId, estimatedHours: hours, allocationType: type,
+                milestone_milestoneId: d.milestoneId, estimatedHours: Math.round(totalHoursNew * 100) / 100, allocationType: type,
                 bandwidth, startDate: String(start).slice(0, 10), endDate: String(end).slice(0, 10),
                 status: 'Active', role: d.role || null,
-                hourlyCostSnapshot: Math.round(rate), overheadSnapshot: overhead, totalAllocationCost: allocCost,
+                billingRate: Math.max(0, Number(d.billingRate) || 0),
+                hourlyCostSnapshot: Math.round(rate), overheadSnapshot: overhead, totalAllocationCost: newEstimated,
                 isOverridden: !!d.force, overrideReason: d.force ? (d.overrideReason || 'Override') : null
             });
-            // Regenerate the month-wise rows for this allocation.
-            await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ allocation_allocationId: allocationId });
-            for (const m of monthly) {
+            // ── Preserve history: delete only CURRENT+FUTURE rows, keep the past. ──
+            await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ allocation_allocationId: allocationId, yearMonth: { '>=': curYM } });
+            for (const m of plan) {
+                if (m.yearMonth < curYM && existingByYM[m.yearMonth]) continue;   // frozen historical month — never rewrite
                 await INSERT.into(RESOURCE_MONTHLY_ALLOCATION).entries({
                     monthlyId: `${allocationId}-${m.yearMonth.replace('-', '')}`,
                     allocation_allocationId: allocationId, project_projectId: d.projectId,
                     employee_employeeId: d.employeeId, milestone_milestoneId: d.milestoneId,
-                    yearMonth: m.yearMonth, allocatedHours: m.hours, allocationType: type
+                    yearMonth: m.yearMonth, allocatedHours: m.hours,
+                    allocatedCost: isHard ? m.cost : 0, allocationPct: m.pct, allocationType: type
                 });
             }
-            await projectAudit(d.projectId, c.name, 'Resource Allocated (hours)', null,
-                `${emp.employeeName} · ${ms.name} · ${hours}h (${type}) · ₹${allocCost.toLocaleString('en-IN')}`);
-            founderEvents.ping('allocateResourceToMilestone');
-            const committedNow = priorCommitted + allocCost;
-            return JSON.stringify({
-                ok: true, allocationId, allocationType: type, bandwidth, monthly,
-                cost: allocCost, hourlyRate: Math.round(rate),
-                committedBudget: Math.round(committedNow), executionBudget: execB,
-                remainingBudget: Math.round(Math.max(0, execB - committedNow))
+
+            // ── Immutable change-history record (audit + reforecast trail) ────────
+            const changeType = !oldPR ? 'Created' : (bandwidth > oldPct ? 'Increased' : bandwidth < oldPct ? 'Reduced' : 'Rephased');
+            const budgetImpact = newEstimated - (oldTP.estimated || 0);
+            await INSERT.into(RESOURCE_ALLOCATION_HISTORY).entries({
+                historyId: `${allocationId}-H-${Date.now()}`,
+                allocation_allocationId: allocationId, allocationId,
+                project_projectId: d.projectId, employee_employeeId: d.employeeId, employeeName: emp.employeeName,
+                milestone_milestoneId: d.milestoneId, milestoneName: ms.name,
+                effectiveFrom: String(start).slice(0, 10), effectiveTo: String(end).slice(0, 10),
+                oldAllocationPct: oldPct, newAllocationPct: bandwidth,
+                monthlyHours: Math.round((cap * bandwidth / 100) * 100) / 100,
+                spentCost: newSpent, forecastCost: newForecast, estimatedCost: newEstimated,
+                budgetImpact, changeType, changedById: c.employeeId, changedByName: c.name || '', changedAt: new Date()
             });
+            await projectAudit(d.projectId, c.name, 'Resource Reforecast', `${oldPct}% · est ₹${(oldTP.estimated || 0).toLocaleString('en-IN')}`,
+                `${bandwidth}% · spent ₹${newSpent.toLocaleString('en-IN')} + forecast ₹${newForecast.toLocaleString('en-IN')} = ₹${newEstimated.toLocaleString('en-IN')} (${changeType})`);
+            founderEvents.ping('allocateResourceToMilestone');
+
+            const projTP = await projectTimePhasedCost(d.projectId);
+            return JSON.stringify({
+                ok: true, allocationId, allocationType: type, bandwidth, allocationPct: bandwidth, changeType,
+                monthly: plan, hourlyRate: Math.round(rate), monthlyCost: monthlyLoadedCost,
+                spent: newSpent, forecast: newForecast, estimated: newEstimated, budgetImpact,
+                executionBudget: execB, projectSpent: projTP.spent, projectForecast: projTP.forecast,
+                projectEstimated: projTP.estimated, availableBudget: Math.round(Math.max(0, execB - projTP.estimated)),
+                remainingForecast: Math.round(projTP.forecast)
+            });
+        };
+
+        // Replace one employee with another on the SAME milestone: milestone-scoped
+        // remove of the outgoing employee (preserves past spend, releases future),
+        // then re-allocate the incoming employee with the same %/hours/type/billing.
+        this.on('replaceResourceOnMilestone', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const project = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'poc_employeeId', 'status', 'startDate', 'endDate', 'executionBudget', 'budget').where({ projectId: d.projectId });
+            if (!project) return JSON.stringify({ error: 'Project not found.' });
+            if (!(isFounderCaller(req, c) || project.poc_employeeId === c.employeeId))
+                return JSON.stringify({ error: 'Only the project POC or Founder can replace resources.' });
+            if (!d.milestoneId) return JSON.stringify({ error: 'A milestone is required to replace a resource.' });
+            if (!d.oldEmployeeId || !d.newEmployeeId) return JSON.stringify({ error: 'Both the outgoing and incoming employees are required.' });
+            if (d.oldEmployeeId === d.newEmployeeId) return JSON.stringify({ error: 'Pick a different employee to replace with.' });
+
+            const oldAllocId = `${d.projectId}-${d.oldEmployeeId}-${d.milestoneId}`.slice(0, 45);
+            const oldAlloc = await SELECT.one.from(PROJECT_RESOURCE)
+                .columns('allocationId', 'employeeName', 'bandwidth', 'estimatedHours', 'allocationType', 'billingRate', 'totalAllocationCost')
+                .where({ allocationId: oldAllocId });
+            if (!oldAlloc) return JSON.stringify({ error: 'The outgoing employee is not allocated to this milestone.' });
+            const usePct = (d.allocationPct != null && d.allocationPct !== '') ? Number(d.allocationPct)
+                         : (Number(oldAlloc.estimatedHours) > 0 ? null : (Number(oldAlloc.bandwidth) || 0));
+            const useHours = (usePct == null) ? (Number(d.estimatedHours) || Number(oldAlloc.estimatedHours) || 0) : null;
+
+            // ── Milestone-scoped removal of the outgoing employee ─────────────────
+            const curYM = currentYearMonth();
+            const past = await SELECT.from(RESOURCE_MONTHLY_ALLOCATION).columns('allocatedCost', 'allocationType').where({ allocation_allocationId: oldAllocId, yearMonth: { '<': curYM } });
+            const spent = Math.round((past || []).reduce((s, r) => s + (r.allocationType === 'Soft' ? 0 : (Number(r.allocatedCost) || 0)), 0));
+            const oldEstimated = Number(oldAlloc.totalAllocationCost) || 0;
+            await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ allocation_allocationId: oldAllocId, yearMonth: { '>=': curYM } });
+            if (spent > 0) {
+                await UPDATE(PROJECT_RESOURCE).set({ status: 'Released', totalAllocationCost: spent }).where({ allocationId: oldAllocId });
+                await INSERT.into(RESOURCE_ALLOCATION_HISTORY).entries({
+                    historyId: `${oldAllocId}-H-${Date.now()}-R`, allocation_allocationId: oldAllocId, allocationId: oldAllocId,
+                    project_projectId: d.projectId, employee_employeeId: d.oldEmployeeId, employeeName: oldAlloc.employeeName,
+                    milestone_milestoneId: d.milestoneId, oldAllocationPct: Number(oldAlloc.bandwidth) || 0, newAllocationPct: 0,
+                    spentCost: spent, forecastCost: 0, estimatedCost: spent, budgetImpact: spent - oldEstimated,
+                    changeType: 'Replaced', changedById: c.employeeId, changedByName: c.name || '', changedAt: new Date()
+                });
+            } else {
+                await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ allocation_allocationId: oldAllocId });
+                await DELETE.from(PROJECT_RESOURCE).where({ allocationId: oldAllocId });
+            }
+            await projectAudit(d.projectId, c.name, 'Resource Replaced (out)', oldAlloc.employeeName, spent > 0 ? `Spent ₹${spent.toLocaleString('en-IN')} preserved` : 'Removed');
+
+            // ── Re-allocate the incoming employee with the outgoing profile ───────
+            const allocData = {
+                projectId: d.projectId, employeeId: d.newEmployeeId, milestoneId: d.milestoneId,
+                allocationType: d.allocationType || oldAlloc.allocationType || 'Hard',
+                billingRate: (d.billingRate != null && d.billingRate !== '') ? d.billingRate : oldAlloc.billingRate,
+                role: d.role, force: d.force, overrideReason: d.overrideReason
+            };
+            if (usePct != null) allocData.allocationPct = usePct; else allocData.estimatedHours = useHours;
+            const res = await allocateToMilestoneCore(c, allocData, project);
+            const parsed = JSON.parse(res);
+            if (parsed.error) return JSON.stringify({ ...parsed, replaceFailed: true, note: 'The outgoing employee was released but the incoming allocation failed — resolve the issue and allocate manually.' });
+            founderEvents.ping('replaceResourceOnMilestone');
+            return JSON.stringify({ ...parsed, replaced: true, outgoingEmployee: oldAlloc.employeeName, spentPreserved: spent });
         });
 
         // Hours-based availability forecast (current + next N months) with the
@@ -6935,6 +7103,31 @@ class ProjectService extends cds.ApplicationService {
             return JSON.stringify({ from: fromStr, to: toStr, months: nMonths, forecast });
         });
 
+        // Time-phased financial summary + allocation-change history for a project.
+        this.on('getProjectCostSummary', async (req) => {
+            const c = await projectCaller(req);
+            const { projectId } = req.data;
+            const p = await SELECT.one.from(PROJECT).columns('projectId', 'poc_employeeId', 'executionBudget', 'budget').where({ projectId });
+            if (!p) return JSON.stringify({ error: 'Project not found.' });
+            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: projectId });
+            if (!isFounderCaller(req, c) && p.poc_employeeId !== c.employeeId && !resources.some(r => r.employee_employeeId === c.employeeId))
+                return JSON.stringify({ error: 'You do not have access to this project.' });
+            const tp = await projectTimePhasedCost(projectId);
+            const approved = Number(p.executionBudget) || Number(p.budget) || 0;
+            const history = await SELECT.from(RESOURCE_ALLOCATION_HISTORY).where({ project_projectId: projectId }).orderBy('changedAt desc');
+            return JSON.stringify({
+                approvedBudget: approved, estimatedCost: tp.estimated, spentCost: tp.spent, forecastCost: tp.forecast,
+                remainingForecast: tp.forecast, availableBudget: Math.round(Math.max(0, approved - tp.estimated)),
+                history: (history || []).slice(0, 100).map(h => ({
+                    employeeName: h.employeeName, milestoneName: h.milestoneName,
+                    oldAllocationPct: h.oldAllocationPct, newAllocationPct: h.newAllocationPct,
+                    spentCost: Number(h.spentCost) || 0, forecastCost: Number(h.forecastCost) || 0,
+                    estimatedCost: Number(h.estimatedCost) || 0, budgetImpact: Number(h.budgetImpact) || 0,
+                    changeType: h.changeType, changedByName: h.changedByName, changedAt: h.changedAt
+                }))
+            });
+        });
+
         // ── POC (or Founder): remove a resource ─────────────────────────────────
         this.on('removeResource', async (req) => {
             const c = await projectCaller(req);
@@ -6979,19 +7172,48 @@ class ProjectService extends cds.ApplicationService {
                 }
             }
 
-            await DELETE.from(PROJECT_RESOURCE).where({ allocationId: `${projectId}-${employeeId}` });
-            // Also clear any milestone-hours allocations + their monthly rows for this
-            // employee on this project (Resource Planning v2 additive cleanup).
-            await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ project_projectId: projectId, employee_employeeId: employeeId });
-            await DELETE.from(PROJECT_RESOURCE).where({ project_projectId: projectId, employee_employeeId: employeeId });
-            await projectAudit(projectId, c.name, 'Resource Removed', row.employeeName, null);
+            // ── Time-phased removal: preserve SPENT (past, frozen), release FUTURE ──
+            // For each allocation of this employee on the project: delete only the
+            // current+future monthly rows (releasing that forecast/budget); keep the
+            // historical months. If there is any historical spend, the allocation row
+            // is retained as 'Released' with totalAllocationCost = spent (never deleted);
+            // otherwise the whole allocation is removed (nothing historical to keep).
+            const curYM = currentYearMonth();
+            let totalReleased = 0, totalPreserved = 0;
+            const allocRows = await SELECT.from(PROJECT_RESOURCE).columns('allocationId', 'totalAllocationCost').where({ project_projectId: projectId, employee_employeeId: employeeId });
+            for (const ar of (allocRows || [])) {
+                const past = await SELECT.from(RESOURCE_MONTHLY_ALLOCATION).columns('allocatedCost', 'allocationType').where({ allocation_allocationId: ar.allocationId, yearMonth: { '<': curYM } });
+                const spent = Math.round((past || []).reduce((s, r) => s + (r.allocationType === 'Soft' ? 0 : (Number(r.allocatedCost) || 0)), 0));
+                const oldEstimated = Number(ar.totalAllocationCost) || 0;
+                await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ allocation_allocationId: ar.allocationId, yearMonth: { '>=': curYM } });
+                totalReleased += Math.max(0, oldEstimated - spent);
+                if (spent > 0) {
+                    // Keep the record with only the historical spend; forecast released.
+                    await UPDATE(PROJECT_RESOURCE).set({ status: 'Released', totalAllocationCost: spent }).where({ allocationId: ar.allocationId });
+                    totalPreserved += spent;
+                    await INSERT.into(RESOURCE_ALLOCATION_HISTORY).entries({
+                        historyId: `${ar.allocationId}-H-${Date.now()}-R`, allocation_allocationId: ar.allocationId, allocationId: ar.allocationId,
+                        project_projectId: projectId, employee_employeeId: employeeId, employeeName: row.employeeName,
+                        oldAllocationPct: 0, newAllocationPct: 0, spentCost: spent, forecastCost: 0, estimatedCost: spent,
+                        budgetImpact: spent - oldEstimated, changeType: 'Removed', changedById: c.employeeId, changedByName: c.name || '', changedAt: new Date()
+                    });
+                } else {
+                    await DELETE.from(RESOURCE_MONTHLY_ALLOCATION).where({ allocation_allocationId: ar.allocationId });
+                    await DELETE.from(PROJECT_RESOURCE).where({ allocationId: ar.allocationId });
+                }
+            }
+            // Legacy bandwidth allocation row (no monthly rows) → remove outright.
+            await DELETE.from(PROJECT_RESOURCE).where({ allocationId: `${projectId}-${employeeId}`, status: { '<>': 'Released' } });
+            await projectAudit(projectId, c.name, 'Resource Removed', row.employeeName,
+                totalPreserved > 0 ? `Spent ₹${totalPreserved.toLocaleString('en-IN')} preserved · ₹${Math.round(totalReleased).toLocaleString('en-IN')} forecast released` : 'Removed');
             const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'email').where({ employeeId: employeeId });
             if (emp) await sendProjectMail(emp.employeeId, emp.email,
                 'Project Deallocation',
                 `You have been deallocated from project ${project.projectName} by ${project.pocName || c.name}.`,
                 projectId, 'PROJECT_DEALLOCATION');
             founderEvents.ping('removeResource');
-            return JSON.stringify({ ok: true });
+            const projTP = await projectTimePhasedCost(projectId);
+            return JSON.stringify({ ok: true, spentPreserved: totalPreserved, forecastReleased: Math.round(totalReleased), projectEstimated: projTP.estimated, projectSpent: projTP.spent });
         });
 
         // ── Assigned employee (or Founder): update task status / actual hours ───
@@ -7132,10 +7354,10 @@ class ProjectService extends cds.ApplicationService {
             // ── Budget (PM-safe: no contract/profit) ──────────────────────────
             const { actualCost } = await projectActualCost(projectId);   // timesheet actual spend
             const execBudget = Number(p.executionBudget) || Number(p.budget) || 0;
-            // Committed budget = Σ resource allocation cost (hours × loaded rate; Hard only).
-            // This is what "consumes" the budget the moment a resource is allocated by hours.
-            const allocCostRows = await SELECT.from(PROJECT_RESOURCE).columns('totalAllocationCost').where({ project_projectId: projectId });
-            const committed = Math.round((allocCostRows || []).reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0));
+            // ── Time-phased budget: Spent (past, frozen) + Forecast (current+future) ─
+            //   Estimated = Spent + Forecast; Available = Approved − Estimated.
+            const tp = await projectTimePhasedCost(projectId);
+            const estimated = tp.estimated, spentCost = tp.spent, forecastCost = tp.forecast;
             let deptAlloc = [];
             const bRow = await SELECT.one.from(PROJECT_BUDGET).columns('categoryBudgets', 'departmentBudgets').where({ budgetId: `${projectId}-BUDGET` });
             if (bRow) {
@@ -7148,11 +7370,16 @@ class ProjectService extends cds.ApplicationService {
             }
             const budget = {
                 approved: execBudget,
-                committed,                     // consumed by resource allocation (hours × rate)
-                utilized: committed,           // primary "utilized" = committed allocation cost
+                estimated,                     // Spent + Forecast (new estimate)
+                spent: spentCost,              // historical, never rewritten
+                forecast: forecastCost,        // future, recalculated on every change
+                committed: estimated,          // back-compat alias
+                utilized: estimated,           // primary "utilized" = estimated cost
                 actualSpend: actualCost,       // timesheet actuals (secondary reference)
-                remaining: Math.max(0, execBudget - committed),
-                utilizationPct: execBudget > 0 ? Math.round(committed / execBudget * 100) : 0,
+                available: Math.max(0, execBudget - estimated),
+                remaining: Math.max(0, execBudget - estimated),
+                remainingForecast: forecastCost,   // Estimated − Spent
+                utilizationPct: execBudget > 0 ? Math.round(estimated / execBudget * 100) : 0,
                 deptAllocation: deptAlloc
             };
 

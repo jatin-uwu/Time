@@ -886,11 +886,15 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
     action createMilestone(projectId: String(20), name: String(150), description: String(1000),
                            plannedStartDate: String, plannedEndDate: String, ownerId: String(10),
                            isCritical: Boolean, isBillable: Boolean, plannedBudget: Decimal,
-                           progressMode: String(20), sequence: Integer)            returns LargeString;
+                           progressMode: String(20), sequence: Integer,
+                           priority: String(20), completionCriteria: String(1000),
+                           deliverables: String(1000), estimatedEffort: Decimal)   returns LargeString;
     action updateMilestone(milestoneId: String(40), name: String(150), description: String(1000),
                            plannedStartDate: String, plannedEndDate: String, ownerId: String(10),
                            isCritical: Boolean, isBillable: Boolean, plannedBudget: Decimal,
-                           progressMode: String(20), sequence: Integer, remarks: String(1000)) returns LargeString;
+                           progressMode: String(20), sequence: Integer, remarks: String(1000),
+                           priority: String(20), completionCriteria: String(1000),
+                           deliverables: String(1000), estimatedEffort: Decimal) returns LargeString;
     action deleteMilestone(milestoneId: String(40))                               returns LargeString;
     action setMilestoneDependency(milestoneId: String(40), predecessorId: String(40)) returns LargeString;
     action removeMilestoneDependency(dependencyId: String(55))                    returns LargeString;
@@ -914,7 +918,9 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
     action createResourceRequirement(projectId: String(20), departmentId: String(20),
                                      roleCategoryId: String(30), specializationId: String(40),
                                      requiredCount: Integer, requiredHours: Decimal,
-                                     startDate: String, endDate: String, notes: String(500)) returns LargeString;
+                                     startDate: String, endDate: String, notes: String(500),
+                                     skillCategory: String(100), skills: String(500),
+                                     experienceRange: String(40), allocationPct: Integer) returns LargeString;
     action deleteResourceRequirement(requirementId: String(45))                   returns LargeString;
 
     // ── Client Master management (Founder) ──────────────────────────────────────
@@ -1031,10 +1037,19 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
     // Resource Planning v2 — milestone-hours allocation (auto monthly split) + forecast.
     action allocateResourceToMilestone(projectId: String(20), employeeId: String(10),
                             milestoneId: String(40), estimatedHours: Decimal(9,2),
-                            allocationType: String(10), role: String(60),
+                            allocationPct: Integer, allocationType: String(10), role: String(60),
+                            billingRate: Decimal(12,2),
+                            force: Boolean, overrideReason: String(500))            returns LargeString;
+    // Replace one employee with another on the same milestone (release + re-allocate).
+    action replaceResourceOnMilestone(projectId: String(20), milestoneId: String(40),
+                            oldEmployeeId: String(10), newEmployeeId: String(10),
+                            allocationPct: Integer, estimatedHours: Decimal(9,2),
+                            allocationType: String(10), role: String(60), billingRate: Decimal(12,2),
                             force: Boolean, overrideReason: String(500))            returns LargeString;
     action getResourceForecast(projectId: String(20), employeeIds: many String(10),
                             months: Integer)                                        returns LargeString;
+    // Time-phased cost summary (Spent/Forecast/Estimated) + allocation-change history.
+    action getProjectCostSummary(projectId: String(20))                           returns LargeString;
     action removeResource(projectId: String(20), employeeId: String(10))          returns LargeString;
 
     // ── Resource Planning & Recommendation (Manager / Founder; POC for recommend) ──

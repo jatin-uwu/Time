@@ -142,8 +142,12 @@ sap.ui.define([
                 this._finCard("Forecasted Profit", inrCompact(f.forecastedProfit)) +
                 this._finCard("Portfolio Margin", (f.portfolioMarginPct || 0) + "%") +
                 this._finCard("Revenue Realized", inrCompact(f.revenueRealized)) +
-                this._finCard("Revenue At Risk", inrCompact(f.revenueAtRisk)) +
-                this._finCard("Cash Collection", (f.cashCollectionPct || 0) + "%") +
+                // ── Time-phased resource budget (enterprise) ──────────────────────
+                this._finCard("Approved Budget", inrCompact(f.approvedBudget != null ? f.approvedBudget : f.executionBudget), "resource execution") +
+                this._finCard("Estimated Cost", inrCompact(f.estimatedCost || 0), "spent + forecast") +
+                this._finCard("Spent Cost", inrCompact(f.spentCost || 0), "historical (frozen)") +
+                this._finCard("Forecast Remaining", inrCompact(f.forecastCost || 0), "future") +
+                this._finCard("Available Budget", inrCompact(f.availableBudget != null ? f.availableBudget : 0), "approved − estimated") +
                 this._finCard("Budget Utilization", (f.budgetUtilizationPct || 0) + "%");
 
             // Health gauge (SVG ring)

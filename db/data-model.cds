@@ -594,6 +594,11 @@ entity Milestone : managed {
     plannedBudget      : Decimal(15, 2) default 0;
     // None | Pending Approval | Approved | Rejected | Rework Required
     approvalStatus     : String(25) default 'None';
+    // ── Milestone planning detail (additive — Planning-First PM workflow) ──────
+    priority           : String(20) default 'Medium';   // Low | Medium | High | Critical
+    completionCriteria : String(1000);                  // definition of done
+    deliverables       : String(1000);                  // expected outputs (free text / list)
+    estimatedEffort    : Decimal(9, 2) default 0;       // planned effort in person-hours
 }
 
 // Finish-to-start dependency: `milestone` cannot start before `predecessor` Completed.
@@ -666,6 +671,9 @@ entity ProjectResource : managed {
     // stays populated (derived) so every existing dashboard/report keeps working.
     estimatedHours   : Decimal(9,2) default 0;       // total hours booked for this allocation
     allocationType   : String(10) default 'Hard';    // Hard (confirmed) | Soft (tentative)
+    // ── Billing (additive) — revenue side, distinct from cost snapshots above ──
+    // PMs may set a client billing rate/hr; cost snapshots stay internal-only.
+    billingRate      : Decimal(12,2) default 0;      // client bill rate/hr for this allocation
     monthlyRows      : Composition of many ResourceMonthlyAllocation on monthlyRows.allocation = $self;
 }
 
@@ -680,7 +688,39 @@ entity ResourceMonthlyAllocation : managed {
     milestone        : Association to Milestone;
     yearMonth        : String(7);                    // "2026-07"
     allocatedHours   : Decimal(9,2) default 0;
+    // ── Time-phased costing (additive) ────────────────────────────────────────
+    // Per-month FROZEN cost. Past months (yearMonth < current) are never rewritten
+    // when the allocation later changes → historical spend stays accurate.
+    allocatedCost    : Decimal(15,2) default 0;      // month hours × loaded hourly rate
+    allocationPct    : Integer default 0;            // that month's allocation % (display)
     allocationType   : String(10) default 'Hard';    // Hard | Soft (mirrors parent)
+}
+
+// Immutable audit of every allocation change (increase/decrease/partial release).
+// One row per change; previous rows are never overwritten. Drives the time-phased
+// reforecast trail and the "who changed what, and the budget impact" audit.
+entity ResourceAllocationHistory : managed {
+    key historyId    : String(70);
+    allocation       : Association to ProjectResource;
+    allocationId     : String(45);                   // denormalised for querying
+    project          : Association to Project;
+    employee         : Association to EmployeeMaster;
+    employeeName     : String(100);
+    milestone        : Association to Milestone;
+    milestoneName    : String(150);
+    effectiveFrom    : Date;
+    effectiveTo      : Date;
+    oldAllocationPct : Integer default 0;
+    newAllocationPct : Integer default 0;
+    monthlyHours     : Decimal(9,2) default 0;       // representative full-month hours
+    spentCost        : Decimal(15,2) default 0;      // frozen historical at time of change
+    forecastCost     : Decimal(15,2) default 0;      // future forecast after change
+    estimatedCost    : Decimal(15,2) default 0;      // spent + forecast
+    budgetImpact     : Decimal(15,2) default 0;      // newEstimated − oldEstimated (± = more/less)
+    changeType       : String(20);                   // Created|Increased|Reduced|Removed|Rephased
+    changedById      : String(10);
+    changedByName    : String(100);
+    changedAt        : Timestamp;
 }
 
 // ── Centralized Resource Planning configuration (singleton, configId='GLOBAL') ──
@@ -848,6 +888,12 @@ entity ProjectResourceRequirement : managed {
     endDate           : Date;
     notes             : String(500);
     status            : String(20) default 'Open';   // Open | Fulfilled | Cancelled
+    // ── Skill/experience planning detail (additive — Planning-First workflow) ──
+    // roleCategory above serves as "Role"; these enrich the demand definition.
+    skillCategory     : String(100);                 // e.g. Backend, Frontend, Cloud
+    skills            : String(500);                 // comma-separated required skills
+    experienceRange   : String(40);                  // e.g. "3-5 yrs" | "Senior (8+)"
+    allocationPct     : Integer default 100;         // planned per-head allocation %
 }
 
 // A task that belongs to a project (cannot exist without one). Separate from the

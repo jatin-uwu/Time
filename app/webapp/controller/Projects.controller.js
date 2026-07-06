@@ -231,13 +231,14 @@ sap.ui.define([
                     "<td style='text-align:right;color:#d97706'>" + self._pmMoney(consumed) + "</td><td style='text-align:right;color:#16a34a'>" + self._pmMoney(rem) + "</td>" +
                     "<td style='text-align:right;color:#6b7280'>" + pct + "%</td></tr>";
             }).join("") : "<tr><td colspan='5'>" + this._pmEmpty("wallet", "No department allocation set yet.") + "</td></tr>";
-            var budgetPanel = "<div class='pmPanel pmSpan2'><div class='pmPanelHead'>Budget</div>" +
+            var budgetPanel = "<div class='pmPanel pmSpan2'><div class='pmPanelHead'>Budget · Time-Phased</div>" +
                 "<div class='pmMiniStats pmBudgetStats'>" +
                 "<div><span>Approved</span><b>" + this._pmMoney(b.approved) + "</b></div>" +
-                "<div><span>Committed</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + this._pmMoney(b.committed != null ? b.committed : b.utilized) + "</b></div>" +
-                "<div><span>Remaining</span><b style='color:#16a34a'>" + this._pmMoney(b.remaining) + "</b></div>" +
-                "<div><span>Utilization</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + b.utilizationPct + "%</b></div>" +
-                (b.actualSpend != null ? "<div><span>Actual Spend</span><b style='color:#64748b'>" + this._pmMoney(b.actualSpend) + "</b></div>" : "") + "</div>" +
+                "<div><span>Spent</span><b style='color:#64748b'>" + this._pmMoney(b.spent != null ? b.spent : 0) + "</b></div>" +
+                "<div><span>Forecast</span><b style='color:#2563eb'>" + this._pmMoney(b.forecast != null ? b.forecast : 0) + "</b></div>" +
+                "<div><span>Estimated</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + this._pmMoney(b.estimated != null ? b.estimated : b.utilized) + "</b></div>" +
+                "<div><span>Available</span><b style='color:#16a34a'>" + this._pmMoney(b.available != null ? b.available : b.remaining) + "</b></div>" +
+                "<div><span>Utilization</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + b.utilizationPct + "%</b></div>" + "</div>" +
                 "<div class='pmProgTrack'><div class='pmProgFill' style='width:" + Math.min(100, b.utilizationPct) + "%;background:" + this._pmUtilColor(b.utilizationPct) + "'></div></div>" +
                 "<table class='pmMiniTable'><thead><tr><th>Department / Module</th><th style='text-align:right'>Allocated</th><th style='text-align:right'>Consumed</th><th style='text-align:right'>Remaining</th><th style='text-align:right'>%</th></tr></thead><tbody>" + deptRows + "</tbody></table></div>";
 
@@ -327,8 +328,7 @@ sap.ui.define([
                     ? "<div class='pmLcNotice'>Resource allocation will be unlocked once the Founder completes the planning meeting and allocates the budget.</div>"
                     : "";
                 var resHead = "<div class='pmPanelHead'>Resources <span class='pmCount'>" + resCount + "</span>" +
-                    (canAllocate ? " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onAllocateByMilestone()\">＋ Allocate by Hours</button>" : "") +
-                    (canAllocate ? " <button class='pmBtn ghost sm' onclick=\"window._projCtrl.onAllocate()\">Manage (FTE)</button>" : "") +
+                    (canAllocate ? " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onAllocateByMilestone()\">＋ Allocate to Milestone</button>" : "") +
                     " <button class='pmBtn ghost sm' onclick=\"window._projCtrl.onResourceForecast()\">Capacity Forecast</button></div>";
                 var msList = d.milestones || [];
                 var resRows = (d.resources || []).map(function (r) {
@@ -344,9 +344,12 @@ sap.ui.define([
                         }).join("");
                         msCell = "<select class='pmSelect' onchange=\"window._projCtrl.onResMilestone('" + esc(r.employeeId) + "', this.value, " + (r.bandwidth || 0) + ")\">" + opts + "</select>";
                     } else { msCell = r.milestoneName ? esc(r.milestoneName) : "<span class='pmMuted'>Project-level</span>"; }
+                    var replaceBtn = (canAllocate && r.milestoneId)
+                        ? "<button class='pmLink' onclick=\"window._projCtrl.onReplaceRes('" + esc(r.employeeId) + "','" + esc(r.employeeName) + "','" + esc(r.milestoneId) + "','" + esc(r.milestoneName || "") + "'," + (r.bandwidth || 0) + ")\">Replace</button> "
+                        : "";
                     return "<tr><td>" + esc(r.employeeName) + " <b style='color:" + uc + "'>(" + u + "%)</b>" + ovr + "</td>" +
                         "<td>" + esc(r.department) + "</td><td>" + rpm + "</td><td>" + msCell + "</td><td><b>" + r.bandwidth + "%</b></td>" +
-                        (canAllocate ? "<td><button class='pmLink danger' onclick=\"window._projCtrl.onRemoveRes('" + esc(r.employeeId) + "','" + esc(r.employeeName) + "')\">Deallocate</button></td>" : "<td></td>") + "</tr>";
+                        (canAllocate ? "<td>" + replaceBtn + "<button class='pmLink danger' onclick=\"window._projCtrl.onRemoveRes('" + esc(r.employeeId) + "','" + esc(r.employeeName) + "')\">Deallocate</button></td>" : "<td></td>") + "</tr>";
                 }).join("");
                 body = "<div class='pmPanel'>" + resHead + lcNotice +
                     (resRows ? "<table class='pmTable'><thead><tr><th>Employee</th><th>Dept</th><th>Role · Phase · Module</th><th>Milestone</th><th>This Project</th><th></th></tr></thead><tbody>" + resRows + "</tbody></table>"
@@ -760,6 +763,11 @@ sap.ui.define([
                 "<div><label class='pmFLbl'>Owner</label><select class='pmFInput' id='msOwner'>" + ownerOpts + "</select></div></div>" +
                 "<div class='pmFRow'><div><label class='pmFLbl'>Progress Mode</label><select class='pmFInput' id='msMode'>" + modeOpts + "</select></div>" +
                 "<div><label class='pmFLbl'>Planned Budget (₹)</label><input type='number' min='0' step='1' class='pmFInput' id='msBudget' value='" + (existing.plannedBudget || 0) + "'/></div></div>" +
+                "<div class='pmFRow'><div><label class='pmFLbl'>Priority</label><select class='pmFInput' id='msPriority'>" +
+                ["Low", "Medium", "High", "Critical"].map(function (p) { return "<option value='" + p + "'" + ((existing.priority || "Medium") === p ? " selected" : "") + ">" + p + "</option>"; }).join("") +
+                "</select></div><div><label class='pmFLbl'>Estimated Effort (hrs)</label><input type='number' min='0' step='1' class='pmFInput' id='msEffort' value='" + (existing.estimatedEffort || 0) + "'/></div></div>" +
+                "<label class='pmFLbl'>Completion Criteria</label><textarea class='pmFInput' id='msCrit2' rows='2' placeholder='Definition of done for this milestone'>" + esc(existing.completionCriteria || "") + "</textarea>" +
+                "<label class='pmFLbl'>Deliverables</label><textarea class='pmFInput' id='msDeliv' rows='2' placeholder='Expected outputs (comma-separated or one per line)'>" + esc(existing.deliverables || "") + "</textarea>" +
                 "<div class='pmTypeToggle'><label><input type='checkbox' id='msCrit'" + (existing.isCritical ? " checked" : "") + "/> Critical path</label>" +
                 "<label><input type='checkbox' id='msBill'" + (existing.isBillable !== false ? " checked" : "") + "/> Billable</label></div>" +
                 (isEdit ? "<label class='pmFLbl'>Remarks</label><textarea class='pmFInput' id='msRemarks' rows='2'>" + esc(existing.remarks || "") + "</textarea>" : "") +
@@ -785,7 +793,11 @@ sap.ui.define([
                     isCritical: ov.querySelector("#msCrit").checked, isBillable: ov.querySelector("#msBill").checked,
                     plannedBudget: parseFloat(ov.querySelector("#msBudget").value) || 0,
                     progressMode: ov.querySelector("#msMode").value,
-                    sequence: seqVal === "" ? null : parseInt(seqVal, 10)
+                    sequence: seqVal === "" ? null : parseInt(seqVal, 10),
+                    priority: ov.querySelector("#msPriority").value,
+                    estimatedEffort: parseFloat(ov.querySelector("#msEffort").value) || 0,
+                    completionCriteria: (ov.querySelector("#msCrit2").value || "").trim(),
+                    deliverables: (ov.querySelector("#msDeliv").value || "").trim()
                 };
                 if (isEdit) { params.milestoneId = milestoneId; params.remarks = (ov.querySelector("#msRemarks").value || "").trim(); }
                 else { params.projectId = pid; }
@@ -1042,8 +1054,14 @@ sap.ui.define([
             var rows = reqs.map(function (x) {
                 var hier = [x.departmentName, x.roleCategoryName, x.specializationName].filter(Boolean).map(esc).join(" › ");
                 var window = (x.startDate || "—") + " → " + (x.endDate || "—");
-                return "<tr><td><b>" + hier + "</b>" + (x.notes ? "<div class='pmMuted' style='font-size:0.72rem'>" + esc(x.notes) + "</div>" : "") + "</td>" +
-                    "<td style='text-align:center'><b>" + (x.requiredCount || 0) + "</b></td>" +
+                var meta = [x.skillCategory, x.experienceRange].filter(Boolean).map(esc).join(" · ");
+                var skillTags = (x.skills || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean)
+                    .map(function (s) { return "<span class='pmTag'>" + esc(s) + "</span>"; }).join(" ");
+                return "<tr><td><b>" + hier + "</b>" +
+                    (meta ? "<div class='pmMuted' style='font-size:0.72rem'>" + meta + "</div>" : "") +
+                    (skillTags ? "<div style='margin-top:3px'>" + skillTags + "</div>" : "") +
+                    (x.notes ? "<div class='pmMuted' style='font-size:0.72rem'>" + esc(x.notes) + "</div>" : "") + "</td>" +
+                    "<td style='text-align:center'><b>" + (x.requiredCount || 0) + "</b>" + (x.allocationPct ? "<div class='pmMuted' style='font-size:0.68rem'>@ " + x.allocationPct + "%</div>" : "") + "</td>" +
                     "<td style='text-align:center'>" + (x.requiredHours || 0) + " h</td>" +
                     "<td>" + esc(window) + "</td>" +
                     "<td>" + that._statusChip(x.status || "Open") + "</td>" +
@@ -1066,8 +1084,13 @@ sap.ui.define([
                 "<label class='pmFLbl'>Department *</label><select class='pmFInput' id='rqDept'>" + deptOpts + "</select>" +
                 "<label class='pmFLbl'>Role Category</label><select class='pmFInput' id='rqRole'><option value=''>— Any —</option></select>" +
                 "<label class='pmFLbl'>Specialization</label><select class='pmFInput' id='rqSpec'><option value=''>— Any —</option></select>" +
+                "<div class='pmFRow'><div><label class='pmFLbl'>Skill Category</label><input type='text' class='pmFInput' id='rqSkillCat' placeholder='e.g. Backend, Cloud'/></div>" +
+                "<div><label class='pmFLbl'>Experience Range</label><input type='text' class='pmFInput' id='rqExp' placeholder='e.g. 3-5 yrs'/></div></div>" +
+                "<label class='pmFLbl'>Required Skills</label><input type='text' class='pmFInput' id='rqSkills' placeholder='Comma-separated, e.g. Node.js, CAP, SQL'/>" +
                 "<div class='pmFRow'><div><label class='pmFLbl'>Required Count</label><input type='number' min='1' step='1' class='pmFInput' id='rqCount' value='1'/></div>" +
                 "<div><label class='pmFLbl'>Required Hours</label><input type='number' min='0' step='1' class='pmFInput' id='rqHours' value='0'/></div></div>" +
+                "<div class='pmFRow'><div><label class='pmFLbl'>Allocation % (per head)</label><input type='number' min='1' max='100' step='5' class='pmFInput' id='rqAllocPct' value='100'/></div>" +
+                "<div></div></div>" +
                 "<div class='pmFRow'><div><label class='pmFLbl'>Start Date</label><input type='date' class='pmFInput' id='rqStart'/></div>" +
                 "<div><label class='pmFLbl'>End Date</label><input type='date' class='pmFInput' id='rqEnd'/></div></div>" +
                 "<label class='pmFLbl'>Notes</label><textarea class='pmFInput' id='rqNotes' rows='2'></textarea>" +
@@ -1100,6 +1123,10 @@ sap.ui.define([
                     roleCategoryId: roleSel.value || null, specializationId: specSel.value || null,
                     requiredCount: parseInt(ov.querySelector("#rqCount").value, 10) || 1,
                     requiredHours: parseFloat(ov.querySelector("#rqHours").value) || 0,
+                    skillCategory: (ov.querySelector("#rqSkillCat").value || "").trim(),
+                    skills: (ov.querySelector("#rqSkills").value || "").trim(),
+                    experienceRange: (ov.querySelector("#rqExp").value || "").trim(),
+                    allocationPct: parseInt(ov.querySelector("#rqAllocPct").value, 10) || 100,
                     startDate: ov.querySelector("#rqStart").value || null, endDate: ov.querySelector("#rqEnd").value || null,
                     notes: (ov.querySelector("#rqNotes").value || "").trim()
                 }).then(function (res) {
@@ -1206,6 +1233,63 @@ sap.ui.define([
                     MessageToast.show("Resource deallocated."); that._open(pid);
                 }).catch(function () { close(); MessageToast.show("Could not deallocate."); });
             });
+        },
+
+        // ── Replace an employee on a milestone (release + re-allocate) ──────────
+        onReplaceRes: function (oldEmpId, oldEmpName, milestoneId, milestoneName, bandwidth) {
+            var that = this, pid = this._detail.project.projectId;
+            ppost("getAllocatableEmployees", { projectId: pid }).then(function (d) {
+                if (d && d.error) { MessageToast.show(d.error); return; }
+                var emps = [];
+                if (d.departments && d.departments.length) d.departments.forEach(function (g) { (g.employees || []).forEach(function (e) { emps.push(e); }); });
+                else if (d.employees) emps = d.employees;
+                emps = emps.filter(function (e) { return e.employeeId !== oldEmpId; });
+                emps.sort(function (a, b) { return (a.employeeName || "").localeCompare(b.employeeName || ""); });
+                if (!emps.length) { MessageToast.show("No alternative employees available to replace with."); return; }
+                var empOpts = emps.map(function (e) { return "<option value='" + esc(e.employeeId) + "'>" + esc(e.employeeName) + " · " + esc(e.department || e.specializationName || "") + "</option>"; }).join("");
+                var ov = document.createElement("div"); ov.className = "pmOverlay";
+                ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>Replace Employee</div>" +
+                    "<div class='pmDialogBody'>" +
+                    "<p class='pmMuted'>Replacing <b>" + esc(oldEmpName) + "</b> on milestone <b>" + esc(milestoneName || milestoneId) + "</b>. " +
+                    "Their past spend is preserved; the incoming employee inherits the same allocation % (" + (bandwidth || 0) + "%) unless overridden.</p>" +
+                    "<label class='pmLbl'>Replace With</label><select id='rpEmp' class='pmSelect wide'>" + empOpts + "</select>" +
+                    "<label class='pmLbl'>Allocation % <span class='pmMuted'>(blank = keep " + (bandwidth || 0) + "%)</span></label>" +
+                    "<input id='rpPct' type='number' min='1' max='100' step='5' class='pmInput' placeholder='" + (bandwidth || 0) + "'/>" +
+                    "<label class='pmLbl'>Allocation Type</label>" +
+                    "<div class='amTypeRow'><label class='amRadio'><input type='radio' name='rpType' value='Hard' checked/> Hard</label>" +
+                    "<label class='amRadio'><input type='radio' name='rpType' value='Soft'/> Soft</label></div>" +
+                    "<div id='rpErr' class='pmErr' style='display:none'></div>" +
+                    "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>Replace</button></div></div>";
+                document.body.appendChild(ov);
+                var close = function () { ov.remove(); };
+                var $ = function (s) { return ov.querySelector(s); };
+                ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+                $("#pmCancel").addEventListener("click", close);
+                var save = function (force, reason) {
+                    var err = $("#rpErr");
+                    var payload = {
+                        projectId: pid, milestoneId: milestoneId, oldEmployeeId: oldEmpId, newEmployeeId: $("#rpEmp").value,
+                        allocationType: (ov.querySelector("input[name='rpType']:checked") || {}).value || "Hard",
+                        force: !!force, overrideReason: reason || ""
+                    };
+                    var pctV = parseFloat($("#rpPct").value);
+                    if (pctV > 0) payload.allocationPct = pctV;
+                    var btn = $("#pmSave"); btn.disabled = true; btn.textContent = "Replacing…";
+                    ppost("replaceResourceOnMilestone", payload).then(function (res) {
+                        btn.disabled = false; btn.textContent = "Replace";
+                        if (res && (res.overallocation || res.budgetOverrun)) {
+                            var r = window.prompt(res.error + "\n\nEnter an override reason to proceed (or Cancel):", "");
+                            if (r) save(true, r);
+                            return;
+                        }
+                        if (res && res.error) { err.style.display = "block"; err.textContent = res.error; return; }
+                        close();
+                        MessageToast.show("Replaced " + (res.outgoingEmployee || oldEmpName) + (res.spentPreserved ? " · ₹" + Number(res.spentPreserved).toLocaleString("en-IN") + " spend preserved" : ""));
+                        that._open(pid);
+                    }).catch(function () { btn.disabled = false; btn.textContent = "Replace"; err.style.display = "block"; err.textContent = "Could not replace — please try again."; });
+                };
+                $("#pmSave").addEventListener("click", function () { save(false, ""); });
+            }).catch(function () { MessageToast.show("Could not load employees."); });
         },
 
         // Show the deallocation-blocked reason + the open tasks to reassign/close.
@@ -1327,7 +1411,21 @@ sap.ui.define([
         onAllocateByMilestone: function () {
             var that = this, pid = this._detail.project.projectId;
             var msList = (this._detail.milestones || []);
-            if (!msList.length) { MessageToast.show("Add project milestones first — hours are allocated against a milestone."); return; }
+            if (!msList.length) { MessageToast.show("Add project milestones first — resources are allocated against a milestone."); this.onTab("milestones"); return; }
+            // ── Planning-first gate: Resource Requirements must exist before staffing.
+            ppost("getResourceRequirements", { projectId: pid }).then(function (rq) {
+                var reqs = (rq && (rq.requirements || rq.grouped || rq)) || [];
+                var hasReq = Array.isArray(rq && rq.requirements) ? rq.requirements.length > 0 : (Array.isArray(reqs) ? reqs.length > 0 : false);
+                if (!hasReq) {
+                    MessageToast.show("Define at least one Resource Requirement before allocating employees. Planning must precede staffing.");
+                    that.onTab("requirements");
+                    return;
+                }
+                that._openMilestoneAllocationModal(pid, msList);
+            }).catch(function () { that._openMilestoneAllocationModal(pid, msList); });
+        },
+        _openMilestoneAllocationModal: function (pid, msList) {
+            var that = this;
             ppost("getAllocatableEmployees", { projectId: pid }).then(function (d) {
                 if (d && d.error) { MessageToast.show(d.error); return; }
                 // Flatten employees whether grouped by department or a flat list.
@@ -1349,10 +1447,15 @@ sap.ui.define([
                     "<label class='pmLbl'>Employee</label><select id='amEmp' class='pmSelect wide'>" + empOpts + "</select>" +
                     "<label class='pmLbl'>Milestone</label><select id='amMs' class='pmSelect wide'>" + msOpts + "</select>" +
                     "<div class='pmMuted' id='amWin' style='margin:2px 0 8px'></div>" +
-                    "<label class='pmLbl'>Estimated Hours</label><input id='amHrs' type='number' min='1' step='1' class='pmInput' placeholder='e.g. 60'/>" +
+                    "<div class='amBasisRow'><label class='amRadio'><input type='radio' name='amBasis' value='pct' checked/> By Allocation %</label>" +
+                    "<label class='amRadio'><input type='radio' name='amBasis' value='hours'/> By Total Hours</label></div>" +
+                    "<div id='amPctBox'><label class='pmLbl'>Monthly Allocation %</label><input id='amPct' type='number' min='1' max='100' step='5' class='pmInput' placeholder='e.g. 50'/>" +
+                    "<div class='pmMuted' style='margin-top:2px'>Cost per month = employee monthly cost × %. Past months are frozen; only current &amp; future months are re-forecast.</div></div>" +
+                    "<div id='amHrsBox' style='display:none'><label class='pmLbl'>Estimated Hours (total)</label><input id='amHrs' type='number' min='1' step='1' class='pmInput' placeholder='e.g. 60'/></div>" +
                     "<label class='pmLbl'>Allocation Type</label>" +
                     "<div class='amTypeRow'><label class='amRadio'><input type='radio' name='amType' value='Hard' checked/> Hard <span class='pmMuted'>(confirmed, consumes capacity)</span></label>" +
                     "<label class='amRadio'><input type='radio' name='amType' value='Soft'/> Soft <span class='pmMuted'>(tentative reservation)</span></label></div>" +
+                    "<label class='pmLbl'>Client Billing Rate (₹/hr) <span class='pmMuted'>optional</span></label><input id='amBill' type='number' min='0' step='1' class='pmInput' placeholder='e.g. 120'/>" +
                     "<div id='amPreview' class='amPreview'></div>" +
                     "<div id='amErr' class='pmErr' style='display:none'></div>" +
                     "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>Allocate</button></div></div>";
@@ -1361,15 +1464,30 @@ sap.ui.define([
                 var $ = function (s) { return ov.querySelector(s); };
                 var showWin = function () { var o = $("#amMs").selectedOptions[0]; $("#amWin").textContent = o ? ("Window: " + o.getAttribute("data-win")) : ""; };
                 $("#amMs").addEventListener("change", showWin); showWin();
+                var applyBasis = function () {
+                    var b = (ov.querySelector("input[name='amBasis']:checked") || {}).value || "pct";
+                    $("#amPctBox").style.display = b === "pct" ? "block" : "none";
+                    $("#amHrsBox").style.display = b === "hours" ? "block" : "none";
+                };
+                ov.querySelectorAll("input[name='amBasis']").forEach(function (r) { r.addEventListener("change", applyBasis); }); applyBasis();
                 ov.querySelector("#pmCancel").addEventListener("click", close);
                 var save = function (force, reason) {
                     var employeeId = $("#amEmp").value, milestoneId = $("#amMs").value;
-                    var hrs = parseFloat($("#amHrs").value) || 0;
+                    var basis = (ov.querySelector("input[name='amBasis']:checked") || {}).value || "pct";
                     var type = (ov.querySelector("input[name='amType']:checked") || {}).value || "Hard";
                     var err = $("#amErr");
-                    if (hrs <= 0) { err.style.display = "block"; err.textContent = "Enter estimated hours greater than 0."; return; }
+                    var payload = { projectId: pid, employeeId: employeeId, milestoneId: milestoneId, allocationType: type, billingRate: parseFloat($("#amBill").value) || 0, force: !!force, overrideReason: reason || "" };
+                    if (basis === "pct") {
+                        var pctV = parseFloat($("#amPct").value) || 0;
+                        if (pctV <= 0 || pctV > 100) { err.style.display = "block"; err.textContent = "Enter an allocation % between 1 and 100."; return; }
+                        payload.allocationPct = pctV;
+                    } else {
+                        var hrs = parseFloat($("#amHrs").value) || 0;
+                        if (hrs <= 0) { err.style.display = "block"; err.textContent = "Enter estimated hours greater than 0."; return; }
+                        payload.estimatedHours = hrs;
+                    }
                     var btn = ov.querySelector("#pmSave"); btn.disabled = true; btn.textContent = "Allocating…";
-                    ppost("allocateResourceToMilestone", { projectId: pid, employeeId: employeeId, milestoneId: milestoneId, estimatedHours: hrs, allocationType: type, force: !!force, overrideReason: reason || "" })
+                    ppost("allocateResourceToMilestone", payload)
                         .then(function (res) {
                             btn.disabled = false; btn.textContent = "Allocate";
                             // Capacity or budget over-allocation → confirm with an override reason.
@@ -1380,8 +1498,11 @@ sap.ui.define([
                             }
                             if (res && res.error) { err.style.display = "block"; err.textContent = res.error; return; }
                             close();
-                            var costMsg = (res && res.cost) ? (" · Cost ₹" + Number(res.cost).toLocaleString("en-IN") + " · Remaining ₹" + Number(res.remainingBudget || 0).toLocaleString("en-IN")) : "";
-                            MessageToast.show("Allocated " + hrs + "h. Monthly plan generated." + costMsg);
+                            var inr = function (n) { return "₹" + Number(n || 0).toLocaleString("en-IN"); };
+                            var impact = (res && res.budgetImpact != null) ? (res.budgetImpact >= 0 ? " · +" + inr(res.budgetImpact) + " forecast" : " · " + inr(res.budgetImpact) + " released") : "";
+                            var msg = (res && res.changeType ? res.changeType : "Allocated") + " " + (res.allocationPct != null ? res.allocationPct + "%" : "") +
+                                " · Spent " + inr(res.spent) + " + Forecast " + inr(res.forecast) + " = " + inr(res.estimated) + impact;
+                            MessageToast.show(msg);
                             that._open(pid);
                         }).catch(function () { btn.disabled = false; btn.textContent = "Allocate"; err.style.display = "block"; err.textContent = "Could not allocate — please try again."; });
                 };
