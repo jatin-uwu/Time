@@ -138,7 +138,6 @@
                 { "name": "pm-dashboard", "pattern": "pm-dashboard/{projectId}", "target": "pm-dashboard" },
                 { "name": "meetings", "pattern": "meetings", "target": "meetings" },
                 { "name": "salary-master", "pattern": "salary-master", "target": "salary-master" },
-                { "name": "resource-planning", "pattern": "resource-planning", "target": "resource-planning" },
                 { "name": "resource-settings", "pattern": "resource-settings", "target": "resource-settings" },
                 { "name": "client-portal", "pattern": "client-portal", "target": "client-portal" }
             ],

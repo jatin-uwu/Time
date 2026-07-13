@@ -177,6 +177,8 @@ const CERT_MASTER = 'ccentrik.employee.timesheet.schema.timesheet.CertificationM
 const EMP_SKILL = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeSkill';
 const EMP_CERT = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeCertification';
 const PROJ_REQ = 'ccentrik.employee.timesheet.schema.timesheet.ProjectResourceRequirement';
+const MS_RESOURCE = 'ccentrik.employee.timesheet.schema.timesheet.MilestoneResourceRequirement';
+const MS_RESOURCE_AUDIT = 'ccentrik.employee.timesheet.schema.timesheet.MilestoneResourceAudit';
 
 // Default hierarchical seed — SAP fully fleshed out per spec; other departments get
 // a sensible starter set. Idempotent: only inserts rows that don't already exist, so
@@ -409,6 +411,12 @@ function milestoneStatus(m, progressPct, todayStr) {
 }
 const daysBetween = (aStr, bStr) => Math.round((new Date(aStr) - new Date(bStr)) / 86400000);
 const PROJECT_TASK = 'ccentrik.employee.timesheet.schema.timesheet.ProjectTask';
+const SPRINT = 'ccentrik.employee.timesheet.schema.timesheet.Sprint';
+const WORK_ITEM_COMMENT = 'ccentrik.employee.timesheet.schema.timesheet.WorkItemComment';
+// Kanban columns (work-item statuses). Existing 'Not Started' maps to 'To Do'.
+const SPRINT_STATUSES = ['To Do', 'In Progress', 'In Review', 'Testing', 'Done'];
+const WORK_ITEM_TYPES = ['Epic', 'Story', 'Task', 'Bug', 'Subtask', 'Spike'];
+const SPRINT_TERMINAL = ['Completed', 'Cancelled'];
 const PROJECT_AUDIT = 'ccentrik.employee.timesheet.schema.timesheet.ProjectAuditLog';
 const SALARY_MASTER = 'ccentrik.employee.timesheet.schema.timesheet.EmployeeSalaryMaster';
 const PROJECT_ISSUE = 'ccentrik.employee.timesheet.schema.timesheet.ProjectIssue';
@@ -4166,6 +4174,181 @@ async function nextProjectTaskId(projectId) {
     (rows || []).forEach(r => { const m = /-T-(\d+)$/.exec(r.taskId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
     return `${projectId}-T-${String(max + 1).padStart(3, '0')}`;
 }
+// Monday of the ISO week containing dateStr (YYYY-MM-DD) — timesheet week key.
+// UTC-based to avoid a local-timezone shift when serialising back to a date string.
+function weekStartMonday(dateStr) {
+    const d = new Date(String(dateStr).slice(0, 10) + 'T00:00:00Z');
+    if (isNaN(d)) return String(dateStr).slice(0, 10);
+    const day = d.getUTCDay();              // 0=Sun … 6=Sat
+    d.setUTCDate(d.getUTCDate() + (day === 0 ? -6 : 1 - day));
+    return d.toISOString().slice(0, 10);
+}
+// dateStr + n days (UTC), as YYYY-MM-DD.
+function addDaysUTC(dateStr, n) {
+    const d = new Date(String(dateStr).slice(0, 10) + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+}
+// Sprints are DIRECT children of a Project (not a milestone): id = <projectId>-S-NNN.
+async function nextSprintId(projectId) {
+    const rows = await SELECT.from(SPRINT).columns('sprintId').where({ project_projectId: projectId });
+    let max = 0;
+    (rows || []).forEach(r => { const m = /-S-(\d+)$/.exec(r.sprintId || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+    return `${projectId}-S-${String(max + 1).padStart(3, '0')}`.slice(0, 45);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CAPACITY & AVAILABILITY ENGINE (Phase 2)
+// Principle: capacity is consumed ONLY by stories/tasks assigned to SPRINTS, never
+// by milestone allocation (that is long-term planning). Availability is computed
+// from ALL overlapping sprint commitments across EVERY project — a single
+// cross-project calculation, not per-project in isolation.
+// ════════════════════════════════════════════════════════════════════════════
+function _d(v) { return v ? new Date(String(v).slice(0, 10) + 'T00:00:00Z') : null; }
+// Inclusive day-overlap between [aS,aE] and [bS,bE].
+function daysOverlapInclusive(aS, aE, bS, bE) {
+    if (!aS || !aE || !bS || !bE) return 0;
+    const s = aS > bS ? aS : bS, e = aE < bE ? aE : bE;
+    if (e < s) return 0;
+    return Math.round((e - s) / 86400000) + 1;
+}
+// Business days in [fromStr,toStr] inclusive, excluding weekends + holidaySet.
+function workingDaysBetween(fromStr, toStr, holidaySet) {
+    const s = _d(fromStr), e = _d(toStr);
+    if (!s || !e || e < s) return 0;
+    let c = 0;
+    for (let d = new Date(s); d <= e; d = new Date(d.getTime() + 86400000)) {
+        const dw = d.getUTCDay();
+        if (dw === 0 || dw === 6) continue;
+        if (holidaySet && holidaySet.has(d.toISOString().slice(0, 10))) continue;
+        c++;
+    }
+    return c;
+}
+// Build a shared capacity context for a date window (loads holidays, leave, events,
+// meetings and cross-project sprint commitments once — then reused per employee).
+async function buildCapacityContext(fromStr, toStr) {
+    const cfg = await rp.loadConfig();
+    const dailyHours = Number(cfg.standardDailyHours) || 8;
+    const s = _d(fromStr), e = _d(toStr);
+    // Holidays in range.
+    const holRows = await SELECT.from(HOLIDAY).columns('holidayDate');
+    const holidaySet = new Set();
+    (holRows || []).forEach(h => { const d = String(h.holidayDate || '').slice(0, 10); if (d) holidaySet.add(d); });
+    // Approved leave grouped by employee.
+    const leaves = await SELECT.from(LEAVE_REQUEST).columns('employee_employeeId', 'fromDate', 'toDate', 'status').where({ status: 'Approved' });
+    const leavesByEmp = {};
+    (leaves || []).forEach(l => { (leavesByEmp[l.employee_employeeId] = leavesByEmp[l.employee_employeeId] || []).push(l); });
+    // Company-wide events (reduce everyone's capacity).
+    const events = await SELECT.from(COMPANY_EVENT).columns('fromDate', 'toDate');
+    // Meetings (internal time) → hours per participant/organizer overlapping window.
+    const meetingHoursByEmp = {};
+    try {
+        const meets = await SELECT.from(MEETING).columns('meetingId', 'organizer_employeeId', 'startDateTime', 'endDateTime', 'status')
+            .where({ status: { in: ['Scheduled', 'Completed'] } });
+        const inWin = (meets || []).filter(m => { const ms = _d(m.startDateTime); return ms && ms >= s && ms <= e; });
+        const parts = inWin.length ? await SELECT.from(MEETING_PARTICIPANT).columns('meeting_meetingId', 'employee_employeeId') : [];
+        const partsByMtg = {}; (parts || []).forEach(p => { (partsByMtg[p.meeting_meetingId] = partsByMtg[p.meeting_meetingId] || []).push(p.employee_employeeId); });
+        inWin.forEach(m => {
+            const durH = (m.startDateTime && m.endDateTime) ? Math.max(0, (new Date(m.endDateTime) - new Date(m.startDateTime)) / 3600000) : 1;
+            const ids = new Set(); if (m.organizer_employeeId) ids.add(m.organizer_employeeId);
+            (partsByMtg[m.meetingId] || []).forEach(id => ids.add(id));
+            ids.forEach(id => { meetingHoursByEmp[id] = (meetingHoursByEmp[id] || 0) + durH; });
+        });
+    } catch (err) { cds.log('capacity').warn('meeting capacity skipped:', err.message || err); }
+    // Cross-project sprint commitments: every task assigned + in a sprint, with the
+    // sprint's dates and the task's remaining hours. Grouped by employee.
+    const tasks = await SELECT.from(PROJECT_TASK).columns('taskId', 'assignedTo_employeeId', 'sprint_sprintId', 'project_projectId', 'estimatedHours', 'actualHours', 'remainingHours', 'status')
+        .where({ sprint_sprintId: { '!=': null }, assignedTo_employeeId: { '!=': null } });
+    const sprintIds = [...new Set((tasks || []).map(t => t.sprint_sprintId).filter(Boolean))];
+    const sprintsById = {};
+    if (sprintIds.length) {
+        const sps = await SELECT.from(SPRINT).columns('sprintId', 'name', 'project_projectId', 'startDate', 'endDate', 'status').where({ sprintId: { in: sprintIds } });
+        (sps || []).forEach(sp => { sprintsById[sp.sprintId] = sp; });
+    }
+    const commitmentsByEmp = {};
+    (tasks || []).forEach(t => {
+        if (String(t.status || '').toLowerCase() === 'completed') return;
+        const sp = sprintsById[t.sprint_sprintId]; if (!sp) return;
+        if (sp.status === 'Completed' || sp.status === 'Cancelled') return;
+        const est = Number(t.estimatedHours) || 0, act = Number(t.actualHours) || 0;
+        const rem = t.remainingHours != null && Number(t.remainingHours) > 0 ? Number(t.remainingHours) : Math.max(0, est - act);
+        (commitmentsByEmp[t.assignedTo_employeeId] = commitmentsByEmp[t.assignedTo_employeeId] || []).push({
+            sprintId: sp.sprintId, sprintName: sp.name, projectId: sp.project_projectId,
+            start: sp.startDate, end: sp.endDate, remaining: Math.round(rem * 100) / 100
+        });
+    });
+    return { cfg, dailyHours, holidaySet, leavesByEmp, events: events || [], meetingHoursByEmp, commitmentsByEmp, winStart: s, winEnd: e };
+}
+// Effective capacity for one employee over the context window.
+function effectiveCapacity(empId, ctx) {
+    const dailyHours = ctx.dailyHours;
+    const wd = workingDaysBetween(ctx.winStart.toISOString().slice(0, 10), ctx.winEnd.toISOString().slice(0, 10), ctx.holidaySet);
+    const gross = wd * dailyHours;
+    let leaveH = 0;
+    (ctx.leavesByEmp[empId] || []).forEach(l => { leaveH += daysOverlapInclusive(ctx.winStart, ctx.winEnd, _d(l.fromDate), _d(l.toDate)) * dailyHours; });
+    let eventH = 0;
+    (ctx.events || []).forEach(ev => { eventH += daysOverlapInclusive(ctx.winStart, ctx.winEnd, _d(ev.fromDate), _d(ev.toDate)) * dailyHours; });
+    const meetingH = ctx.meetingHoursByEmp[empId] || 0;
+    const buffer = gross * (Number(ctx.cfg.nonBillablePct) || 0) / 100;   // training / non-project overhead
+    const eff = Math.max(0, gross - leaveH - eventH - meetingH - buffer);
+    return {
+        workingDays: wd, grossHours: Math.round(gross * 100) / 100,
+        leaveHours: Math.round(leaveH * 100) / 100, eventHours: Math.round(eventH * 100) / 100,
+        meetingHours: Math.round(meetingH * 100) / 100, nonProjectHours: Math.round(buffer * 100) / 100,
+        effectiveHours: Math.round(eff * 100) / 100
+    };
+}
+// Sprint commitments (cross-project) overlapping the window, optionally for a target sprint.
+function sprintCommitments(empId, ctx, targetSprintId) {
+    let total = 0, targetHours = 0; const detail = [];
+    (ctx.commitmentsByEmp[empId] || []).forEach(cm => {
+        if (daysOverlapInclusive(ctx.winStart, ctx.winEnd, _d(cm.start), _d(cm.end)) <= 0) return;
+        total += cm.remaining; detail.push(cm);
+        if (targetSprintId && cm.sprintId === targetSprintId) targetHours += cm.remaining;
+    });
+    return { totalHours: Math.round(total * 100) / 100, targetSprintHours: Math.round(targetHours * 100) / 100, detail };
+}
+function capacityStatus(utilPct) {
+    if (utilPct > 100) return 'Overallocated';
+    if (utilPct >= 85) return 'Fully Loaded';
+    if (utilPct <= 0) return 'Available';
+    return 'Partially Loaded';
+}
+// Normalize any task/work-item status → a Kanban column.
+function normTaskStatus(s) {
+    const x = String(s || '').toLowerCase().trim();
+    if (x === 'done' || x === 'completed' || x === 'completed early') return 'Done';
+    if (x === 'testing' || x === 'qa') return 'Testing';
+    if (x === 'in review' || x === 'review') return 'In Review';
+    if (x === 'in progress' || x === 'inprogress') return 'In Progress';
+    if (x === 'blocked') return 'Blocked';
+    return 'To Do';
+}
+// Sprint rollup from its work items (completion by story points, else by count).
+function sprintMetrics(items) {
+    const m = { total: (items || []).length, done: 0, storyPointsTotal: 0, storyPointsDone: 0,
+        estHours: 0, loggedHours: 0,
+        stories: { total: 0, done: 0 }, tasks: { total: 0, done: 0 }, bugs: { total: 0, done: 0 },
+        byStatus: { 'To Do': 0, 'In Progress': 0, 'In Review': 0, 'Testing': 0, 'Done': 0, 'Blocked': 0 } };
+    (items || []).forEach(t => {
+        const st = normTaskStatus(t.status);
+        m.byStatus[st] = (m.byStatus[st] || 0) + 1;
+        const type = String(t.workItemType || 'Task').toLowerCase();
+        const sp = Number(t.storyPoints) || 0, est = Number(t.estimatedHours) || 0, log = Number(t.actualHours) || 0;
+        const done = st === 'Done';
+        m.storyPointsTotal += sp; m.estHours += est; m.loggedHours += log;
+        if (done) { m.done++; m.storyPointsDone += sp; }
+        const bucket = type === 'story' ? m.stories : type === 'bug' ? m.bugs : m.tasks;
+        bucket.total++; if (done) bucket.done++;
+    });
+    m.remainingHours = Math.max(0, Math.round((m.estHours - m.loggedHours) * 100) / 100);
+    m.storyPointsRemaining = Math.max(0, m.storyPointsTotal - m.storyPointsDone);
+    m.progressPct = m.storyPointsTotal > 0 ? Math.round(m.storyPointsDone / m.storyPointsTotal * 100)
+        : (m.total > 0 ? Math.round(m.done / m.total * 100) : 0);
+    m.estHours = Math.round(m.estHours * 100) / 100; m.loggedHours = Math.round(m.loggedHours * 100) / 100;
+    return m;
+}
 async function nextBudgetRequestId(projectId) {
     const rows = await SELECT.from(PROJECT_BUDGET_REQUEST).columns('requestId').where({ project_projectId: projectId });
     let max = 0;
@@ -4234,6 +4417,60 @@ async function allocationTimePhasedCost(allocationId) {
     let spent = 0, forecast = 0;
     (rows || []).forEach(r => { if (r.allocationType === 'Soft') return; const c = Number(r.allocatedCost) || 0; if (r.yearMonth < curYM) spent += c; else forecast += c; });
     return { spent: Math.round(spent), forecast: Math.round(forecast), estimated: Math.round(spent + forecast) };
+}
+
+// ── Daily money-spent model (milestone-day granularity) ─────────────────────
+// Actual spend is recognized as milestone days elapse (never full-cost on day 1).
+// Fraction of the milestone window elapsed by `today` (inclusive of the current day
+// so day 1 of a 10-day milestone = 0.1). Clamped 0..1.
+function milestoneElapsedFraction(startStr, endStr, todayStr) {
+    if (!startStr || !endStr) return 0;
+    const s = new Date(String(startStr).slice(0, 10)), e = new Date(String(endStr).slice(0, 10)), t = new Date(String(todayStr).slice(0, 10));
+    if (isNaN(s) || isNaN(e)) return 0;
+    if (t < s) return 0;
+    const dur = Math.floor((e - s) / 86400000) + 1;
+    if (dur <= 0) return 1;
+    const elapsed = Math.floor(((t < e ? t : e) - s) / 86400000) + 1;
+    return Math.max(0, Math.min(1, elapsed / dur));
+}
+// Money Spent for one allocation row given its milestone window + today.
+//   spent = frozen + (estimated − frozen) × (elapsedProgress since last snapshot)
+// Past actuals (spentToDate / spentFraction snapshot) are frozen — a later % change
+// only reforecasts the remaining spend. Soft allocations never spend. Cap at estimated.
+function allocationMoneySpent(r, ms, todayStr) {
+    const est = Number(r.totalAllocationCost) || 0;
+    if (est <= 0 || (r.allocationType === 'Soft')) return { estimated: est, spent: 0, remaining: est };
+    const start = (ms && ms.plannedStartDate) || r.startDate;
+    const end = (ms && ms.plannedEndDate) || r.endDate;
+    if (!start || !end) return { estimated: est, spent: Math.min(est, Number(r.spentToDate) || 0), remaining: est - (Number(r.spentToDate) || 0) };
+    const f = milestoneElapsedFraction(start, end, todayStr);
+    const frozen = Math.min(est, Number(r.spentToDate) || 0);
+    const ff = Math.max(0, Math.min(1, Number(r.spentFraction) || 0));
+    let spent;
+    if (f <= ff) spent = frozen;
+    else { const prog = (1 - ff) > 0 ? (f - ff) / (1 - ff) : 1; spent = frozen + (est - frozen) * prog; }
+    spent = Math.max(0, Math.min(est, Math.round(spent)));
+    return { estimated: est, spent, remaining: Math.max(0, est - spent) };
+}
+// Aggregate money-spent for a set of allocation rows sharing (or carrying) milestone dates.
+function sumMoneySpent(rows, msByMilestoneId, todayStr) {
+    let estimated = 0, spent = 0;
+    (rows || []).forEach(r => {
+        const ms = msByMilestoneId ? msByMilestoneId[r.milestone_milestoneId] : null;
+        const v = allocationMoneySpent(r, ms, todayStr);
+        estimated += v.estimated; spent += v.spent;
+    });
+    estimated = Math.round(estimated); spent = Math.round(spent);
+    return { estimated, spent, remaining: Math.max(0, estimated - spent) };
+}
+
+// Project-level Money Spent = Σ daily-accrued spend across all milestone allocations.
+async function projectMoneySpent(projectId) {
+    const rows = await SELECT.from(PROJECT_RESOURCE).columns('milestone_milestoneId', 'totalAllocationCost', 'spentToDate', 'spentFraction', 'allocationType', 'startDate', 'endDate').where({ project_projectId: projectId });
+    const msIds = [...new Set((rows || []).map(r => r.milestone_milestoneId).filter(Boolean))];
+    const mss = msIds.length ? await SELECT.from(MILESTONE).columns('milestoneId', 'plannedStartDate', 'plannedEndDate').where({ milestoneId: { in: msIds } }) : [];
+    const msBy = {}; mss.forEach(m => { msBy[m.milestoneId] = m; });
+    return sumMoneySpent(rows, msBy, new Date().toISOString().slice(0, 10));
 }
 
 async function projectActualCost(projectId) {
@@ -4309,6 +4546,20 @@ async function typeDepartments(projectTypeCode) {
     try {
         const t = await SELECT.one.from(PROJECT_TYPE).columns('departments').where({ code: projectTypeCode || 'OTHER' });
         return JSON.parse((t && t.departments) || '[]') || [];
+    } catch (_) { return []; }
+}
+// Role categories (RoleCategoryMaster) for a project type's departments — the unit
+// budget is allocated to (SAP → Basis/Technical/Functional; Dev → Frontend/Backend/QA).
+async function roleCategoriesForType(projectTypeCode) {
+    try {
+        const depts = await typeDepartments(projectTypeCode);
+        if (!depts.length) return [];
+        const dmasters = await SELECT.from(DEPT_MASTER).columns('deptId', 'name');
+        const idByName = {}; dmasters.forEach(d => { idByName[String(d.name).trim().toLowerCase()] = d.deptId; });
+        const deptIds = depts.map(n => idByName[String(n).trim().toLowerCase()]).filter(Boolean);
+        if (!deptIds.length) return [];
+        const roles = await SELECT.from(ROLE_MASTER).columns('roleId', 'name', 'sortOrder').where({ department_deptId: { in: deptIds }, isActive: true }).orderBy('sortOrder asc', 'name asc');
+        return [...new Set(roles.map(r => r.name))];
     } catch (_) { return []; }
 }
 
@@ -4758,8 +5009,19 @@ class ProjectService extends cds.ApplicationService {
             const ms = await SELECT.from(MILESTONE).where({ project_projectId: projectId }).orderBy('sequence asc', 'plannedStartDate asc');
             if (!ms.length) return { milestones: [], executionBudget };
             const msIds = ms.map(m => m.milestoneId);
-            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'milestone_milestoneId', 'totalAllocationCost').where({ project_projectId: projectId });
-            const tasks = await SELECT.from(PROJECT_TASK).columns('taskId', 'assignedTo_employeeId', 'milestone_milestoneId', 'status', 'estimatedHours', 'actualHours').where({ project_projectId: projectId });
+            const resources = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'milestone_milestoneId', 'totalAllocationCost', 'spentToDate', 'spentFraction', 'allocationType', 'startDate', 'endDate').where({ project_projectId: projectId });
+            const todayStrMS = new Date().toISOString().slice(0, 10);
+            const tasks = await SELECT.from(PROJECT_TASK).columns('taskId', 'assignedTo_employeeId', 'milestone_milestoneId', 'status', 'estimatedHours', 'actualHours', 'sprint_sprintId', 'storyPoints', 'workItemType').where({ project_projectId: projectId });
+            // Sprint-derived milestone progress (when sprints exist for the milestone).
+            const sprintRows = await SELECT.from(SPRINT).columns('sprintId', 'milestone_milestoneId', 'status').where({ project_projectId: projectId });
+            const sprintsByMs = {}; sprintRows.forEach(s => { if (s.status !== 'Cancelled') (sprintsByMs[s.milestone_milestoneId] = sprintsByMs[s.milestone_milestoneId] || []).push(s); });
+            const tasksBySprint = {}; tasks.forEach(t => { if (t.sprint_sprintId) (tasksBySprint[t.sprint_sprintId] = tasksBySprint[t.sprint_sprintId] || []).push(t); });
+            const sprintProgressByMs = {};
+            Object.keys(sprintsByMs).forEach(mid => {
+                const sps = sprintsByMs[mid];
+                const avg = sps.reduce((a, s) => a + sprintMetrics(tasksBySprint[s.sprintId] || []).progressPct, 0) / sps.length;
+                sprintProgressByMs[mid] = Math.round(avg);
+            });
             const taskIds = tasks.map(t => t.taskId);
             const entries = taskIds.length ? await SELECT.from(ENTRY).columns('timesheet_timesheetId', 'projectTask_taskId', 'hoursWorked').where({ projectTask_taskId: { in: taskIds } }) : [];
             const tsIds = [...new Set(entries.map(e => e.timesheet_timesheetId))];
@@ -4787,9 +5049,16 @@ class ProjectService extends cds.ApplicationService {
                 const mid = m.milestoneId;
                 const res = resByMs[mid] || [], mtasks = taskByMs[mid] || [];
                 const allocatedCost = Math.round(res.reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0));
+                // Daily time-based Money Spent (accrues as milestone days elapse; frozen past).
+                const spentAgg = sumMoneySpent(res, { [mid]: m }, todayStrMS);
+                const moneySpent = spentAgg.spent, remainingForecast = Math.max(0, allocatedCost - moneySpent);
                 const actualCost = Math.round(actualCostByMs[mid] || 0);
+                // Progress: when the milestone has sprints, it AUTO-DERIVES from sprint
+                // completion (Sprint tracking wins over manual/task/timesheet modes).
+                const hasSprints = (sprintsByMs[mid] || []).length > 0;
                 let progress = Number(m.progressPct) || 0;
-                if (m.progressMode === 'task') progress = projectProgress(mtasks);
+                if (hasSprints) progress = sprintProgressByMs[mid] || 0;
+                else if (m.progressMode === 'task') progress = projectProgress(mtasks);
                 else if (m.progressMode === 'timesheet') { const est = mtasks.reduce((s, t) => s + (Number(t.estimatedHours) || 0), 0); progress = est > 0 ? Math.min(100, Math.round((actualHrsByMs[mid] || 0) / est * 100)) : 0; }
                 const effStatus = milestoneStatus(m, progress, today);
                 statusById[mid] = effStatus;
@@ -4801,9 +5070,14 @@ class ProjectService extends cds.ApplicationService {
                 return {
                     milestoneId: mid, name: m.name, description: m.description || '', sequence: m.sequence || 0,
                     plannedStartDate: m.plannedStartDate, plannedEndDate: m.plannedEndDate, actualStartDate: m.actualStartDate, actualEndDate: m.actualEndDate,
-                    status: effStatus, storedStatus: m.status, progressPct: progress, progressMode: m.progressMode || 'manual',
+                    status: effStatus, storedStatus: m.status, progressPct: progress, progressMode: hasSprints ? 'sprint' : (m.progressMode || 'manual'),
+                    sprintTracked: hasSprints, sprintCount: (sprintsByMs[mid] || []).length,
                     ownerId: m.owner_employeeId || '', ownerName: m.ownerName || '', remarks: m.remarks || '',
                     isCritical: m.isCritical === true, isBillable: m.isBillable !== false, approvalStatus: m.approvalStatus || 'None',
+                    priority: m.priority || 'Medium', completionCriteria: m.completionCriteria || '', deliverables: m.deliverables || '', estimatedEffort: Number(m.estimatedEffort) || 0,
+                    exceedsResourcePlan: m.exceedsResourcePlan === true || m.exceedsResourcePlan === 1,
+                    // Three financial values (daily model): Estimated / Money Spent / Remaining Forecast.
+                    estimatedCost: allocatedCost, moneySpent, remainingForecast,
                     plannedBudget, allocatedCost, actualCost, forecastCost, remainingBudget: Math.round(plannedBudget - actualCost), budgetVariance: Math.round(plannedBudget - forecastCost),
                     taskCount: mtasks.length, resourceCount: new Set(res.map(r => r.employee_employeeId)).size, delayDays, earlyDays,
                     dependencies: (depByMs[mid] || []).map(d => ({ dependencyId: d.dependencyId, predecessorId: d.predecessor_milestoneId, predecessorName: nameById[d.predecessor_milestoneId] || d.predecessor_milestoneId }))
@@ -5017,6 +5291,9 @@ class ProjectService extends cds.ApplicationService {
             const m = await SELECT.one.from(MILESTONE).where({ milestoneId: req.data.milestoneId });
             if (!m) return JSON.stringify({ error: 'Milestone not found.' });
             const acc = await msAccess(req, c, m.project_projectId); if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            // Sprint tracking owns milestone progress — block manual overrides once sprints exist.
+            const sprintCount = (await SELECT.from(SPRINT).columns('sprintId').where({ milestone_milestoneId: req.data.milestoneId, status: { '<>': 'Cancelled' } })).length;
+            if (sprintCount > 0) return JSON.stringify({ error: 'Milestone progress is tracked automatically from its sprints and cannot be set manually.' });
             const pct = Math.max(0, Math.min(100, Number(req.data.progressPct) || 0));
             const set = { progressPct: pct, progressMode: 'manual' };
             if (pct > 0 && !m.actualStartDate) set.actualStartDate = new Date().toISOString().slice(0, 10);
@@ -5138,20 +5415,75 @@ class ProjectService extends cds.ApplicationService {
             catch (e) { return JSON.stringify({ error: 'Could not load resource hierarchy.' }); }
         });
 
+        // Skill / category autocomplete for the requirement form — reuses the SAME
+        // company taxonomy engine (searchTaxonomy) used by HR employee profiles, so
+        // Requirements and Employee skills stay standardized on one source of truth.
+        this.on('skillSuggest', async (req) => {
+            const d = req.data || {};
+            const scope = d.roleId || d.departmentId || null;   // module→role, role→dept, skill→none
+            try { return JSON.stringify(await searchTaxonomy(d.type, d.q, scope)); }
+            catch (e) { return JSON.stringify({ suggestions: [] }); }
+        });
+
         this.on('getResourceRequirements', async (req) => {
             const c = await projectCaller(req);
             const acc = await msAccess(req, c, req.data.projectId);
             if (acc.error) return JSON.stringify({ error: acc.error });
             const rows = await SELECT.from(PROJ_REQ).where({ project_projectId: req.data.projectId }).orderBy('createdAt asc');
-            return JSON.stringify({
-                requirements: rows.map(r => ({
+            // Project-type department(s) → drives the "SAP auto-default" in the form.
+            const proj = await SELECT.one.from(PROJECT).columns('projectType_code').where({ projectId: req.data.projectId });
+            const projectDepartments = await typeDepartments(proj && proj.projectType_code);
+
+            // ── Allocation counts per role (reuse existing ProjectResource data) ──
+            const allocRows = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId').where({ project_projectId: req.data.projectId });
+            const allocEmpIds = [...new Set((allocRows || []).map(r => r.employee_employeeId))];
+            const allocEmps = allocEmpIds.length ? await SELECT.from(EMPLOYEE).columns('employeeId', 'roleCategory_roleId', 'department').where({ employeeId: { in: allocEmpIds } }) : [];
+            const allocByRole = {}; const allocByDept = {};
+            allocEmps.forEach(e => {
+                if (e.roleCategory_roleId) allocByRole[e.roleCategory_roleId] = (allocByRole[e.roleCategory_roleId] || 0) + 1;
+                const dk = String(e.department || '').toLowerCase(); allocByDept[dk] = (allocByDept[dk] || 0) + 1;
+            });
+            // Rate + budget bases (reuse requirementHourlyRate).
+            const cfg = await rp.loadConfig();
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'monthlyCapacityHours', 'roleCategory_roleId', 'department').where({ isActive: true });
+            const salRows = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'monthlySalary', 'hourlyCost', 'isActive').where({ isActive: true });
+            const salByEmp = {}; salRows.forEach(s => { salByEmp[s.employee_employeeId] = s; });
+
+            let sumRequired = 0, sumAllocated = 0, sumPlannedHours = 0, sumBudget = 0;
+            const out = [];
+            for (const r of rows) {
+                const reqQty = Number(r.requiredCount) || 0;
+                const perEmp = Number(r.estimatedHours) || 0;
+                const totalPlanned = Math.round(reqQty * perEmp * 100) / 100;
+                const rate = await requirementHourlyRate(r, cfg, salByEmp, emps);
+                const estBudget = Math.round(totalPlanned * rate);
+                // Allocated for this role (capped at required for the card's progress).
+                const roleAlloc = r.roleCategory_roleId ? (allocByRole[r.roleCategory_roleId] || 0)
+                    : (allocByDept[String(r.departmentName || '').toLowerCase()] || 0);
+                const allocatedCount = roleAlloc;
+                sumRequired += reqQty; sumAllocated += Math.min(reqQty, allocatedCount);
+                sumPlannedHours += totalPlanned; sumBudget += estBudget;
+                out.push({
                     requirementId: r.requirementId, departmentId: r.department_deptId, departmentName: r.departmentName,
                     roleCategoryId: r.roleCategory_roleId, roleCategoryName: r.roleCategoryName,
                     specializationId: r.specialization_specId, specializationName: r.specializationName,
-                    requiredCount: r.requiredCount, requiredHours: r.requiredHours,
-                    startDate: r.startDate, endDate: r.endDate, notes: r.notes, status: r.status,
-                    skillCategory: r.skillCategory, skills: r.skills, experienceRange: r.experienceRange, allocationPct: r.allocationPct
-                })),
+                    requiredCount: reqQty,
+                    estimatedHours: perEmp, requiredHours: perEmp, totalPlannedHours: totalPlanned,
+                    ratePerHour: rate, estimatedBudget: estBudget,
+                    allocatedCount, status: r.status,
+                    skillCategory: r.skillCategory, skills: r.skills, experienceRange: r.experienceRange
+                });
+            }
+            // Project-level forecast/spent (reuse the daily money-spent model).
+            const spend = await projectMoneySpent(req.data.projectId);
+            return JSON.stringify({
+                requirements: out,
+                projectDepartments,
+                summary: {
+                    requirements: out.length, requiredEmployees: sumRequired, allocated: sumAllocated,
+                    vacant: Math.max(0, sumRequired - sumAllocated), plannedHours: Math.round(sumPlannedHours),
+                    estimatedBudget: Math.round(sumBudget), forecastSpend: spend.remaining, moneySpent: spend.spent
+                },
                 canManage: acc.canManage
             });
         });
@@ -5162,28 +5494,67 @@ class ProjectService extends cds.ApplicationService {
             const acc = await msAccess(req, c, d.projectId);
             if (acc.error) return JSON.stringify({ error: acc.error });
             if (!acc.canManage) return JSON.stringify({ error: 'Not authorised to define resource requirements.' });
-            if (!d.departmentId) return JSON.stringify({ error: 'Department is required.' });
+            // ── All requirement fields are mandatory (Planning-First capture) ─────
+            // estimatedHours (renamed from requiredHours — legacy param still accepted).
+            const estHours = Number(d.estimatedHours != null ? d.estimatedHours : d.requiredHours) || 0;
+            const missing = [];
+            if (!d.departmentId) missing.push('Department');
+            if (!d.roleCategoryId) missing.push('Role');
+            if (!String(d.skillCategory || '').trim()) missing.push('Skill Category');
+            if (!String(d.experienceRange || '').trim()) missing.push('Experience');
+            if (!(parseInt(d.requiredCount, 10) > 0)) missing.push('Quantity');
+            if (!(estHours > 0)) missing.push('Estimated Hours');
+            if (missing.length) return JSON.stringify({ error: 'All fields are required. Missing: ' + missing.join(', ') + '.' });
             // Resolve display names from the masters (denormalised for fast reads).
+            // Category/Module (specialization) removed from the form — role implies it.
             const dept = await SELECT.one.from(DEPT_MASTER).columns('name').where({ deptId: d.departmentId });
-            const role = d.roleCategoryId ? await SELECT.one.from(ROLE_MASTER).columns('name').where({ roleId: d.roleCategoryId }) : null;
+            const role = await SELECT.one.from(ROLE_MASTER).columns('name').where({ roleId: d.roleCategoryId });
             const spec = d.specializationId ? await SELECT.one.from(SPEC_MASTER).columns('name').where({ specId: d.specializationId }) : null;
             const cnt = (await SELECT.from(PROJ_REQ).columns('requirementId').where({ project_projectId: d.projectId })).length;
             const requirementId = `${d.projectId}-REQ-${String(cnt + 1).padStart(3, '0')}`;
             await INSERT.into(PROJ_REQ).entries({
                 requirementId, project_projectId: d.projectId,
                 department_deptId: d.departmentId, departmentName: dept ? dept.name : d.departmentId,
-                roleCategory_roleId: d.roleCategoryId || null, roleCategoryName: role ? role.name : null,
+                roleCategory_roleId: d.roleCategoryId, roleCategoryName: role ? role.name : null,
                 specialization_specId: d.specializationId || null, specializationName: spec ? spec.name : null,
                 requiredCount: Math.max(1, parseInt(d.requiredCount, 10) || 1),
-                requiredHours: Number(d.requiredHours) || 0,
-                startDate: d.startDate || null, endDate: d.endDate || null, notes: (d.notes || '').trim() || null, status: 'Open',
-                skillCategory: (d.skillCategory || '').trim() || null,
-                skills: (d.skills || '').trim() || null,
-                experienceRange: (d.experienceRange || '').trim() || null,
-                allocationPct: Math.min(100, Math.max(1, parseInt(d.allocationPct, 10) || 100))
+                estimatedHours: estHours, status: 'Open',
+                skillCategory: String(d.skillCategory).trim(),
+                skills: String(d.skills || '').trim() || null,
+                experienceRange: String(d.experienceRange).trim()
             });
-            await projectAudit(d.projectId, c.name, 'Resource Requirement Added', null, `${dept ? dept.name : ''} ${role ? '· ' + role.name : ''} ${spec ? '· ' + spec.name : ''} ×${Math.max(1, parseInt(d.requiredCount, 10) || 1)}`);
+            await projectAudit(d.projectId, c.name, 'Resource Requirement Added', null, `${dept ? dept.name : ''} · ${role ? role.name : ''} ×${Math.max(1, parseInt(d.requiredCount, 10) || 1)} · ${estHours}h`);
             return JSON.stringify({ ok: true, requirementId });
+        });
+
+        // Edit an existing requirement (reuses the same fields/validation as create).
+        this.on('updateResourceRequirement', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const existing = await SELECT.one.from(PROJ_REQ).where({ requirementId: d.requirementId });
+            if (!existing) return JSON.stringify({ error: 'Requirement not found.' });
+            const acc = await msAccess(req, c, existing.project_projectId);
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            const estHours = Number(d.estimatedHours != null ? d.estimatedHours : d.requiredHours);
+            const missing = [];
+            if (!d.departmentId) missing.push('Department');
+            if (!d.roleCategoryId) missing.push('Role');
+            if (!String(d.skillCategory || '').trim()) missing.push('Skill Category');
+            if (!String(d.experienceRange || '').trim()) missing.push('Experience');
+            if (!(parseInt(d.requiredCount, 10) > 0)) missing.push('Quantity');
+            if (!(estHours > 0)) missing.push('Estimated Hours');
+            if (missing.length) return JSON.stringify({ error: 'All fields are required. Missing: ' + missing.join(', ') + '.' });
+            const dept = await SELECT.one.from(DEPT_MASTER).columns('name').where({ deptId: d.departmentId });
+            const role = await SELECT.one.from(ROLE_MASTER).columns('name').where({ roleId: d.roleCategoryId });
+            await UPDATE(PROJ_REQ).set({
+                department_deptId: d.departmentId, departmentName: dept ? dept.name : d.departmentId,
+                roleCategory_roleId: d.roleCategoryId, roleCategoryName: role ? role.name : null,
+                requiredCount: Math.max(1, parseInt(d.requiredCount, 10) || 1), estimatedHours: estHours,
+                skillCategory: String(d.skillCategory).trim(), skills: String(d.skills || '').trim() || null,
+                experienceRange: String(d.experienceRange).trim()
+            }).where({ requirementId: d.requirementId });
+            await projectAudit(existing.project_projectId, c.name, 'Resource Requirement Updated', existing.roleCategoryName, `${role ? role.name : ''} ×${Math.max(1, parseInt(d.requiredCount, 10) || 1)} · ${estHours}h`);
+            return JSON.stringify({ ok: true });
         });
 
         this.on('deleteResourceRequirement', async (req) => {
@@ -5193,7 +5564,160 @@ class ProjectService extends cds.ApplicationService {
             const acc = await msAccess(req, c, r.project_projectId);
             if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
             await DELETE.from(PROJ_REQ).where({ requirementId: req.data.requirementId });
+            // Cascade: milestone plan rows referencing this requirement become orphans.
+            await DELETE.from(MS_RESOURCE).where({ requirement_requirementId: req.data.requirementId });
             return JSON.stringify({ ok: true });
+        });
+
+        // Average fully-loaded hourly rate for a requirement's role (dept + roleCategory).
+        // Drives milestone budget-impact estimates. Reuses the existing cost engine;
+        // falls back to a sensible loaded default when no matching salaried employees.
+        async function requirementHourlyRate(reqRow, cfg, salByEmp, emps) {
+            const overhead = Number(cfg.monthlyOverhead) || 0;
+            const byRole = reqRow.roleCategory_roleId ? emps.filter(e => e.roleCategory_roleId === reqRow.roleCategory_roleId) : [];
+            const pool = byRole.length ? byRole : emps.filter(e => String(e.department || '').toLowerCase() === String(reqRow.departmentName || '').toLowerCase());
+            let sum = 0, n = 0;
+            pool.forEach(e => {
+                const cap = Number(e.monthlyCapacityHours) > 0 ? Number(e.monthlyCapacityHours) : 160;
+                const rate = rp.loadedHourlyRate(salByEmp[e.employeeId], cap, overhead);
+                if (rate > 0) { sum += rate; n++; }
+            });
+            return n ? Math.round(sum / n) : (Math.round(rp.loadedHourlyRate(null, 160, overhead)) || 800);
+        }
+
+        // ── Milestone Resource Plan (execution planning vs project baseline) ────────
+        // Returns the project baseline requirements + this milestone's requested plan,
+        // with per-role validation levels, budget impact and the change audit trail.
+        this.on('getMilestoneResources', async (req) => {
+            const c = await projectCaller(req);
+            const ms = await SELECT.one.from(MILESTONE).columns('milestoneId', 'name', 'project_projectId', 'exceedsResourcePlan').where({ milestoneId: req.data.milestoneId });
+            if (!ms) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, ms.project_projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+
+            const reqs = await SELECT.from(PROJ_REQ).where({ project_projectId: ms.project_projectId }).orderBy('createdAt asc');
+            const saved = await SELECT.from(MS_RESOURCE).where({ milestone_milestoneId: ms.milestoneId });
+            const savedByReq = {}; saved.forEach(s => { savedByReq[s.requirement_requirementId] = s; });
+
+            const cfg = await rp.loadConfig();
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'monthlyCapacityHours', 'roleCategory_roleId', 'department').where({ isActive: true });
+            const salRows = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'monthlySalary', 'hourlyCost', 'isActive').where({ isActive: true });
+            const salByEmp = {}; salRows.forEach(s => { salByEmp[s.employee_employeeId] = s; });
+
+            let totalPlanned = 0, totalAllocated = 0, anyExceeds = false;
+            const requirements = [];
+            for (const r of reqs) {
+                const s = savedByReq[r.requirementId];
+                const plannedQty = Number(r.requiredCount) || 0;
+                const perEmpHours = Number(r.estimatedHours) || 0;
+                const msQty = s ? (Number(s.milestoneQuantity) || 0) : 0;
+                const included = !!s;
+                const rate = await requirementHourlyRate(r, cfg, salByEmp, emps);
+                let planStatus = 'within';
+                if (!included || msQty === 0) planStatus = 'not-used';
+                else if (msQty > plannedQty) planStatus = 'exceeds';
+                const additionalRequired = Math.max(0, msQty - plannedQty);
+                const perEmp = s ? (Number(s.hoursPerEmployee) || perEmpHours) : perEmpHours;
+                const additionalCost = Math.round(additionalRequired * perEmp * rate);
+                if (planStatus === 'exceeds') anyExceeds = true;
+                totalPlanned += plannedQty;
+                if (included) totalAllocated += msQty;
+                requirements.push({
+                    requirementId: r.requirementId, roleName: r.roleCategoryName || r.specializationName || r.departmentName,
+                    departmentName: r.departmentName, plannedQuantity: plannedQty, hoursPerEmployee: perEmp,
+                    ratePerHour: rate, included, milestoneQuantity: msQty, notes: s ? (s.notes || '') : '',
+                    planStatus, additionalRequired, additionalCost
+                });
+            }
+            // Orphans: milestone rows whose project requirement was deleted → unplanned.
+            const knownReqIds = new Set(reqs.map(r => r.requirementId));
+            const unplanned = saved.filter(s => !knownReqIds.has(s.requirement_requirementId)).map(s => ({
+                requirementId: s.requirement_requirementId, roleName: s.roleName, departmentName: s.departmentName,
+                milestoneQuantity: Number(s.milestoneQuantity) || 0, notes: s.notes || '', planStatus: 'unplanned'
+            }));
+            if (unplanned.length) anyExceeds = true;
+
+            const audit = (await SELECT.from(MS_RESOURCE_AUDIT).where({ milestone_milestoneId: ms.milestoneId }).orderBy('changedAt desc')).map(a => ({
+                roleName: a.roleName, previousQuantity: a.previousQuantity, newQuantity: a.newQuantity,
+                changedByName: a.changedByName, changedAt: a.changedAt, reason: a.reason || ''
+            }));
+
+            return JSON.stringify({
+                milestoneId: ms.milestoneId, milestoneName: ms.name, canManage: acc.canManage,
+                requirements, unplanned,
+                summary: { totalPlanned, totalAllocated, exceeds: anyExceeds, unplannedCount: unplanned.length },
+                exceedsResourcePlan: !!ms.exceedsResourcePlan, audit
+            });
+        });
+
+        // Save a milestone's resource plan. Never blocks over-plan quantities — records
+        // them, writes an audit entry per change, and flags the milestone when it exceeds
+        // (or adds unplanned roles to) the project baseline (Part 9 approval recommend).
+        this.on('saveMilestoneResources', async (req) => {
+            const c = await projectCaller(req);
+            const d = req.data || {};
+            const ms = await SELECT.one.from(MILESTONE).columns('milestoneId', 'name', 'project_projectId').where({ milestoneId: d.milestoneId });
+            if (!ms) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, ms.project_projectId);
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised to plan milestone resources.' });
+            let items = d.items; if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
+            items = Array.isArray(items) ? items : [];
+            const reason = (d.reason || '').trim();
+
+            const reqs = await SELECT.from(PROJ_REQ).where({ project_projectId: ms.project_projectId });
+            const reqById = {}; reqs.forEach(r => { reqById[r.requirementId] = r; });
+            const existing = await SELECT.from(MS_RESOURCE).where({ milestone_milestoneId: ms.milestoneId });
+            const existingByReq = {}; existing.forEach(e => { existingByReq[e.requirement_requirementId] = e; });
+
+            const now = new Date();
+            let anyExceeds = false;
+            const keepReqIds = new Set();
+            for (const it of items) {
+                const r = reqById[it.requirementId]; if (!r) continue;
+                const included = it.included !== false;
+                const qty = Math.max(0, parseInt(it.quantity, 10) || 0);
+                if (!included || qty === 0) continue;   // excluded → handled by deletion below
+                keepReqIds.add(it.requirementId);
+                const plannedQty = Number(r.requiredCount) || 0;
+                const perEmp = (it.hours != null && it.hours !== '') ? (Number(it.hours) || 0) : (Number(r.estimatedHours) || 0);
+                let planStatus = qty > plannedQty ? 'exceeds' : 'within';
+                if (planStatus === 'exceeds') anyExceeds = true;
+                const prev = existingByReq[it.requirementId];
+                const prevQty = prev ? (Number(prev.milestoneQuantity) || 0) : 0;
+                await UPSERT.into(MS_RESOURCE).entries({
+                    mrId: `${ms.milestoneId}-${it.requirementId}`.slice(0, 60),
+                    milestone_milestoneId: ms.milestoneId, requirement_requirementId: it.requirementId,
+                    roleName: r.roleCategoryName || r.specializationName || r.departmentName, departmentName: r.departmentName,
+                    plannedQuantity: plannedQty, milestoneQuantity: qty, hoursPerEmployee: perEmp,
+                    notes: (it.notes || '').trim() || null, planStatus
+                });
+                if (qty !== prevQty) {
+                    await INSERT.into(MS_RESOURCE_AUDIT).entries({
+                        auditId: `${ms.milestoneId}-${it.requirementId}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`.slice(0, 60),
+                        milestone_milestoneId: ms.milestoneId, milestoneName: ms.name,
+                        roleName: r.roleCategoryName || r.specializationName || r.departmentName,
+                        previousQuantity: prevQty, newQuantity: qty,
+                        changedById: c.employeeId, changedByName: c.name || '', reason: reason || null, changedAt: now
+                    });
+                }
+            }
+            // Delete rows for requirements no longer included (audit the removal).
+            for (const e of existing) {
+                if (keepReqIds.has(e.requirement_requirementId)) continue;
+                await DELETE.from(MS_RESOURCE).where({ mrId: e.mrId });
+                if ((Number(e.milestoneQuantity) || 0) > 0) {
+                    await INSERT.into(MS_RESOURCE_AUDIT).entries({
+                        auditId: `${ms.milestoneId}-${e.requirement_requirementId}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`.slice(0, 60),
+                        milestone_milestoneId: ms.milestoneId, milestoneName: ms.name, roleName: e.roleName,
+                        previousQuantity: Number(e.milestoneQuantity) || 0, newQuantity: 0,
+                        changedById: c.employeeId, changedByName: c.name || '', reason: reason || null, changedAt: now
+                    });
+                }
+            }
+            await UPDATE(MILESTONE).set({ exceedsResourcePlan: anyExceeds }).where({ milestoneId: ms.milestoneId });
+            await projectAudit(ms.project_projectId, c.name, 'Milestone Resource Plan Updated', ms.name, anyExceeds ? 'Exceeds baseline — approval recommended' : 'Within baseline');
+            founderEvents.ping('saveMilestoneResources');
+            return JSON.stringify({ ok: true, exceedsResourcePlan: anyExceeds });
         });
 
         // ── Founder: create a project + assign POC ──────────────────────────────
@@ -5399,8 +5923,12 @@ class ProjectService extends cds.ApplicationService {
             const cfgResourceCats = _parse(ptype && ptype.resourceCategories);
             const cfgModules = _parse(ptype && ptype.modules);
             const cfgDepts = _parse(ptype && ptype.departments);
+            // Budget is now allocated to ROLE CATEGORIES (Basis/Technical/Functional for
+            // SAP; Frontend/Backend/QA for Dev) drawn from the type's departments.
+            const roleCats = await roleCategoriesForType(project.projectType_code);
             let typeResourceCategories, allocationUnitKind;
-            if (cfgResourceCats.length) { typeResourceCategories = cfgResourceCats; allocationUnitKind = 'Resource Category'; }
+            if (roleCats.length) { typeResourceCategories = roleCats; allocationUnitKind = 'Role Category'; }
+            else if (cfgResourceCats.length) { typeResourceCategories = cfgResourceCats; allocationUnitKind = 'Resource Category'; }
             else if (cfgModules.length) { typeResourceCategories = cfgModules; allocationUnitKind = 'Module'; }
             else if (cfgDepts.length) { typeResourceCategories = cfgDepts; allocationUnitKind = 'Department'; }
             else { typeResourceCategories = []; allocationUnitKind = 'Department'; }
@@ -6197,7 +6725,7 @@ class ProjectService extends cds.ApplicationService {
             const availableSet = new Set();
             const demand = (reqs || []).map(r => {
                 totalHeads += Number(r.requiredCount) || 0;
-                totalHours += Number(r.requiredHours) || 0;
+                totalHours += Number(r.estimatedHours) || 0;
                 const matched = emps.filter(e => matches(e, r));
                 const available = matched.filter(e => { const p = profiles.get(e.employeeId); return p && (p.availableToday || p.availableNextMonth); });
                 available.forEach(e => availableSet.add(e.employeeId));
@@ -6209,7 +6737,7 @@ class ProjectService extends cds.ApplicationService {
                 return {
                     requirementId: r.requirementId, projectName: projNames[r.project_projectId] || r.project_projectId,
                     department: r.departmentName, role: r.roleCategoryName, specialization: r.specializationName,
-                    requiredCount: need, requiredHours: Number(r.requiredHours) || 0,
+                    requiredCount: need, estimatedHours: Number(r.estimatedHours) || 0, requiredHours: Number(r.estimatedHours) || 0,
                     matchedCount: matched.length, availableCount: available.length,
                     structuralGap, availabilityGap,
                     recommended: available.slice(0, 5).map(e => { const p = profiles.get(e.employeeId) || {}; return { employeeId: e.employeeId, employeeName: e.employeeName, freeHours: p.freeHours || 0, utilizationPct: p.utilizationPct || 0 }; })
@@ -6464,24 +6992,74 @@ class ProjectService extends cds.ApplicationService {
             if (!(isFounderCaller(req, c) || project.poc_employeeId === c.employeeId))
                 return JSON.stringify({ error: 'Only the Founder or the project POC can assign tasks.' });
             if (!(d.taskName || '').trim()) return JSON.stringify({ error: 'Task Name is required.' });
-            if (!d.assignedToId) return JSON.stringify({ error: 'Please assign the task to an allocated employee.' });
-            // Estimated hours drive the weighted progress calc → must be > 0.
-            if (!(Number(d.estimatedHours) > 0)) return JSON.stringify({ error: 'Estimated Hours must be greater than 0.' });
-            // Assignee MUST be allocated to this project.
-            const alloc = await SELECT.one.from(PROJECT_RESOURCE).columns('allocationId').where({ project_projectId: d.projectId, employee_employeeId: d.assignedToId });
-            if (!alloc) return JSON.stringify({ error: 'You can only assign tasks to employees allocated to this project.' });
+            // ── Sprint / work-item model (additive; legacy no-type path unchanged) ──
+            // ARCHITECTURE: Milestone & Sprint are BOTH children of Project, never
+            // parent/child. A STORY is the ONLY bridge → it MUST carry both a milestone
+            // and a sprint. Task/Subtask INHERIT milestone+sprint from their parent Story
+            // (never ask again). Bug may hang off a Story or directly off a Sprint.
+            const wtype = WORK_ITEM_TYPES.includes(d.workItemType) ? d.workItemType : 'Task';
+            // A legacy project task = no explicit type, no sprint, no parent. Those keep
+            // the original behaviour; bridge rules apply only to the Jira/sprint flow.
+            const isWorkItemFlow = !!d.workItemType || !!d.sprintId || !!d.parentTaskId;
+            let sprintId = d.sprintId || null, milestoneId = d.milestoneId || null;
+            // Validate an explicitly-passed sprint belongs to this project.
+            if (sprintId) {
+                const sprint = await SELECT.one.from(SPRINT).columns('sprintId', 'project_projectId').where({ sprintId });
+                if (!sprint) return JSON.stringify({ error: 'Sprint not found.' });
+                if (sprint.project_projectId !== d.projectId) return JSON.stringify({ error: 'Sprint does not belong to this project.' });
+            }
+            // Task / Subtask / (child) Bug inherit milestone + sprint from the parent Story.
+            let parent = null;
+            if (d.parentTaskId) {
+                parent = await SELECT.one.from(PROJECT_TASK).columns('taskId', 'project_projectId', 'milestone_milestoneId', 'sprint_sprintId', 'workItemType').where({ taskId: d.parentTaskId });
+                if (!parent) return JSON.stringify({ error: 'Parent work item not found.' });
+                if (parent.project_projectId !== d.projectId) return JSON.stringify({ error: 'Parent belongs to another project.' });
+                if (wtype === 'Task' || wtype === 'Subtask' || wtype === 'Bug') {
+                    milestoneId = parent.milestone_milestoneId || milestoneId;
+                    sprintId = parent.sprint_sprintId || sprintId;
+                }
+            }
+            // Bridge enforcement (only for the new sprint/story flow — legacy tasks unaffected).
+            if (wtype === 'Story') {
+                if (!milestoneId) return JSON.stringify({ error: 'A Story must belong to a Milestone.' });
+                if (!sprintId) return JSON.stringify({ error: 'A Story must belong to a Sprint. Stories are the bridge between Milestones and Sprints.' });
+            }
+            if (isWorkItemFlow && (wtype === 'Task' || wtype === 'Subtask') && !d.parentTaskId)
+                return JSON.stringify({ error: 'A ' + wtype + ' must belong to a Story (set its parent).' });
+            if (wtype === 'Bug' && !sprintId && !d.parentTaskId)
+                return JSON.stringify({ error: 'A Bug must belong to a Story or a Sprint.' });
+            // Sprint work items (or Epic/Story/Spike) may be unassigned / hourless (Jira-style).
+            // Legacy project tasks (no sprint/type) keep the strict assignee + hours rule.
+            const flexible = !!sprintId || wtype === 'Epic' || wtype === 'Story' || wtype === 'Spike';
+            if (!d.assignedToId && !flexible) return JSON.stringify({ error: 'Please assign the item to an allocated employee.' });
+            if (!(Number(d.estimatedHours) > 0) && !flexible) return JSON.stringify({ error: 'Estimated Hours must be greater than 0.' });
+            if (d.assignedToId) {
+                // Assignee MUST be allocated — to the MILESTONE when in a sprint/milestone
+                // context (only that milestone's team can be assigned), else to the project.
+                const where = { project_projectId: d.projectId, employee_employeeId: d.assignedToId };
+                if (milestoneId) where.milestone_milestoneId = milestoneId;
+                const alloc = await SELECT.one.from(PROJECT_RESOURCE).columns('allocationId').where(where);
+                if (!alloc) return JSON.stringify({ error: milestoneId ? 'You can only assign work to employees allocated to this milestone.' : 'You can only assign tasks to employees allocated to this project.' });
+            }
             if (d.dueDate && d.startDate && String(d.dueDate) < String(d.startDate)) return JSON.stringify({ error: 'Due Date cannot be before Start Date.' });
-            const assignee = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email').where({ employeeId: d.assignedToId });
+            const assignee = d.assignedToId ? await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'email').where({ employeeId: d.assignedToId }) : null;
+            const reporter = d.reporterId ? await SELECT.one.from(EMPLOYEE).columns('employeeName').where({ employeeId: d.reporterId }) : null;
 
             const taskId = await nextProjectTaskId(d.projectId);
             await INSERT.into(PROJECT_TASK).entries({
                 taskId, project_projectId: d.projectId, taskName: d.taskName.trim(),
-                description: (d.description || '').trim(), assignedTo_employeeId: d.assignedToId,
-                assignedToName: assignee ? assignee.employeeName : d.assignedToId,
-                priority: d.priority || 'Medium', status: 'Not Started',
+                description: (d.description || '').trim(), assignedTo_employeeId: d.assignedToId || null,
+                assignedToName: assignee ? assignee.employeeName : null,
+                priority: d.priority || 'Medium', status: sprintId ? 'To Do' : 'Not Started',
                 startDate: d.startDate || null, dueDate: d.dueDate || null,
                 estimatedHours: Number(d.estimatedHours) || 0, actualHours: 0,
-                milestone_milestoneId: d.milestoneId || null   // optional milestone scope
+                remainingHours: Number(d.estimatedHours) || 0,
+                milestone_milestoneId: milestoneId,
+                sprint_sprintId: sprintId || null, workItemType: wtype,
+                storyPoints: Number(d.storyPoints) || 0, parentTask_taskId: d.parentTaskId || null,
+                epic_taskId: d.epicId || null, acceptanceCriteria: (d.acceptanceCriteria || '').trim() || null,
+                reporter_employeeId: d.reporterId || c.employeeId || null, reporterName: reporter ? reporter.employeeName : (c.name || null),
+                labels: (d.labels || '').trim() || null
             });
             await projectAudit(d.projectId, c.name, 'Task Created', null, d.taskName.trim());
             await projectAudit(d.projectId, c.name, 'Task Assigned', null, (assignee && assignee.employeeName) || d.assignedToId);
@@ -6491,6 +7069,637 @@ class ProjectService extends cds.ApplicationService {
                 taskId, 'PROJECT_TASK_ASSIGNED');
             founderEvents.ping('createProjectTask');
             return JSON.stringify({ ok: true, taskId });
+        });
+
+        // ════════════════════════════════════════════════════════════════════════
+        // SPRINT MANAGEMENT — execution planning inside milestones (Jira-style).
+        // Reuses ProjectTask (work items), milestone resource allocation (capacity +
+        // assignee pool) and the existing progress/cost engines. No duplication.
+        // ════════════════════════════════════════════════════════════════════════
+
+        // Sprints for a PROJECT + backlog, each with rollup metrics + capacity.
+        // Sprints are project-scoped (execution), NOT milestone children. Accepts
+        // projectId (preferred). Legacy callers may still pass milestoneId → we resolve
+        // its project and return the whole project's sprint set.
+        this.on('getSprints', async (req) => {
+            const c = await projectCaller(req);
+            let projectId = req.data.projectId || null;
+            if (!projectId && req.data.milestoneId) {
+                const ms = await SELECT.one.from(MILESTONE).columns('project_projectId').where({ milestoneId: req.data.milestoneId });
+                if (!ms) return JSON.stringify({ error: 'Milestone not found.' });
+                projectId = ms.project_projectId;
+            }
+            if (!projectId) return JSON.stringify({ error: 'Project not found.' });
+            const proj = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'startDate', 'endDate').where({ projectId });
+            if (!proj) return JSON.stringify({ error: 'Project not found.' });
+            const acc = await msAccess(req, c, projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const sprints = await SELECT.from(SPRINT).where({ project_projectId: projectId }).orderBy('sequence asc', 'sprintNumber asc');
+            const items = await SELECT.from(PROJECT_TASK).where({ project_projectId: projectId });
+            const bySprint = {}; const backlog = [];
+            items.forEach(t => { if (t.sprint_sprintId) (bySprint[t.sprint_sprintId] = bySprint[t.sprint_sprintId] || []).push(t); else backlog.push(t); });
+            const out = sprints.map(s => {
+                const its = bySprint[s.sprintId] || [];
+                const mt = sprintMetrics(its);
+                const cap = Number(s.estimatedCapacityHours) || 0;
+                return {
+                    sprintId: s.sprintId, name: s.name, goal: s.goal, sprintNumber: s.sprintNumber, status: s.status,
+                    startDate: s.startDate, endDate: s.endDate, estimatedCapacityHours: cap,
+                    allocatedCapacity: mt.estHours, remainingCapacity: Math.round((cap - mt.estHours) * 100) / 100,
+                    ownerId: s.owner_employeeId || '', ownerName: s.ownerName || '', description: s.description || '',
+                    createdByName: s.createdBy || '', createdAt: s.createdAt, sequence: s.sequence || 0,
+                    health: s.health || 'On Track', velocity: Number(s.velocity) || 0,
+                    itemCount: its.length, metrics: mt
+                };
+            });
+            const tracked = out.filter(s => s.status !== 'Cancelled');
+            const overallProgress = tracked.length ? Math.round(tracked.reduce((a, s) => a + s.metrics.progressPct, 0) / tracked.length) : 0;
+            const backlogMetrics = sprintMetrics(backlog);
+            return JSON.stringify({
+                projectId: proj.projectId, projectName: proj.projectName, window: { start: proj.startDate, end: proj.endDate },
+                sprints: out, backlog: { count: backlog.length, metrics: backlogMetrics },
+                overallProgress, milestoneProgress: overallProgress, canManage: acc.canManage
+            });
+        });
+
+        // Employees allocated to the milestone → the ONLY valid sprint assignees.
+        this.on('getMilestoneTeam', async (req) => {
+            const c = await projectCaller(req);
+            const ms = await SELECT.one.from(MILESTONE).columns('milestoneId', 'project_projectId').where({ milestoneId: req.data.milestoneId });
+            if (!ms) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, ms.project_projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const res = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'employeeName', 'department', 'status')
+                .where({ project_projectId: ms.project_projectId, milestone_milestoneId: ms.milestoneId });
+            const seen = {}, team = [];
+            (res || []).forEach(r => { if (r.status === 'Released') return; if (seen[r.employee_employeeId]) return; seen[r.employee_employeeId] = 1; team.push({ employeeId: r.employee_employeeId, employeeName: r.employeeName, department: r.department || '' }); });
+            team.sort((a, b) => (a.employeeName || '').localeCompare(b.employeeName || ''));
+            return JSON.stringify({ milestoneId: ms.milestoneId, team, canManage: acc.canManage });
+        });
+
+        // ── Integrated Milestone Allocation screen (single page, no popup) ──────────
+        // Returns milestone header + summary + a grid of ALL project-relevant employees
+        // (requirement-matched OR already allocated) with project hours, per-milestone
+        // allocation, spent/forecast, remaining project hours and over-allocation status.
+        this.on('getMilestoneAllocationScreen', async (req) => {
+            const c = await projectCaller(req);
+            const mid = req.data.milestoneId;
+            const ms = await SELECT.one.from(MILESTONE).where({ milestoneId: mid });
+            if (!ms) return JSON.stringify({ error: 'Milestone not found.' });
+            const acc = await msAccess(req, c, ms.project_projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const pid = ms.project_projectId;
+            const todayStr = new Date().toISOString().slice(0, 10);
+
+            // Requirements → project-allocated hours per role + role→skill demand.
+            const reqs = await SELECT.from(PROJ_REQ).where({ project_projectId: pid });
+            const projHoursByRole = {}; const reqRoleSet = new Set(); const reqRoleSkills = {};
+            reqs.forEach(r => {
+                const role = r.roleCategory_roleId && String(r.roleCategory_roleId); if (!role) return;
+                reqRoleSet.add(role);
+                projHoursByRole[role] = Math.max(projHoursByRole[role] || 0, Number(r.estimatedHours) || 0);
+                const set = reqRoleSkills[role] = reqRoleSkills[role] || new Set();
+                if (r.skillCategory) set.add(String(r.skillCategory).trim().toLowerCase());
+                if (r.specializationName) set.add(String(r.specializationName).trim().toLowerCase());
+            });
+
+            // All allocations on the project (across every milestone).
+            const resources = await SELECT.from(PROJECT_RESOURCE).where({ project_projectId: pid });
+            const allocByEmp = {}; resources.forEach(r => { if (r.status === 'Released') return; (allocByEmp[r.employee_employeeId] = allocByEmp[r.employee_employeeId] || []).push(r); });
+
+            // Cost basis.
+            const cfg = await rp.loadConfig(); const overhead = Number(cfg.monthlyOverhead) || 0;
+            const salRows = await SELECT.from(SALARY_MASTER).columns('employee_employeeId', 'monthlySalary', 'hourlyCost', 'isActive').where({ isActive: true });
+            const salByEmp = {}; salRows.forEach(s => { salByEmp[s.employee_employeeId] = s; });
+            const roleNameRows = await SELECT.from(ROLE_MASTER).columns('roleId', 'name'); const roleNameById = {}; roleNameRows.forEach(r => { roleNameById[r.roleId] = r.name; });
+            const specNameRows = await SELECT.from(SPEC_MASTER).columns('specId', 'name'); const specNameById = {}; specNameRows.forEach(s => { specNameById[s.specId] = s.name; });
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'designation', 'monthlyCapacityHours', 'roleCategory_roleId', 'specialization_specId', 'skills', 'profilePhoto', 'profilePhotoMimeType', 'status').where({ isActive: true });
+
+            const rows = []; let over = 0;
+            let sumAllocH = 0, sumSpentH = 0, sumForecastH = 0, sumActualCost = 0, sumForecastCost = 0;
+            for (const e of emps) {
+                if (e.employeeId === ms.project_projectId) continue;
+                const st = String(e.status || 'Active').toLowerCase(); if (st === 'inactive' || st === 'resigned') continue;
+                const role = e.roleCategory_roleId && String(e.roleCategory_roleId);
+                const allocs = allocByEmp[e.employeeId] || [];
+                // Include if: matches a requirement (role + skill) OR already allocated on this project.
+                let matched = false;
+                if (role && reqRoleSet.has(role)) {
+                    const need = reqRoleSkills[role];
+                    if (!need || need.size === 0) matched = true;
+                    else { const sp = String(specNameById[e.specialization_specId] || '').toLowerCase(); const sk = String(e.skills || '').toLowerCase(); for (const cat of need) { if (cat && (sp === cat || (sp && sp.indexOf(cat) !== -1) || (sk && sk.indexOf(cat) !== -1))) { matched = true; break; } } }
+                }
+                if (!matched && !allocs.length) continue;
+
+                const cap = Number(e.monthlyCapacityHours) > 0 ? Number(e.monthlyCapacityHours) : 160;
+                const rate = Math.round(rp.loadedHourlyRate(salByEmp[e.employeeId], cap, overhead));
+                const projectHours = projHoursByRole[role] || 0;
+                const thisRow = allocs.find(r => r.milestone_milestoneId === mid);
+                const thisHours = thisRow ? (Number(thisRow.estimatedHours) || 0) : 0;
+                const thisPct = thisRow ? (Number(thisRow.milestoneAllocationPercent) || (projectHours > 0 ? Math.round(thisHours / projectHours * 100) : 0)) : 0;
+                const otherHours = allocs.filter(r => r.milestone_milestoneId !== mid).reduce((s, r) => s + (Number(r.estimatedHours) || 0), 0);
+                const totalAssigned = thisHours + otherHours;
+                const remaining = Math.round((projectHours - totalAssigned) * 100) / 100;
+                const spend = thisRow ? allocationMoneySpent(thisRow, ms, todayStr) : { spent: 0, remaining: 0, estimated: 0 };
+                const spentHrs = thisRow && spend.estimated > 0 ? Math.round(thisHours * (spend.spent / spend.estimated) * 100) / 100 : 0;
+                const forecastHrs = Math.max(0, Math.round((thisHours - spentHrs) * 100) / 100);
+                const overalloc = projectHours > 0 && totalAssigned > projectHours;
+                if (overalloc) over++;
+                const status = overalloc ? 'Overallocated' : (thisHours <= 0 ? (totalAssigned > 0 ? 'Assigned Elsewhere' : 'Available')
+                    : (remaining <= 0 ? 'Fully Allocated' : 'Partially Allocated'));
+                sumAllocH += thisHours; sumSpentH += spentHrs; sumForecastH += forecastHrs;
+                sumActualCost += spend.spent; sumForecastCost += (thisRow ? spend.remaining : 0);
+                rows.push({
+                    employeeId: e.employeeId, employeeName: e.employeeName, department: e.department || '',
+                    role: roleNameById[role] || e.designation || '—', skills: e.skills || '',
+                    hasPhoto: !!e.profilePhoto, projectHours, otherMilestoneHours: Math.round(otherHours * 100) / 100,
+                    remainingProjectHours: remaining, milestonePercent: thisPct, milestoneHours: Math.round(thisHours * 100) / 100,
+                    actualSpentHours: spentHrs, forecastRemainingHours: forecastHrs, hourlyCost: rate,
+                    actualCost: spend.spent, forecastCost: thisRow ? spend.remaining : 0,
+                    allocated: !!thisRow, overallocated: overalloc, status
+                });
+            }
+            rows.sort((a, b) => (b.allocated ? 1 : 0) - (a.allocated ? 1 : 0) || (a.employeeName || '').localeCompare(b.employeeName || ''));
+
+            const durDays = (ms.plannedStartDate && ms.plannedEndDate) ? daysBetween(ms.plannedEndDate, ms.plannedStartDate) + 1 : 0;
+            const remDays = ms.plannedEndDate ? Math.max(0, daysBetween(ms.plannedEndDate, todayStr)) : 0;
+            return JSON.stringify({
+                milestone: { milestoneId: mid, name: ms.name, sequence: ms.sequence || 0, status: ms.status, progressPct: Number(ms.progressPct) || 0,
+                    plannedStartDate: ms.plannedStartDate, plannedEndDate: ms.plannedEndDate, durationDays: durDays, remainingDays: remDays },
+                summary: {
+                    totalEmployees: rows.length, assigned: rows.filter(r => r.allocated).length,
+                    allocatedHours: Math.round(sumAllocH), actualHours: Math.round(sumSpentH), forecastHours: Math.round(sumForecastH),
+                    actualCost: Math.round(sumActualCost), forecastCost: Math.round(sumForecastCost), overallocated: over
+                },
+                rows, canManage: acc.canManage
+            });
+        });
+
+        // Workflow backbone: report which planning stages a project has reached so the UI
+        // can guide the user through Project → Requirements → Budget → Milestones →
+        // Allocate → Sprints → Stories → Tasks → Time Logs.
+        this.on('getProjectWorkflow', async (req) => {
+            const c = await projectCaller(req);
+            const projectId = req.data.projectId;
+            const proj = await SELECT.one.from(PROJECT).columns('projectId', 'projectName', 'status').where({ projectId });
+            if (!proj) return JSON.stringify({ error: 'Project not found.' });
+            const acc = await msAccess(req, c, projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const cnt = async (ent, where) => { const r = await SELECT.from(ent).where(where); return (r || []).length; };
+            const reqs = await cnt(PROJ_REQ, { project_projectId: projectId });
+            const budget = await SELECT.one.from(PROJECT_BUDGET).columns('budgetId').where({ project_projectId: projectId });
+            const milestones = await cnt(MILESTONE, { project_projectId: projectId });
+            const allocations = await cnt(PROJECT_RESOURCE, { project_projectId: projectId, status: { '!=': 'Released' } });
+            const sprints = await cnt(SPRINT, { project_projectId: projectId });
+            const tasks = await SELECT.from(PROJECT_TASK).columns('workItemType', 'actualHours').where({ project_projectId: projectId });
+            const stories = tasks.filter(t => t.workItemType === 'Story').length;
+            const workTasks = tasks.filter(t => t.workItemType === 'Task' || t.workItemType === 'Subtask').length;
+            const timeLogged = tasks.reduce((a, t) => a + (Number(t.actualHours) || 0), 0);
+            const stages = [
+                { key: 'requirements', label: 'Resource Requirements', done: reqs > 0, count: reqs },
+                { key: 'budget', label: 'Budget Planning', done: !!budget, count: budget ? 1 : 0 },
+                { key: 'milestones', label: 'Milestones', done: milestones > 0, count: milestones },
+                { key: 'allocation', label: 'Allocate Resources', done: allocations > 0, count: allocations },
+                { key: 'sprints', label: 'Sprint Calendar', done: sprints > 0, count: sprints },
+                { key: 'stories', label: 'Stories', done: stories > 0, count: stories },
+                { key: 'tasks', label: 'Tasks', done: workTasks > 0, count: workTasks },
+                { key: 'timelogs', label: 'Time Logging', done: timeLogged > 0, count: Math.round(timeLogged) }
+            ];
+            const doneCount = stages.filter(s => s.done).length;
+            const nextStage = stages.find(s => !s.done);
+            return JSON.stringify({
+                projectId, projectName: proj.projectName, status: proj.status,
+                stages, completedStages: doneCount, totalStages: stages.length,
+                progressPct: Math.round(doneCount / stages.length * 100),
+                nextStage: nextStage ? nextStage.key : null, nextLabel: nextStage ? nextStage.label : 'Complete',
+                canManage: acc.canManage
+            });
+        });
+
+        // ── Sprint Planning: cross-project availability + capacity + backlog stories ──
+        this.on('getSprintPlanning', async (req) => {
+            const c = await projectCaller(req);
+            const s = await SELECT.one.from(SPRINT).where({ sprintId: req.data.sprintId });
+            if (!s) return JSON.stringify({ error: 'Sprint not found.' });
+            const acc = await msAccess(req, c, s.project_projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const pid = s.project_projectId;
+            const fromStr = String(s.startDate || '').slice(0, 10), toStr = String(s.endDate || '').slice(0, 10);
+            if (!fromStr || !toStr) return JSON.stringify({ error: 'Set the sprint start and end dates before planning.' });
+            const ctx = await buildCapacityContext(fromStr, toStr);
+
+            // Candidate pool = employees allocated to THIS project (distinct, not released).
+            const res = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'employeeName', 'department', 'role', 'status').where({ project_projectId: pid });
+            const seen = {}, pool = [];
+            (res || []).forEach(r => { if (r.status === 'Released') return; if (seen[r.employee_employeeId]) return; seen[r.employee_employeeId] = 1; pool.push(r); });
+
+            let overCount = 0, teamCapacity = 0, committedThis = 0;
+            const employees = pool.map(r => {
+                const cap = effectiveCapacity(r.employee_employeeId, ctx);
+                const com = sprintCommitments(r.employee_employeeId, ctx, s.sprintId);
+                const available = Math.round((cap.effectiveHours - com.totalHours) * 100) / 100;
+                const utilPct = cap.effectiveHours > 0 ? Math.round(com.totalHours / cap.effectiveHours * 100) : (com.totalHours > 0 ? 999 : 0);
+                const over = utilPct > 100; if (over) overCount++;
+                teamCapacity += cap.effectiveHours; committedThis += com.targetSprintHours;
+                return {
+                    employeeId: r.employee_employeeId, employeeName: r.employeeName || r.employee_employeeId,
+                    department: r.department || '', role: r.role || '',
+                    capacity: cap.effectiveHours, capacityBreakdown: cap,
+                    committedHours: com.totalHours, thisSprintHours: com.targetSprintHours,
+                    otherProjectHours: Math.round((com.totalHours - com.targetSprintHours) * 100) / 100,
+                    availableHours: available, utilizationPct: utilPct, status: capacityStatus(utilPct),
+                    overallocated: over, commitments: com.detail
+                };
+            });
+            employees.sort((a, b) => b.utilizationPct - a.utilizationPct || (a.employeeName || '').localeCompare(b.employeeName || ''));
+
+            // Milestone names for stories + milestone-cap check.
+            const msRows = await SELECT.from(MILESTONE).columns('milestoneId', 'name', 'sequence').where({ project_projectId: pid });
+            const msName = {}; (msRows || []).forEach(m => { msName[m.milestoneId] = m.name; });
+            const mapStory = t => ({
+                taskId: t.taskId, title: t.taskName, milestoneId: t.milestone_milestoneId || '',
+                milestoneName: msName[t.milestone_milestoneId] || '', storyPoints: Number(t.storyPoints) || 0,
+                estimatedHours: Number(t.estimatedHours) || 0, remainingHours: t.remainingHours != null ? Number(t.remainingHours) : Math.max(0, (Number(t.estimatedHours) || 0) - (Number(t.actualHours) || 0)),
+                status: t.status || 'To Do', assignee: t.assignedToName || '', assigneeId: t.assignedTo_employeeId || ''
+            });
+            const stories = await SELECT.from(PROJECT_TASK).where({ project_projectId: pid, workItemType: 'Story' });
+            const backlogStories = (stories || []).filter(t => !t.sprint_sprintId).map(mapStory);
+            const sprintStories = (stories || []).filter(t => t.sprint_sprintId === s.sprintId).map(mapStory);
+
+            // Milestone-cap warnings: planned sprint hours per milestone (across the project's
+            // sprints) must not exceed the milestone's allocated hours unless approved.
+            const allSprintStories = (stories || []).filter(t => t.sprint_sprintId);
+            const plannedByMs = {};
+            allSprintStories.forEach(t => { const m = t.milestone_milestoneId; if (!m) return; plannedByMs[m] = (plannedByMs[m] || 0) + (Number(t.estimatedHours) || 0); });
+            const allocRows = await SELECT.from(PROJECT_RESOURCE).columns('milestone_milestoneId', 'estimatedHours', 'status').where({ project_projectId: pid });
+            const allocByMs = {}; (allocRows || []).forEach(a => { if (a.status === 'Released') return; const m = a.milestone_milestoneId; if (!m) return; allocByMs[m] = (allocByMs[m] || 0) + (Number(a.estimatedHours) || 0); });
+            const milestoneWarnings = [];
+            Object.keys(plannedByMs).forEach(m => {
+                const planned = Math.round(plannedByMs[m] * 100) / 100, allocated = Math.round((allocByMs[m] || 0) * 100) / 100;
+                if (allocated > 0 && planned > allocated) milestoneWarnings.push({ milestoneId: m, milestoneName: msName[m] || m, plannedHours: planned, allocatedHours: allocated, exceedBy: Math.round((planned - allocated) * 100) / 100 });
+            });
+
+            return JSON.stringify({
+                sprint: { sprintId: s.sprintId, name: s.name, goal: s.goal, status: s.status, startDate: s.startDate, endDate: s.endDate, projectId: pid, estimatedCapacityHours: Number(s.estimatedCapacityHours) || 0 },
+                summary: {
+                    teamSize: employees.length, teamCapacity: Math.round(teamCapacity * 100) / 100,
+                    sprintCapacityHours: Number(s.estimatedCapacityHours) || 0,
+                    committedHours: Math.round(committedThis * 100) / 100,
+                    availableHours: Math.round((teamCapacity - employees.reduce((a, e) => a + e.committedHours, 0)) * 100) / 100,
+                    overallocated: overCount, backlogStoryCount: backlogStories.length
+                },
+                employees, backlogStories, sprintStories, milestoneWarnings, canManage: acc.canManage
+            });
+        });
+
+        // ── Cross-project workload for one employee (every active sprint commitment) ──
+        this.on('getEmployeeWorkload', async (req) => {
+            const c = await projectCaller(req);
+            const empId = req.data.employeeId;
+            const emp = await SELECT.one.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'designation').where({ employeeId: empId });
+            if (!emp) return JSON.stringify({ error: 'Employee not found.' });
+            // Current-month window for the utilization snapshot.
+            const now = new Date();
+            const mStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+            const mEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+            const ctx = await buildCapacityContext(mStart, mEnd);
+            const cap = effectiveCapacity(empId, ctx);
+            const monthCom = sprintCommitments(empId, ctx);
+            const utilPct = cap.effectiveHours > 0 ? Math.round(monthCom.totalHours / cap.effectiveHours * 100) : (monthCom.totalHours > 0 ? 999 : 0);
+
+            // Full list of active commitments across all projects (ctx loads them all).
+            const all = ctx.commitmentsByEmp[empId] || [];
+            const projIds = [...new Set(all.map(cm => cm.projectId).filter(Boolean))];
+            const projName = {};
+            if (projIds.length) { const ps = await SELECT.from(PROJECT).columns('projectId', 'projectName').where({ projectId: { in: projIds } }); (ps || []).forEach(p => { projName[p.projectId] = p.projectName; }); }
+            const byProject = {};
+            all.forEach(cm => {
+                const p = byProject[cm.projectId] = byProject[cm.projectId] || { projectId: cm.projectId, projectName: projName[cm.projectId] || cm.projectId, totalHours: 0, sprints: [] };
+                p.totalHours = Math.round((p.totalHours + cm.remaining) * 100) / 100;
+                p.sprints.push({ sprintId: cm.sprintId, sprintName: cm.sprintName, startDate: cm.start, endDate: cm.end, remainingHours: cm.remaining });
+            });
+            const projects = Object.values(byProject).sort((a, b) => b.totalHours - a.totalHours);
+            const totalCommitted = Math.round(all.reduce((a, cm) => a + cm.remaining, 0) * 100) / 100;
+
+            return JSON.stringify({
+                employee: { employeeId: emp.employeeId, employeeName: emp.employeeName, department: emp.department || '', designation: emp.designation || '' },
+                currentMonth: {
+                    window: { start: mStart, end: mEnd }, capacity: cap.effectiveHours, capacityBreakdown: cap,
+                    committedHours: monthCom.totalHours, availableHours: Math.round((cap.effectiveHours - monthCom.totalHours) * 100) / 100,
+                    utilizationPct: utilPct, status: capacityStatus(utilPct)
+                },
+                projectCount: projects.length, totalCommittedHours: totalCommitted, projects
+            });
+        });
+
+        this.on('createSprint', async (req) => {
+            const c = await projectCaller(req); const d = req.data || {};
+            // Sprints are created at the PROJECT level (execution), never under a milestone.
+            let projectId = d.projectId || null;
+            if (!projectId && d.milestoneId) {
+                const ms = await SELECT.one.from(MILESTONE).columns('project_projectId').where({ milestoneId: d.milestoneId });
+                if (!ms) return JSON.stringify({ error: 'Milestone not found.' });
+                projectId = ms.project_projectId;
+            }
+            if (!projectId) return JSON.stringify({ error: 'Project is required to create a sprint.' });
+            const proj = await SELECT.one.from(PROJECT).columns('projectId').where({ projectId });
+            if (!proj) return JSON.stringify({ error: 'Project not found.' });
+            const acc = await msAccess(req, c, projectId);
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised to manage sprints.' });
+            if (!String(d.name || '').trim()) return JSON.stringify({ error: 'Sprint Name is required.' });
+            if (!String(d.goal || '').trim()) return JSON.stringify({ error: 'Sprint Goal is required.' });
+            if (!d.startDate || !d.endDate) return JSON.stringify({ error: 'Start and End dates are required.' });
+            if (String(d.endDate) < String(d.startDate)) return JSON.stringify({ error: 'End Date cannot be before Start Date.' });
+            const existing = await SELECT.from(SPRINT).columns('sprintId').where({ project_projectId: projectId });
+            const sprintId = await nextSprintId(projectId);
+            let ownerName = ''; if (d.ownerId) { const o = await SELECT.one.from(EMPLOYEE).columns('employeeName').where({ employeeId: d.ownerId }); ownerName = o ? o.employeeName : ''; }
+            await INSERT.into(SPRINT).entries({
+                sprintId, project_projectId: projectId, milestone_milestoneId: null,
+                name: d.name.trim(), goal: d.goal.trim(), sprintNumber: parseInt(d.sprintNumber, 10) || (existing.length + 1), status: 'Backlog',
+                startDate: d.startDate, endDate: d.endDate, estimatedCapacityHours: Number(d.estimatedCapacityHours) || 0,
+                owner_employeeId: d.ownerId || null, ownerName, description: (d.description || '').trim(), sequence: existing.length + 1,
+                health: 'On Track', velocity: 0
+            });
+            await projectAudit(projectId, c.name, 'Sprint Created', null, d.name.trim());
+            founderEvents.ping('createSprint');
+            return JSON.stringify({ ok: true, sprintId });
+        });
+
+        this.on('updateSprint', async (req) => {
+            const c = await projectCaller(req); const d = req.data || {};
+            const s = await SELECT.one.from(SPRINT).where({ sprintId: d.sprintId });
+            if (!s) return JSON.stringify({ error: 'Sprint not found.' });
+            const acc = await msAccess(req, c, s.project_projectId);
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            const set = {};
+            if (d.name != null) set.name = String(d.name).trim();
+            if (d.goal != null) set.goal = String(d.goal).trim();
+            if (d.description != null) set.description = String(d.description).trim();
+            if (d.sprintNumber != null) set.sprintNumber = parseInt(d.sprintNumber, 10) || s.sprintNumber;
+            if (d.startDate !== undefined) set.startDate = d.startDate || null;
+            if (d.endDate !== undefined) set.endDate = d.endDate || null;
+            if (d.estimatedCapacityHours != null) set.estimatedCapacityHours = Number(d.estimatedCapacityHours) || 0;
+            if (d.ownerId !== undefined) { set.owner_employeeId = d.ownerId || null; const o = d.ownerId ? await SELECT.one.from(EMPLOYEE).columns('employeeName').where({ employeeId: d.ownerId }) : null; set.ownerName = o ? o.employeeName : ''; }
+            const s2 = d.startDate !== undefined ? d.startDate : s.startDate, e2 = d.endDate !== undefined ? d.endDate : s.endDate;
+            if (s2 && e2 && String(e2) < String(s2)) return JSON.stringify({ error: 'End Date cannot be before Start Date.' });
+            await UPDATE(SPRINT).set(set).where({ sprintId: d.sprintId });
+            await projectAudit(s.project_projectId, c.name, 'Sprint Updated', s.name, set.name || s.name);
+            founderEvents.ping('updateSprint');
+            return JSON.stringify({ ok: true });
+        });
+
+        this.on('deleteSprint', async (req) => {
+            const c = await projectCaller(req);
+            const s = await SELECT.one.from(SPRINT).where({ sprintId: req.data.sprintId });
+            if (!s) return JSON.stringify({ error: 'Sprint not found.' });
+            const acc = await msAccess(req, c, s.project_projectId);
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            // Work items return to the milestone backlog (never deleted → no data loss).
+            await UPDATE(PROJECT_TASK).set({ sprint_sprintId: null }).where({ sprint_sprintId: s.sprintId });
+            await DELETE.from(SPRINT).where({ sprintId: s.sprintId });
+            await projectAudit(s.project_projectId, c.name, 'Sprint Deleted', s.name, 'items → backlog');
+            founderEvents.ping('deleteSprint');
+            return JSON.stringify({ ok: true });
+        });
+
+        // Start | Complete | Cancel a sprint. Completing moves unfinished items back to
+        // the backlog (Jira behaviour) so they can be pulled into the next sprint.
+        this.on('setSprintStatus', async (req) => {
+            const c = await projectCaller(req); const d = req.data || {};
+            const s = await SELECT.one.from(SPRINT).where({ sprintId: d.sprintId });
+            if (!s) return JSON.stringify({ error: 'Sprint not found.' });
+            const acc = await msAccess(req, c, s.project_projectId);
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            const map = { start: 'Active', complete: 'Completed', cancel: 'Cancelled' };
+            const status = map[d.action]; if (!status) return JSON.stringify({ error: 'Invalid action.' });
+            const set = { status };
+            if (d.action === 'complete') {
+                set.completedAt = new Date();
+                const items = await SELECT.from(PROJECT_TASK).columns('taskId', 'status').where({ sprint_sprintId: s.sprintId });
+                let moved = 0;
+                for (const t of items) { if (normTaskStatus(t.status) !== 'Done') { await UPDATE(PROJECT_TASK).set({ sprint_sprintId: null }).where({ taskId: t.taskId }); moved++; } }
+                set._moved = moved;
+            }
+            const moved = set._moved; delete set._moved;
+            await UPDATE(SPRINT).set(set).where({ sprintId: s.sprintId });
+            await projectAudit(s.project_projectId, c.name, 'Sprint ' + status, s.name, d.action === 'complete' ? `${moved || 0} unfinished → backlog` : '');
+            founderEvents.ping('setSprintStatus');
+            return JSON.stringify({ ok: true, status, movedToBacklog: moved || 0 });
+        });
+
+        // Kanban board for a sprint: work items grouped into the 5 columns.
+        this.on('getSprintBoard', async (req) => {
+            const c = await projectCaller(req);
+            const s = await SELECT.one.from(SPRINT).where({ sprintId: req.data.sprintId });
+            if (!s) return JSON.stringify({ error: 'Sprint not found.' });
+            const acc = await msAccess(req, c, s.project_projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const items = await SELECT.from(PROJECT_TASK).where({ sprint_sprintId: s.sprintId }).orderBy('createdAt asc');
+            const cols = {}; SPRINT_STATUSES.forEach(k => cols[k] = []);
+            items.forEach(t => {
+                let st = normTaskStatus(t.status); if (st === 'Blocked') st = 'To Do';
+                cols[st].push({
+                    taskId: t.taskId, title: t.taskName, type: t.workItemType || 'Task',
+                    assignee: t.assignedToName || '', assigneeId: t.assignedTo_employeeId || '', priority: t.priority || 'Medium',
+                    storyPoints: Number(t.storyPoints) || 0, estimatedHours: Number(t.estimatedHours) || 0, loggedHours: Number(t.actualHours) || 0,
+                    remainingHours: Math.max(0, Math.round(((Number(t.estimatedHours) || 0) - (Number(t.actualHours) || 0)) * 100) / 100),
+                    status: t.status, labels: t.labels || '', dueDate: t.dueDate, blocked: normTaskStatus(t.status) === 'Blocked'
+                });
+            });
+            return JSON.stringify({
+                sprintId: s.sprintId, name: s.name, goal: s.goal, status: s.status, startDate: s.startDate, endDate: s.endDate,
+                projectId: s.project_projectId, metrics: sprintMetrics(items),
+                columns: SPRINT_STATUSES.map(k => ({ key: k, items: cols[k] })), canManage: acc.canManage
+            });
+        });
+
+        // Move a work item across Kanban columns and/or into a sprint / backlog.
+        this.on('moveWorkItem', async (req) => {
+            const c = await projectCaller(req); const d = req.data || {};
+            const t = await SELECT.one.from(PROJECT_TASK).columns('taskId', 'project_projectId', 'assignedTo_employeeId', 'status').where({ taskId: d.taskId });
+            if (!t) return JSON.stringify({ error: 'Work item not found.' });
+            const acc = await msAccess(req, c, t.project_projectId);
+            if (!acc.canManage && t.assignedTo_employeeId !== c.employeeId && !isFounderCaller(req, c)) return JSON.stringify({ error: 'Not authorised.' });
+            const set = {};
+            if (d.status) {
+                if (!SPRINT_STATUSES.includes(d.status) && normTaskStatus(d.status) !== 'Blocked') return JSON.stringify({ error: 'Invalid status.' });
+                set.status = d.status;
+                set.completedAt = normTaskStatus(d.status) === 'Done' ? new Date() : null;
+            }
+            if (d.sprintId !== undefined) set.sprint_sprintId = d.sprintId || null;
+            await UPDATE(PROJECT_TASK).set(set).where({ taskId: d.taskId });
+            founderEvents.ping('moveWorkItem');
+            return JSON.stringify({ ok: true });
+        });
+
+        // Full work-item detail: fields + subtasks + comments + valid parents/team.
+        this.on('getWorkItem', async (req) => {
+            const c = await projectCaller(req);
+            const t = await SELECT.one.from(PROJECT_TASK).where({ taskId: req.data.taskId });
+            if (!t) return JSON.stringify({ error: 'Work item not found.' });
+            const acc = await msAccess(req, c, t.project_projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const subtasks = await SELECT.from(PROJECT_TASK).columns('taskId', 'taskName', 'status', 'workItemType', 'assignedToName', 'estimatedHours', 'actualHours', 'storyPoints').where({ parentTask_taskId: t.taskId }).orderBy('createdAt asc');
+            const comments = (await SELECT.from(WORK_ITEM_COMMENT).where({ task_taskId: t.taskId }).orderBy('at asc')).map(x => ({ commentId: x.commentId, authorName: x.authorName, text: x.text, at: x.at }));
+            // Candidate parents = Stories/Epics in the same sprint (for subtask linking).
+            let parents = [];
+            if (t.sprint_sprintId) parents = (await SELECT.from(PROJECT_TASK).columns('taskId', 'taskName', 'workItemType').where({ sprint_sprintId: t.sprint_sprintId, workItemType: { in: ['Story', 'Epic'] } })).filter(p => p.taskId !== t.taskId);
+            const team = t.milestone_milestoneId ? (await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'employeeName').where({ project_projectId: t.project_projectId, milestone_milestoneId: t.milestone_milestoneId })) : [];
+            const seen = {}, teamOut = [];
+            team.forEach(r => { if (!seen[r.employee_employeeId]) { seen[r.employee_employeeId] = 1; teamOut.push({ employeeId: r.employee_employeeId, employeeName: r.employeeName }); } });
+            return JSON.stringify({
+                taskId: t.taskId, title: t.taskName, description: t.description || '', type: t.workItemType || 'Task',
+                status: t.status, priority: t.priority || 'Medium', assigneeId: t.assignedTo_employeeId || '', assignee: t.assignedToName || '',
+                reporterName: t.reporterName || '', storyPoints: Number(t.storyPoints) || 0,
+                estimatedHours: Number(t.estimatedHours) || 0, loggedHours: Number(t.actualHours) || 0,
+                remainingHours: Math.max(0, Math.round(((Number(t.estimatedHours) || 0) - (Number(t.actualHours) || 0)) * 100) / 100),
+                labels: t.labels || '', dueDate: t.dueDate, parentTaskId: t.parentTask_taskId || '',
+                subtasks: subtasks.map(x => ({ taskId: x.taskId, title: x.taskName, status: x.status, type: x.workItemType, assignee: x.assignedToName || '', estimatedHours: Number(x.estimatedHours) || 0, loggedHours: Number(x.actualHours) || 0 })),
+                comments, parents, team: teamOut, canManage: acc.canManage
+            });
+        });
+
+        // Edit work-item fields (reuses the assignee-allocation rule).
+        this.on('updateWorkItem', async (req) => {
+            const c = await projectCaller(req); const d = req.data || {};
+            const t = await SELECT.one.from(PROJECT_TASK).where({ taskId: d.taskId });
+            if (!t) return JSON.stringify({ error: 'Work item not found.' });
+            const acc = await msAccess(req, c, t.project_projectId);
+            if (!acc.canManage && t.assignedTo_employeeId !== c.employeeId) return JSON.stringify({ error: 'Not authorised.' });
+            const set = {};
+            if (d.title != null) { if (!String(d.title).trim()) return JSON.stringify({ error: 'Title is required.' }); set.taskName = String(d.title).trim(); }
+            if (d.description != null) set.description = String(d.description).trim();
+            if (d.priority != null) set.priority = d.priority;
+            if (d.workItemType != null && WORK_ITEM_TYPES.includes(d.workItemType)) set.workItemType = d.workItemType;
+            if (d.storyPoints != null) set.storyPoints = Number(d.storyPoints) || 0;
+            if (d.estimatedHours != null) set.estimatedHours = Number(d.estimatedHours) || 0;
+            if (d.labels != null) set.labels = String(d.labels).trim() || null;
+            if (d.dueDate !== undefined) set.dueDate = d.dueDate || null;
+            if (d.parentTaskId !== undefined) set.parentTask_taskId = d.parentTaskId || null;
+            if (d.assigneeId !== undefined) {
+                if (d.assigneeId) {
+                    const where = { project_projectId: t.project_projectId, employee_employeeId: d.assigneeId };
+                    if (t.milestone_milestoneId) where.milestone_milestoneId = t.milestone_milestoneId;
+                    const alloc = await SELECT.one.from(PROJECT_RESOURCE).columns('allocationId').where(where);
+                    if (!alloc) return JSON.stringify({ error: 'You can only assign work to employees allocated to this milestone.' });
+                    const emp = await SELECT.one.from(EMPLOYEE).columns('employeeName').where({ employeeId: d.assigneeId });
+                    set.assignedTo_employeeId = d.assigneeId; set.assignedToName = emp ? emp.employeeName : d.assigneeId;
+                } else { set.assignedTo_employeeId = null; set.assignedToName = null; }
+            }
+            await UPDATE(PROJECT_TASK).set(set).where({ taskId: d.taskId });
+            founderEvents.ping('updateWorkItem');
+            return JSON.stringify({ ok: true });
+        });
+
+        this.on('deleteWorkItem', async (req) => {
+            const c = await projectCaller(req);
+            const t = await SELECT.one.from(PROJECT_TASK).columns('taskId', 'project_projectId', 'taskName').where({ taskId: req.data.taskId });
+            if (!t) return JSON.stringify({ error: 'Work item not found.' });
+            const acc = await msAccess(req, c, t.project_projectId);
+            if (!acc.canManage) return JSON.stringify({ error: 'Not authorised.' });
+            await UPDATE(PROJECT_TASK).set({ parentTask_taskId: null }).where({ parentTask_taskId: t.taskId });   // orphan children
+            await DELETE.from(WORK_ITEM_COMMENT).where({ task_taskId: t.taskId });
+            await DELETE.from(PROJECT_TASK).where({ taskId: t.taskId });
+            await projectAudit(t.project_projectId, c.name, 'Work Item Deleted', t.taskName, '');
+            founderEvents.ping('deleteWorkItem');
+            return JSON.stringify({ ok: true });
+        });
+
+        // Log time against a work item → logged hours += hours (rolls up into the sprint)
+        // AND writes a real TimesheetEntry so the hours appear in the employee's timesheet
+        // and flow into milestone actual cost / founder budget-actuals (no duplicate engine).
+        this.on('logWorkItemTime', async (req) => {
+            const c = await projectCaller(req); const d = req.data || {};
+            const t = await SELECT.one.from(PROJECT_TASK).where({ taskId: d.taskId });
+            if (!t) return JSON.stringify({ error: 'Work item not found.' });
+            const acc = await msAccess(req, c, t.project_projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            if (!acc.canManage && t.assignedTo_employeeId !== c.employeeId) return JSON.stringify({ error: 'Only the assignee (or POC) can log time.' });
+            const hrs = Number(d.hours) || 0;
+            if (hrs <= 0) return JSON.stringify({ error: 'Enter hours greater than 0.' });
+            const workDate = (d.workDate && /^\d{4}-\d{2}-\d{2}$/.test(String(d.workDate))) ? String(d.workDate) : new Date().toISOString().slice(0, 10);
+            // Time belongs to the assignee (who did the work); fall back to the caller.
+            const empId = t.assignedTo_employeeId || c.employeeId;
+            // Denormalised logged-hours on the task (fast sprint reads).
+            const newLogged = Math.round(((Number(t.actualHours) || 0) + hrs) * 100) / 100;
+            await UPDATE(PROJECT_TASK).set({ actualHours: newLogged }).where({ taskId: d.taskId });
+            // Create/append the real timesheet entry (never blocks the log if it fails).
+            let timesheetLogged = false;
+            try {
+                if (empId) {
+                    const ws = weekStartMonday(workDate);
+                    const weekEnd = addDaysUTC(ws, 6);
+                    const tsId = `${empId}-${ws}`.slice(0, 50);
+                    const hdr = await SELECT.one.from(HEADER).columns('timesheetId', 'status').where({ timesheetId: tsId });
+                    if (!hdr) {
+                        await INSERT.into(HEADER).entries({ timesheetId: tsId, employee_employeeId: empId, weekStartDate: ws, weekEndDate: weekEnd, status: 'Draft', submissionType: 'Weekly', isAutoApproved: false });
+                    }
+                    const entryId = `${tsId}-${d.taskId}-${workDate}-${Date.now().toString(36)}`.slice(0, 60);
+                    await INSERT.into(ENTRY).entries({
+                        entryId, timesheet_timesheetId: tsId, projectTask_taskId: d.taskId,
+                        workDate, hoursWorked: hrs, description: (String(d.comment || '').trim() || `${t.workItemType || 'Task'}: ${t.taskName}`).slice(0, 255),
+                        entryStatus: 'Open', isLocked: false, isCustomTask: false
+                    });
+                    timesheetLogged = true;
+                }
+            } catch (e) { cds.log('sprint').warn('timesheet entry for work-item time skipped:', e.message || e); }
+            if (String(d.comment || '').trim()) {
+                await INSERT.into(WORK_ITEM_COMMENT).entries({ commentId: `${d.taskId}-C-${Date.now()}`.slice(0, 60), task_taskId: d.taskId, authorId: c.employeeId || '', authorName: c.name || '', text: `⏱ Logged ${hrs}h (${workDate}) — ${String(d.comment).trim()}`, at: new Date() });
+            }
+            founderEvents.ping('logWorkItemTime');
+            return JSON.stringify({ ok: true, loggedHours: newLogged, remainingHours: Math.max(0, Math.round(((Number(t.estimatedHours) || 0) - newLogged) * 100) / 100), timesheetLogged });
+        });
+
+        this.on('addWorkItemComment', async (req) => {
+            const c = await projectCaller(req); const d = req.data || {};
+            const t = await SELECT.one.from(PROJECT_TASK).columns('taskId', 'project_projectId').where({ taskId: d.taskId });
+            if (!t) return JSON.stringify({ error: 'Work item not found.' });
+            const acc = await msAccess(req, c, t.project_projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            if (!String(d.text || '').trim()) return JSON.stringify({ error: 'Comment cannot be empty.' });
+            await INSERT.into(WORK_ITEM_COMMENT).entries({ commentId: `${d.taskId}-C-${Date.now()}`.slice(0, 60), task_taskId: d.taskId, authorId: c.employeeId || '', authorName: c.name || '', text: String(d.text).trim(), at: new Date() });
+            founderEvents.ping('addWorkItemComment');
+            return JSON.stringify({ ok: true });
+        });
+
+        // Sprint report: burndown (reconstructed from completedAt), velocity across the
+        // milestone's sprints, and completion breakdown. Reuses sprintMetrics.
+        this.on('getSprintReport', async (req) => {
+            const c = await projectCaller(req);
+            const s = await SELECT.one.from(SPRINT).where({ sprintId: req.data.sprintId });
+            if (!s) return JSON.stringify({ error: 'Sprint not found.' });
+            const acc = await msAccess(req, c, s.project_projectId);
+            if (acc.error) return JSON.stringify({ error: acc.error });
+            const items = await SELECT.from(PROJECT_TASK).columns('taskId', 'status', 'storyPoints', 'estimatedHours', 'actualHours', 'completedAt', 'workItemType').where({ sprint_sprintId: s.sprintId });
+            const metrics = sprintMetrics(items);
+            const useSP = metrics.storyPointsTotal > 0;
+            const total = useSP ? metrics.storyPointsTotal : metrics.estHours;
+            const unit = useSP ? 'Story Points' : 'Hours';
+            const start = String(s.startDate || '').slice(0, 10), end = String(s.endDate || '').slice(0, 10);
+            const today = new Date().toISOString().slice(0, 10);
+            const burndown = [];
+            if (start && end) {
+                const s0 = new Date(start), e0 = new Date(end);
+                const dur = Math.max(1, Math.floor((e0 - s0) / 86400000));
+                for (let i = 0; i <= dur; i++) {
+                    const dstr = new Date(s0.getTime() + i * 86400000).toISOString().slice(0, 10);
+                    let done = 0;
+                    items.forEach(t => { if (normTaskStatus(t.status) === 'Done' && t.completedAt && String(t.completedAt).slice(0, 10) <= dstr) done += useSP ? (Number(t.storyPoints) || 0) : (Number(t.estimatedHours) || 0); });
+                    burndown.push({ date: dstr, ideal: Math.round((total - total * i / dur) * 10) / 10, remaining: (dstr <= today) ? Math.max(0, Math.round((total - done) * 10) / 10) : null });
+                }
+            }
+            // Velocity trend across the PROJECT's sprints (committed vs completed points).
+            const msSprints = await SELECT.from(SPRINT).columns('sprintId', 'name', 'status', 'sprintNumber').where({ project_projectId: s.project_projectId }).orderBy('sprintNumber asc');
+            const allItems = await SELECT.from(PROJECT_TASK).columns('sprint_sprintId', 'status', 'storyPoints').where({ project_projectId: s.project_projectId });
+            const spBy = {}; allItems.forEach(t => { if (t.sprint_sprintId) (spBy[t.sprint_sprintId] = spBy[t.sprint_sprintId] || []).push(t); });
+            const velocity = msSprints.map(sp => {
+                const its = spBy[sp.sprintId] || []; let committed = 0, completed = 0;
+                its.forEach(t => { const p = Number(t.storyPoints) || 0; committed += p; if (normTaskStatus(t.status) === 'Done') completed += p; });
+                return { name: sp.name, committed, completed, status: sp.status };
+            });
+            const completedVel = velocity.filter(v => v.status === 'Completed');
+            const avgVelocity = completedVel.length ? Math.round(completedVel.reduce((a, v) => a + v.completed, 0) / completedVel.length) : 0;
+            return JSON.stringify({ sprintId: s.sprintId, name: s.name, status: s.status, unit, total, burndown, velocity, avgVelocity, metrics });
         });
 
         // ── POC (or Founder): employees available to allocate, grouped by dept ──
@@ -6518,7 +7727,8 @@ class ProjectService extends cds.ApplicationService {
             const typeDepts = await typeDepartments(project.projectType_code);
             const typeDeptSet = new Set(typeDepts.map(x => String(x).trim().toLowerCase()));
             const typeAware = typeDepts.length > 0;        // department-driven (SAP / Dev / …)
-            const typeCategories = typeAware ? await rolesForDepartments(typeDepts) : [];
+            // Role categories (Basis/Technical/Functional …) — the same unit budget uses.
+            const typeCategories = typeAware ? await roleCategoriesForType(project.projectType_code) : [];
 
             const funded = typeAware ? null : await fundedDepartments(req.data.projectId);
             // Funded roles = dynamic roles that received budget (>0); else all dynamic roles.
@@ -6531,7 +7741,7 @@ class ProjectService extends cds.ApplicationService {
                 if (funcats.length) fundedCategories = funcats;
             }
 
-            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'isActive', 'role', 'designation', 'monthlyCapacityHours', 'status', 'roleCategory_roleId', 'specialization_specId', 'yearsOfExperience', 'certifications', 'baseAvailabilityPct').where({ isActive: true });
+            const emps = await SELECT.from(EMPLOYEE).columns('employeeId', 'employeeName', 'department', 'isActive', 'role', 'designation', 'monthlyCapacityHours', 'status', 'roleCategory_roleId', 'specialization_specId', 'skills', 'yearsOfExperience', 'certifications', 'baseAvailabilityPct').where({ isActive: true });
             // Master name maps for the hierarchical (Dept → Role → Spec) grid.
             const roleNameRows = await SELECT.from(ROLE_MASTER).columns('roleId', 'name');
             const specNameRows = await SELECT.from(SPEC_MASTER).columns('specId', 'name');
@@ -6540,8 +7750,44 @@ class ProjectService extends cds.ApplicationService {
             const existing = await SELECT.from(PROJECT_RESOURCE).columns('employee_employeeId', 'bandwidth', 'role', 'phase', 'module', 'totalAllocationCost').where({ project_projectId: req.data.projectId });
             const onProject = {}; existing.forEach(r => { onProject[r.employee_employeeId] = r; });
             const allocatedResourceCost = (existing || []).reduce((s, r) => s + (Number(r.totalAllocationCost) || 0), 0);
+            // ── Per-role-category budget consumption (so the PM sees what each category
+            // has exhausted vs its allocated budget when staffing) ─────────────────────
+            const empRoleCat = {}; emps.forEach(e => { empRoleCat[e.employeeId] = roleNameById[e.roleCategory_roleId] || null; });
+            const consumedByCat = {};
+            (existing || []).forEach(r => { const cat = empRoleCat[r.employee_employeeId]; if (!cat) return; consumedByCat[cat] = (consumedByCat[cat] || 0) + (Number(r.totalAllocationCost) || 0); });
+            const budgetByCat = {};
+            try { const bb = await readProjectBudget(req.data.projectId); const carr = JSON.parse((bb.row && bb.row.categoryBudgets) || '[]') || []; carr.forEach(x => { budgetByCat[String(x.category)] = Number(x.amount) || 0; }); } catch (_) {}
+            const allCats = new Set([...Object.keys(budgetByCat), ...Object.keys(consumedByCat)]);
+            const categoryConsumption = [...allCats].map(cat => {
+                const alloc = budgetByCat[cat] || 0, used = Math.round(consumedByCat[cat] || 0);
+                return { category: cat, allocated: alloc, consumed: used, remaining: Math.round(alloc - used), pct: alloc > 0 ? Math.round(used / alloc * 100) : (used > 0 ? 100 : 0), overrun: alloc > 0 && used > alloc };
+            }).sort((a, b) => a.category.localeCompare(b.category));
 
-            const list = [];
+            // ── Requirement-driven eligibility (Planning-First) ───────────────────
+            // The project's Resource Requirements define the demand (department + role
+            // category). They BROADEN the project-type / funded-department gate so a
+            // requirement for a department that employees are not rigidly tagged to
+            // still surfaces matching candidates. Reuses PROJ_REQ (no new query shape).
+            const reqRows = await SELECT.from(PROJ_REQ).columns('department_deptId', 'departmentName', 'roleCategory_roleId', 'specialization_specId', 'specializationName', 'skillCategory')
+                .where({ project_projectId: req.data.projectId });
+            // Strict demand match = employee's ROLE is required AND their skill category
+            // (specialization / skills) matches the required skill category for that role.
+            const reqRoleSet = new Set();          // roles the project needs
+            const reqRoleSkills = {};              // roleId -> Set of required skill-category names (lowercased)
+            (reqRows || []).forEach(r => {
+                const roleId = r.roleCategory_roleId && String(r.roleCategory_roleId);
+                if (!roleId) return;
+                reqRoleSet.add(roleId);
+                const set = reqRoleSkills[roleId] = reqRoleSkills[roleId] || new Set();
+                if (r.skillCategory) set.add(String(r.skillCategory).trim().toLowerCase());
+                if (r.specializationName) set.add(String(r.specializationName).trim().toLowerCase());
+            });
+
+            const log = cds.log('allocatable');
+            let nAfterStatus = 0, nGateMatched = 0;
+            // Build the row for EVERY active, non-exec, non-POC employee once (single
+            // code path — no duplication), tagging whether it matches the demand gate.
+            const pool = [];
             for (const e of (emps || [])) {
                 // Exclude the designated POC (the POC is a distinct role, never a
                 // resource) and any executive/high-authority user (org-wide access).
@@ -6549,12 +7795,26 @@ class ProjectService extends cds.ApplicationService {
                 if (isExecutiveEmployee(e)) continue;
                 const st = String(e.status || 'Active').toLowerCase();
                 if (st === 'inactive' || st === 'resigned') continue;
-                if (typeAware) {
-                    // Role-driven: only employees in the project type's department(s).
-                    if (!typeDeptSet.has(String(e.department || '').trim().toLowerCase())) continue;
-                } else if (!funded.set.has(String(e.department || '').trim().toLowerCase())) {
-                    continue;   // legacy: restrict to budget-approved departments
+                nAfterStatus++;
+                // Strict match against the project's Resource Requirements: the employee's
+                // ROLE must be required, AND their skill category (specialization name or
+                // listed skills) must match the required skill category for that role.
+                const empRole = e.roleCategory_roleId && String(e.roleCategory_roleId);
+                let matchesGate = false;
+                if (empRole && reqRoleSet.has(empRole)) {
+                    const need = reqRoleSkills[empRole];
+                    if (!need || need.size === 0) {
+                        matchesGate = true;   // role required with no specific skill category
+                    } else {
+                        const empSpec = String(specNameById[e.specialization_specId] || '').toLowerCase();
+                        const empSkills = String(e.skills || '').toLowerCase();
+                        for (const cat of need) {
+                            if (!cat) continue;
+                            if (empSpec === cat || (empSpec && empSpec.indexOf(cat) !== -1) || (empSkills && empSkills.indexOf(cat) !== -1)) { matchesGate = true; break; }
+                        }
+                    }
                 }
+                if (matchesGate) nGateMatched++;
                 const usedElsewhere = await usedBandwidth(e.employeeId, req.data.projectId); // excludes this project
                 const ex = onProject[e.employeeId];
                 const here = ex ? (ex.bandwidth || 0) : 0;
@@ -6562,7 +7822,7 @@ class ProjectService extends cds.ApplicationService {
                 const costRatePerHour = rp.loadedHourlyRate(salaryByEmp[e.employeeId], capacity, overhead);
                 // Salary-only Cost Per Hour (overhead shown separately as flat misc).
                 const costPerHour = rp.baseHourlyRate(salaryByEmp[e.employeeId], capacity);
-                list.push({
+                pool.push({
                     employeeId: e.employeeId, employeeName: e.employeeName, department: e.department || 'Others',
                     designation: e.designation || '',
                     currentAllocation: usedElsewhere + here,            // total incl this project
@@ -6575,11 +7835,24 @@ class ProjectService extends cds.ApplicationService {
                     yearsOfExperience: Number(e.yearsOfExperience) || 0,
                     certifications: e.certifications || '',
                     baseAvailabilityPct: (e.baseAvailabilityPct != null ? e.baseAvailabilityPct : 100),
+                    // Whether this employee matches the demand (dept/role/spec) — drives
+                    // recommendation grouping and the "matched vs. all" UI hint.
+                    recommended: matchesGate, _gate: matchesGate,
                     // PM-safe cost: rate only (never salary). Monthly hours = capacity;
                     // total project months drive the full estimated allocation cost.
                     costRatePerHour, costPerHour, monthlyCapacityHours: capacity
                 });
             }
+            // STRICT: when Resource Requirements exist, show ONLY employees whose role
+            // AND skill category match the requirements (per PM request). Fallback to the
+            // full active pool applies only when NO role requirement is defined at all, so
+            // the flow isn't dead-ended before requirements are captured.
+            const hasDemand = reqRoleSet.size > 0;
+            let list = pool.filter(x => x._gate);
+            const usedFallback = !hasDemand && list.length === 0 && pool.length > 0;
+            if (usedFallback) list = pool;
+            list.forEach(x => { delete x._gate; });
+            log.info(`getAllocatableEmployees ${req.data.projectId}: activeNonExec=${nAfterStatus}, role+skillMatched=${nGateMatched}, returned=${list.length}${usedFallback ? ' [FALLBACK: no requirements — showing all active]' : ''}`);
             // Recommendation ordering (Phase 8): within each group the best candidates
             // float up — higher availability, lower utilization, more experience, then
             // certified, then name. The hierarchical grid preserves this order per spec.
@@ -6618,6 +7891,11 @@ class ProjectService extends cds.ApplicationService {
             return JSON.stringify({
                 projectId: req.data.projectId, departments, grouped,
                 typeAware,
+                // Requirement-driven eligibility outcome (Planning-First):
+                //  demandMatched   → # employees matching the project's requirements
+                //  showingAll      → true when we fell back to the full active pool
+                demandMatched: nGateMatched, showingAll: usedFallback,
+                requirementDefined: (reqRows || []).length > 0,
                 // Type-aware → eligible "categories" (roles); legacy → eligible departments.
                 eligibleCategories: typeAware ? fundedCategories : [],
                 eligibleDepartments: typeAware ? [] : funded.names,
@@ -6631,6 +7909,8 @@ class ProjectService extends cds.ApplicationService {
                 executionBudget,
                 allocatedResourceCost: Math.round(allocatedResourceCost),
                 remainingBudget: Math.round(executionBudget - allocatedResourceCost),
+                categoryConsumption,   // per role-category: allocated vs consumed budget
+                allocationUnitLabel: 'Role Category',
                 projectMonths: projMonths,
                 // Monthly overhead (already folded into costRatePerHour) — surfaced so
                 // the UI can DECOMPOSE the estimate into Base + Misc without changing totals.
@@ -6870,9 +8150,13 @@ class ProjectService extends cds.ApplicationService {
             const hours = Math.max(0, Number(d.estimatedHours) || 0);
             const pct = (d.allocationPct != null && d.allocationPct !== '') ? Math.max(0, Number(d.allocationPct) || 0) : null;
             if (pct == null && hours <= 0) return JSON.stringify({ error: 'Provide either an allocation % or estimated hours (> 0).' });
-            const start = ms.plannedStartDate || project.startDate;
-            const end = ms.plannedEndDate || project.endDate;
+            // Per-employee date window (optional overrides). Default to the milestone
+            // window, then project window. Overrides let a PM stagger team members
+            // across a milestone (STEP: allocation Start/End dates).
+            const start = (d.startDate ? String(d.startDate).slice(0, 10) : null) || ms.plannedStartDate || project.startDate;
+            const end = (d.endDate ? String(d.endDate).slice(0, 10) : null) || ms.plannedEndDate || project.endDate;
             if (!start || !end) return JSON.stringify({ error: 'The milestone (or project) needs start and end dates before a resource can be allocated.' });
+            if (String(end).slice(0, 10) < String(start).slice(0, 10)) return JSON.stringify({ error: 'Allocation end date cannot be before the start date.' });
 
             const cap = Number(emp.monthlyCapacityHours) > 0 ? Number(emp.monthlyCapacityHours) : 160;
             const allocationId = `${d.projectId}-${d.employeeId}-${d.milestoneId}`.slice(0, 45);
@@ -6899,8 +8183,24 @@ class ProjectService extends cds.ApplicationService {
                 .where({ allocation_allocationId: allocationId });
             const existingByYM = {}; (existing || []).forEach(r => { existingByYM[r.yearMonth] = r; });
             const oldTP = await allocationTimePhasedCost(allocationId);
-            const oldPR = await SELECT.one.from(PROJECT_RESOURCE).columns('bandwidth').where({ allocationId });
+            const oldPR = await SELECT.one.from(PROJECT_RESOURCE).columns('bandwidth', 'totalAllocationCost', 'spentToDate', 'spentFraction', 'allocationType').where({ allocationId });
             const oldPct = oldPR ? (Number(oldPR.bandwidth) || 0) : 0;
+            // ── Freeze daily actuals before reforecasting (Money Spent never lost) ─
+            // Snapshot the spend accrued up to TODAY under the OLD allocation; the new
+            // allocation then reforecasts only the remaining (future) spend from here.
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const fToday = milestoneElapsedFraction(start, end, todayStr);
+            let newSpentToDate, newSpentFraction;
+            if (oldPR) {
+                // Reforecast: freeze the actual spend-to-date + the elapsed fraction now.
+                const oldMs = { plannedStartDate: start, plannedEndDate: end };
+                newSpentToDate = allocationMoneySpent(oldPR, oldMs, todayStr).spent;
+                newSpentFraction = fToday;
+            } else {
+                // New allocation → time-based accrual over the whole milestone window.
+                newSpentToDate = 0;
+                newSpentFraction = 0;
+            }
 
             // ── Availability guard (HARD, FUTURE months only — the past is locked) ─
             if (type === 'Hard' && !d.force) {
@@ -6950,10 +8250,17 @@ class ProjectService extends cds.ApplicationService {
                 allocationId, project_projectId: d.projectId, employee_employeeId: d.employeeId,
                 employeeName: emp.employeeName, department: emp.department || '',
                 milestone_milestoneId: d.milestoneId, estimatedHours: Math.round(totalHoursNew * 100) / 100, allocationType: type,
+                // Milestone % is relative to the employee's PROJECT-allocated hours (source
+                // of truth), so Manage Resources shows the exact % the PM entered.
+                projectAllocationHours: Math.round((Number(d.projectAllocationHours) || 0) * 100) / 100,
+                milestoneAllocationPercent: (d.milestoneAllocationPercent != null && d.milestoneAllocationPercent !== '')
+                    ? Math.max(0, Math.min(100, Math.round(Number(d.milestoneAllocationPercent))))
+                    : (Number(d.projectAllocationHours) > 0 ? Math.round(totalHoursNew / Number(d.projectAllocationHours) * 100) : 0),
                 bandwidth, startDate: String(start).slice(0, 10), endDate: String(end).slice(0, 10),
                 status: 'Active', role: d.role || null,
                 billingRate: Math.max(0, Number(d.billingRate) || 0),
                 hourlyCostSnapshot: Math.round(rate), overheadSnapshot: overhead, totalAllocationCost: newEstimated,
+                spentToDate: newSpentToDate, spentFraction: newSpentFraction,
                 isOverridden: !!d.force, overrideReason: d.force ? (d.overrideReason || 'Override') : null
             });
             // ── Preserve history: delete only CURRENT+FUTURE rows, keep the past. ──
@@ -7220,7 +8527,8 @@ class ProjectService extends cds.ApplicationService {
         this.on('updateProjectTaskStatus', async (req) => {
             const c = await projectCaller(req);
             const { taskId, status, actualHours } = req.data;
-            const VALID = ['Not Started', 'In Progress', 'In Review', 'Completed', 'Blocked'];
+            // Accept both legacy statuses and the Kanban columns (To Do | Testing | Done).
+            const VALID = ['Not Started', 'To Do', 'In Progress', 'In Review', 'Testing', 'Completed', 'Done', 'Blocked'];
             if (!VALID.includes(status)) return JSON.stringify({ error: 'Invalid status.' });
             const task = await SELECT.one.from(PROJECT_TASK).where({ taskId });
             if (!task) return JSON.stringify({ error: 'Task not found.' });
@@ -7229,7 +8537,7 @@ class ProjectService extends cds.ApplicationService {
             }
             const patch = { status };
             if (actualHours !== undefined && actualHours !== null && actualHours !== '') patch.actualHours = Number(actualHours) || 0;
-            patch.completedAt = (status === 'Completed') ? new Date() : null;
+            patch.completedAt = (normTaskStatus(status) === 'Done') ? new Date() : null;
             await UPDATE(PROJECT_TASK).set(patch).where({ taskId });
             await projectAudit(task.project_projectId, c.name, 'Status Changed', task.status, status);
             founderEvents.ping('updateProjectTaskStatus');
@@ -7325,17 +8633,29 @@ class ProjectService extends cds.ApplicationService {
             // ── Resources + utilization ───────────────────────────────────────
             const resources = await SELECT.from(PROJECT_RESOURCE).where({ project_projectId: projectId }).orderBy('department asc', 'employeeName asc');
             const util = await committedBandwidthByEmployee(resources.map(r => r.employee_employeeId));
-            let over = 0, full = 0, underU = 0;
-            const resList = resources.map(r => {
-                const u = Math.round(util[r.employee_employeeId] || 0);
-                if (u > 100) over++; else if (u >= 90) full++; else underU++;
-                return {
-                    employeeId: r.employee_employeeId, employeeName: r.employeeName, department: r.department || '—',
-                    role: r.role || '—', allocationPct: Number(r.bandwidth) || 0, utilizationPct: u,
-                    availabilityPct: Math.max(0, 100 - u),
+            // Collapse to ONE entry per employee — an employee allocated to several
+            // milestones has multiple ProjectResource rows; summing their bandwidth
+            // gives the project-level allocation. Prevents duplicate chart bars and
+            // double-counted over/under/utilization figures.
+            const byEmp = {};
+            resources.forEach(r => {
+                const id = r.employee_employeeId;
+                if (!byEmp[id]) byEmp[id] = {
+                    employeeId: id, employeeName: r.employeeName, department: r.department || '—',
+                    role: r.role || '—', allocationPct: 0,
                     startDate: r.startDate || p.startDate || null, endDate: r.endDate || p.endDate || null
                 };
+                byEmp[id].allocationPct += Number(r.bandwidth) || 0;
             });
+            let over = 0, full = 0, underU = 0;
+            const resList = Object.keys(byEmp).map(id => {
+                const e = byEmp[id];
+                const u = Math.round(util[id] || 0);
+                if (u > 100) over++; else if (u >= 90) full++; else underU++;
+                return { employeeId: e.employeeId, employeeName: e.employeeName, department: e.department,
+                    role: e.role, allocationPct: e.allocationPct, utilizationPct: u,
+                    availabilityPct: Math.max(0, 100 - u), startDate: e.startDate, endDate: e.endDate };
+            }).sort((a, b) => (a.department || '').localeCompare(b.department || '') || (a.employeeName || '').localeCompare(b.employeeName || ''));
 
             // ── Milestones ────────────────────────────────────────────────────
             const ms = await SELECT.from(MILESTONE).where({ project_projectId: projectId }).orderBy('sequence asc');
@@ -7358,6 +8678,8 @@ class ProjectService extends cds.ApplicationService {
             //   Estimated = Spent + Forecast; Available = Approved − Estimated.
             const tp = await projectTimePhasedCost(projectId);
             const estimated = tp.estimated, spentCost = tp.spent, forecastCost = tp.forecast;
+            // Daily time-based Money Spent (accrues as milestone days elapse; frozen past).
+            const dailySpend = await projectMoneySpent(projectId);
             let deptAlloc = [];
             const bRow = await SELECT.one.from(PROJECT_BUDGET).columns('categoryBudgets', 'departmentBudgets').where({ budgetId: `${projectId}-BUDGET` });
             if (bRow) {
@@ -7378,8 +8700,12 @@ class ProjectService extends cds.ApplicationService {
                 actualSpend: actualCost,       // timesheet actuals (secondary reference)
                 available: Math.max(0, execBudget - estimated),
                 remaining: Math.max(0, execBudget - estimated),
-                remainingForecast: forecastCost,   // Estimated − Spent
+                remainingForecast: forecastCost,   // Estimated − Spent (monthly model)
+                // ── Daily money-spent model (the enterprise 3-value view) ──────────────
+                moneySpent: dailySpend.spent,                                  // actual, time-based
+                remainingResourceBudget: Math.max(0, estimated - dailySpend.spent), // Estimated − Money Spent
                 utilizationPct: execBudget > 0 ? Math.round(estimated / execBudget * 100) : 0,
+                spentPct: estimated > 0 ? Math.round(dailySpend.spent / estimated * 100) : 0,
                 deptAllocation: deptAlloc
             };
 
@@ -7447,7 +8773,7 @@ class ProjectService extends cds.ApplicationService {
                     clientName: clientRow ? (clientRow.companyName || clientRow.clientName) : (p.clientName || p.customerName || '—'),
                     projectType: p.projectTypeName || 'Other', startDate: p.startDate, endDate: p.endDate,
                     durationDays: daysTotal ? Math.round(daysTotal) : null, status: p.status,
-                    poc: p.pocName || '—', deliveryManager: p.pocName || '—', teamSize: resources.length
+                    poc: p.pocName || '—', deliveryManager: p.pocName || '—', teamSize: resList.length
                 },
                 summary: {
                     progress, healthScore, healthLabel, daysRemaining,
@@ -7462,7 +8788,7 @@ class ProjectService extends cds.ApplicationService {
                     priority: t.priority || 'Medium', status: t.status || 'Not Started', dueDate: t.dueDate,
                     completionPct: norm(t.status) === 'completed' ? 100 : (Number(t.actualHours) > 0 && Number(t.estimatedHours) > 0 ? Math.min(99, Math.round(t.actualHours / t.estimatedHours * 100)) : 0)
                 })) },
-                resources: { total: resources.length, overallocated: over, fullyUtilized: full, underutilized: underU, available: resList.filter(r => r.availabilityPct > 0).length, list: resList },
+                resources: { total: resList.length, overallocated: over, fullyUtilized: full, underutilized: underU, available: resList.filter(r => r.availabilityPct > 0).length, list: resList },
                 milestones: { total: msList.length, completed: msCompleted, delayed: msDelayed, upcoming: msUpcoming, currentPhase, list: msList },
                 budget,
                 issues: { open: openIssues.length, high: sevCount.High, critical: sevCount.Critical, severity: sevCount, list: issueList },
@@ -7508,8 +8834,9 @@ class ProjectService extends cds.ApplicationService {
             // Total committed FTE per resource (across all active projects) → utilization badge.
             const resUtil = await committedBandwidthByEmployee(resources.map(r => r.employee_employeeId));
             // Milestone id → name map for the optional milestone tag on each allocation.
-            const projMilestones = await SELECT.from(MILESTONE).columns('milestoneId', 'name', 'sequence').where({ project_projectId: p.projectId }).orderBy('sequence asc');
-            const msNameById = {}; projMilestones.forEach(m => { msNameById[m.milestoneId] = m.name; });
+            const projMilestones = await SELECT.from(MILESTONE).columns('milestoneId', 'name', 'sequence', 'plannedStartDate', 'plannedEndDate').where({ project_projectId: p.projectId }).orderBy('sequence asc');
+            const msNameById = {}; const msById = {}; projMilestones.forEach(m => { msNameById[m.milestoneId] = m.name; msById[m.milestoneId] = m; });
+            const todayStr = new Date().toISOString().slice(0, 10);
             return JSON.stringify({
                 project: {
                     projectId: p.projectId, projectName: p.projectName, customerName: p.customerName,
@@ -7527,9 +8854,26 @@ class ProjectService extends cds.ApplicationService {
                 canManage: isFounderCaller(req, c), isPoc,
                 resources: resources.map(r => {
                     const totalUtil = resUtil[r.employee_employeeId] || 0;
+                    // Daily money-spent / remaining forecast for the Allocated Resources tab.
+                    const spend = allocationMoneySpent(r, msById[r.milestone_milestoneId], todayStr);
+                    const mHours = Number(r.estimatedHours) || 0;
+                    // Hours split mirrors the cost split (spent vs remaining forecast).
+                    const spentHrs = spend.estimated > 0 ? Math.round(mHours * (spend.spent / spend.estimated) * 100) / 100 : 0;
                     return { employeeId: r.employee_employeeId, employeeName: r.employeeName, department: r.department,
                         bandwidth: r.bandwidth, utilizationPct: totalUtil, isOverridden: r.isOverridden === true,
                         role: r.role || '', phase: r.phase || '', module: r.module || '',
+                        // Allocation detail for the per-milestone Manage Resources panel.
+                        estimatedHours: mHours, milestoneAllocatedHours: mHours, startDate: r.startDate || '', endDate: r.endDate || '',
+                        // Milestone % of PROJECT hours (source of truth) — NOT capacity %.
+                        projectAllocationHours: Number(r.projectAllocationHours) || 0,
+                        milestoneAllocationPercent: Number(r.milestoneAllocationPercent) || 0,
+                        actualSpentHours: spentHrs, forecastRemainingHours: Math.max(0, Math.round((mHours - spentHrs) * 100) / 100),
+                        allocationType: r.allocationType || 'Hard', billingRate: Number(r.billingRate) || 0,
+                        hourlyCost: Math.round(Number(r.hourlyCostSnapshot) || 0),
+                        totalAllocationCost: Number(r.totalAllocationCost) || 0, status: r.status || 'Active',
+                        estimatedCost: spend.estimated, moneySpent: spend.spent, remainingForecast: spend.remaining,
+                        actualCost: spend.spent, forecastCost: spend.remaining,
+                        allocationDate: r.createdAt || '',
                         milestoneId: r.milestone_milestoneId || '', milestoneName: msNameById[r.milestone_milestoneId] || '' };
                 }),
                 milestones: projMilestones.map(m => ({ milestoneId: m.milestoneId, name: m.name, sequence: m.sequence })),

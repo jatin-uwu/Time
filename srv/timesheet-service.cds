@@ -915,13 +915,23 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
     // ── Hierarchical resource requirements (Phase 4) ─────────────────────────────
     action getResourceHierarchy()                                                 returns LargeString;
     action getResourceRequirements(projectId: String(20))                         returns LargeString;
+    // Skill/category autocomplete (reuses the company taxonomy master).
+    action skillSuggest(type: String(20), q: String(150),
+                        departmentId: String(20), roleId: String(30))             returns LargeString;
     action createResourceRequirement(projectId: String(20), departmentId: String(20),
                                      roleCategoryId: String(30), specializationId: String(40),
-                                     requiredCount: Integer, requiredHours: Decimal,
-                                     startDate: String, endDate: String, notes: String(500),
+                                     requiredCount: Integer, estimatedHours: Decimal, requiredHours: Decimal,
                                      skillCategory: String(100), skills: String(500),
-                                     experienceRange: String(40), allocationPct: Integer) returns LargeString;
+                                     experienceRange: String(40)) returns LargeString;
+    action updateResourceRequirement(requirementId: String(45), departmentId: String(20),
+                                     roleCategoryId: String(30),
+                                     requiredCount: Integer, estimatedHours: Decimal, requiredHours: Decimal,
+                                     skillCategory: String(100), skills: String(500),
+                                     experienceRange: String(40)) returns LargeString;
     action deleteResourceRequirement(requirementId: String(45))                   returns LargeString;
+    // Milestone-level resource plan (execution planning vs project baseline).
+    action getMilestoneResources(milestoneId: String(40))                         returns LargeString;
+    action saveMilestoneResources(milestoneId: String(40), items: LargeString, reason: String(500)) returns LargeString;
 
     // ── Client Master management (Founder) ──────────────────────────────────────
     action getClientMasters()                                                     returns LargeString;
@@ -1014,7 +1024,43 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
     action createProjectTask(projectId: String(20), taskName: String(150),
                             description: String(1000), assignedToId: String(10),
                             priority: String(20), startDate: String, dueDate: String,
-                            estimatedHours: Decimal, milestoneId: String(40))      returns LargeString;
+                            estimatedHours: Decimal, milestoneId: String(40),
+                            sprintId: String(45), workItemType: String(20), storyPoints: Decimal,
+                            parentTaskId: String(25), epicId: String(25), acceptanceCriteria: String(2000),
+                            reporterId: String(10), labels: String(300)) returns LargeString;
+
+    // ── Sprint Management (execution — sprints are PROJECT children, not milestone) ─
+    // getSprints/createSprint are project-scoped; milestoneId kept for backward calls.
+    action getSprints(projectId: String(20), milestoneId: String(40))             returns LargeString;
+    action getMilestoneTeam(milestoneId: String(40))                              returns LargeString;
+    action getMilestoneAllocationScreen(milestoneId: String(40))                  returns LargeString;
+    action getSprintBoard(sprintId: String(45))                                   returns LargeString;
+    action createSprint(projectId: String(20), milestoneId: String(40), name: String(150), goal: String(500),
+                        sprintNumber: Integer, startDate: String, endDate: String,
+                        estimatedCapacityHours: Decimal, ownerId: String(10), description: String(1000)) returns LargeString;
+    // Workflow backbone: which planning stages are complete for a project.
+    action getProjectWorkflow(projectId: String(20))                              returns LargeString;
+    // Sprint Planning: employee availability (cross-project sprint commitments),
+    // sprint capacity, utilization, over-allocation, backlog stories to pull in.
+    action getSprintPlanning(sprintId: String(45))                                returns LargeString;
+    // Cross-project workload for one employee (every active/upcoming sprint commitment).
+    action getEmployeeWorkload(employeeId: String(20))                            returns LargeString;
+    action updateSprint(sprintId: String(45), name: String(150), goal: String(500),
+                        sprintNumber: Integer, startDate: String, endDate: String,
+                        estimatedCapacityHours: Decimal, ownerId: String(10), description: String(1000)) returns LargeString;
+    action deleteSprint(sprintId: String(45))                                     returns LargeString;
+    action setSprintStatus(sprintId: String(45), action: String(20))              returns LargeString;
+    action moveWorkItem(taskId: String(25), status: String(20), sprintId: String(45)) returns LargeString;
+    action getSprintReport(sprintId: String(45))                                  returns LargeString;
+    // Work-item detail, edit, delete, time logging & comments.
+    action getWorkItem(taskId: String(25))                                        returns LargeString;
+    action updateWorkItem(taskId: String(25), title: String(150), description: String(1000),
+                          priority: String(20), workItemType: String(20), storyPoints: Decimal,
+                          estimatedHours: Decimal, labels: String(300), dueDate: String,
+                          parentTaskId: String(25), assigneeId: String(10))        returns LargeString;
+    action deleteWorkItem(taskId: String(25))                                     returns LargeString;
+    action logWorkItemTime(taskId: String(25), hours: Decimal, comment: String(500), workDate: String) returns LargeString;
+    action addWorkItemComment(taskId: String(25), text: String(2000))             returns LargeString;
 
     action updateProjectStatus(projectId: String(20), status: String(20))         returns LargeString;
     action getProjectDashboard()                                                  returns LargeString;
@@ -1038,7 +1084,8 @@ service ProjectService @(path: '/project') @(requires: 'authenticated-user') {
     action allocateResourceToMilestone(projectId: String(20), employeeId: String(10),
                             milestoneId: String(40), estimatedHours: Decimal(9,2),
                             allocationPct: Integer, allocationType: String(10), role: String(60),
-                            billingRate: Decimal(12,2),
+                            billingRate: Decimal(12,2), startDate: String, endDate: String,
+                            projectAllocationHours: Decimal(9,2), milestoneAllocationPercent: Integer,
                             force: Boolean, overrideReason: String(500))            returns LargeString;
     // Replace one employee with another on the same milestone (release + re-allocate).
     action replaceResourceOnMilestone(projectId: String(20), milestoneId: String(40),

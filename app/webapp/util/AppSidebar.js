@@ -43,7 +43,7 @@ sap.ui.define(["sap/ui/core/IconPool"], function (IconPool) {
         { route: "approval-history", label: "Approval History", icon: "history" },
         { route: "team-attendance", label: "Team Attendance", icon: "employee-pane" },
         { route: "performance-rating", label: "Performance Rating", icon: "line-chart" },
-        { route: "resource-planning", label: "Resource Planning", icon: "org-chart" },
+        // Resource Planning is now inside Project → Resources → Available Resources.
         { route: "resource-settings", label: "Planning Settings", icon: "action-settings" }
     ]}];
     var HR = [{ title: "Human Resources", items: [

@@ -513,11 +513,11 @@ entity Project : managed {
 // Budget allocation record created by the Founder once the planning meeting is done.
 // Stores total budget + department-wise + other-category breakdowns as JSON.
 entity ProjectBudget : managed {
-    key budgetId          : String(30);        // <projectId>-BUDGET
-    project               : Association to Project;
-    totalBudget           : Decimal(15,2) default 0;
-    departmentBudgets     : LargeString;        // JSON [{department,amount,notes}] (legacy, still read)
-    otherBudgets          : LargeString;        // JSON [{category,amount,notes}]  (legacy, still read)
+    key budgetId          : String(30);        // <projectId>-BUDGET // 001,002
+    project               : Association to Project;//project1, project2
+    totalBudget           : Decimal(15,2) default 0;//18000000, 2000000
+    departmentBudgets     : LargeString;        // JSON [{department,amount,notes}] (legacy, still read)//1000000, 1000000
+    otherBudgets          : LargeString;        // JSON [{category,amount,notes}]  (legacy, still read)//
     // ── Category-based allocation (primary) — against Execution Budget ─────────
     // JSON [{category,amount,notes}] over the 7 cost categories: Resource Cost,
     // Infrastructure, Licensing, Vendor, Travel, Training, Miscellaneous.
@@ -599,6 +599,13 @@ entity Milestone : managed {
     completionCriteria : String(1000);                  // definition of done
     deliverables       : String(1000);                  // expected outputs (free text / list)
     estimatedEffort    : Decimal(9, 2) default 0;       // planned effort in person-hours
+    // Set when the milestone's resource plan exceeds the project baseline (approval hint).
+    exceedsResourcePlan : Boolean default false;
+    // ── Business-deliverable tracking (additive — Milestone = business planning) ──
+    riskStatus         : String(20) default 'On Track'; // On Track | At Risk | Off Track
+    actualCost         : Decimal(15, 2) default 0;      // rolled up from allocation/spend
+    actualHours        : Decimal(9, 2) default 0;       // rolled up from time logs
+    completionDate     : Date;                          // set when milestone Completed
 }
 
 // Finish-to-start dependency: `milestone` cannot start before `predecessor` Completed.
@@ -669,11 +676,17 @@ entity ProjectResource : managed {
     // When a PM allocates by milestone+hours, estimatedHours holds the total and the
     // system spreads it into ResourceMonthlyAllocation rows by working days. bandwidth
     // stays populated (derived) so every existing dashboard/report keeps working.
-    estimatedHours   : Decimal(9,2) default 0;       // total hours booked for this allocation
+    estimatedHours   : Decimal(9,2) default 0;       // = milestoneAllocatedHours (project hrs × milestone %)
+    // ── Milestone allocation as a % of the employee's PROJECT-allocated hours ──────
+    // milestone% is relative to projectAllocationHours (NOT monthly capacity), so the
+    // PM sees the exact % they entered (40h × 50% = 20h → 50%).
+    projectAllocationHours   : Decimal(9,2) default 0;   // total approved project effort for this employee
+    milestoneAllocationPercent : Integer default 0;      // % of project hours assigned to this milestone
     allocationType   : String(10) default 'Hard';    // Hard (confirmed) | Soft (tentative)
-    // ── Billing (additive) — revenue side, distinct from cost snapshots above ──
-    // PMs may set a client billing rate/hr; cost snapshots stay internal-only.
     billingRate      : Decimal(12,2) default 0;      // client bill rate/hr for this allocation
+    // Daily money-spent tracking — actuals frozen on each reforecast.
+    spentToDate      : Decimal(15,2) default 0;      // frozen actual ₹ at last snapshot
+    spentFraction    : Decimal(9,6) default 0;       // milestone-elapsed fraction at snapshot (0..1)
     monthlyRows      : Composition of many ResourceMonthlyAllocation on monthlyRows.allocation = $self;
 }
 
@@ -883,21 +896,76 @@ entity ProjectResourceRequirement : managed {
     specialization    : Association to SpecializationMaster;
     specializationName: String(100);
     requiredCount     : Integer default 1;
-    requiredHours     : Decimal(9,2) default 0;
-    startDate         : Date;
-    endDate           : Date;
-    notes             : String(500);
+    estimatedHours    : Decimal(9,2) default 0;      // per-employee planning hours (renamed from requiredHours)
     status            : String(20) default 'Open';   // Open | Fulfilled | Cancelled
-    // ── Skill/experience planning detail (additive — Planning-First workflow) ──
-    // roleCategory above serves as "Role"; these enrich the demand definition.
-    skillCategory     : String(100);                 // e.g. Backend, Frontend, Cloud
-    skills            : String(500);                 // comma-separated required skills
-    experienceRange   : String(40);                  // e.g. "3-5 yrs" | "Senior (8+)"
-    allocationPct     : Integer default 100;         // planned per-head allocation %
+    // ── Skill/experience planning detail (Planning-First workflow) ────────────
+    skillCategory     : String(100);
+    skills            : String(500);
+    experienceRange   : String(40);
 }
 
-// A task that belongs to a project (cannot exist without one). Separate from the
-// existing TaskMaster so production task/timesheet flows are untouched.
+// Milestone-level staffing plan vs the project baseline (execution planning).
+entity MilestoneResourceRequirement : managed {
+    key mrId          : String(60);          // <milestoneId>-<requirementId>
+    milestone         : Association to Milestone;
+    requirement       : Association to ProjectResourceRequirement;
+    roleName          : String(150);
+    departmentName    : String(100);
+    plannedQuantity   : Integer default 0;   // baseline qty from the project requirement
+    milestoneQuantity : Integer default 0;   // qty this milestone requests
+    hoursPerEmployee  : Decimal(9, 2) default 0;
+    notes             : String(500);
+    planStatus        : String(20) default 'within';   // within | exceeds | unplanned
+}
+
+// Immutable audit of every milestone resource-plan change.
+entity MilestoneResourceAudit : managed {
+    key auditId       : String(60);
+    milestone         : Association to Milestone;
+    milestoneName     : String(150);
+    roleName          : String(150);
+    previousQuantity  : Integer default 0;
+    newQuantity       : Integer default 0;
+    changedById       : String(20);
+    changedByName     : String(100);
+    reason            : String(500);
+    changedAt         : Timestamp;
+}
+
+// ── Sprint (execution planning) — belongs to a Milestone (business planning) ──
+// Milestones plan the business; Sprints execute work inside them. Capacity is
+// derived from the milestone's resource allocations (no separate cost engine).
+// Sprint = EXECUTION, a DIRECT child of Project (NOT of Milestone). Stories are the
+// only bridge between a Milestone and a Sprint. New ids are <projectId>-S-001.
+entity Sprint : managed {
+    key sprintId           : String(45);          // <projectId>-S-001
+    project                : Association to Project;
+    // DEPRECATED: sprints are no longer children of a milestone. Column kept nullable
+    // for backward compatibility with existing rows; do NOT read it as a hierarchy.
+    milestone              : Association to Milestone;
+    name                   : String(150);
+    goal                   : String(500);
+    sprintNumber           : Integer default 1;
+    // Backlog | Planned | Active | Completed | Cancelled
+    status                 : String(20) default 'Backlog';
+    startDate              : Date;
+    endDate                : Date;
+    estimatedCapacityHours : Decimal(9, 2) default 0;  // planned capacity for the sprint
+    owner                  : Association to EmployeeMaster;
+    ownerName              : String(100);
+    description            : String(1000);
+    sequence               : Integer default 0;        // ordering within the project
+    completedAt            : Timestamp;
+    // ── Sprint execution metrics (additive) ──────────────────────────────────────
+    velocity               : Decimal(9, 2) default 0;  // completed story points last run
+    teamJson               : LargeString;              // committed team members snapshot
+    burndownJson           : LargeString;              // [{date, remaining}] burndown series
+    health                 : String(20) default 'On Track'; // On Track | At Risk | Off Track
+}
+
+// A task that belongs to a project (cannot exist without one). Refactored into a
+// Jira-style work item: still a ProjectTask (all existing APIs/flows preserved),
+// now optionally inside a Sprint with a work-item type, story points and a parent.
 entity ProjectTask : managed {
     key taskId       : String(25);           // <projectId>-T-001
     project          : Association to Project;
@@ -906,13 +974,38 @@ entity ProjectTask : managed {
     assignedTo       : Association to EmployeeMaster;
     assignedToName   : String(100);
     priority         : String(20) default 'Medium';
-    status           : String(20) default 'Not Started'; // Not Started|In Progress|In Review|Completed
+    status           : String(20) default 'Not Started'; // Not Started|In Progress|In Review|Testing|Completed|Blocked
     startDate        : Date;
     dueDate          : Date;
     estimatedHours   : Decimal(7, 2) default 0;
-    actualHours      : Decimal(7, 2) default 0;
+    actualHours      : Decimal(7, 2) default 0;      // = logged hours
     completedAt      : Timestamp;
     milestone        : Association to Milestone;      // optional milestone scope (additive)
+    // ── Sprint / Jira work-item model (additive — existing tasks stay valid) ──────
+    sprint           : Association to Sprint;         // execution container (optional)
+    workItemType     : String(20) default 'Task';    // Epic | Story | Task | Bug | Subtask | Spike
+    storyPoints      : Decimal(5, 1) default 0;
+    parentTask       : Association to ProjectTask;    // story→subtask / epic→story
+    reporter         : Association to EmployeeMaster;
+    reporterName     : String(100);
+    labels           : String(300);                  // comma-separated
+    // ── Story bridge / execution detail (additive) ───────────────────────────────
+    // Story = the ONLY link between a Milestone and a Sprint: a Story MUST have both
+    // milestone and sprint. Task/Subtask inherit milestone+sprint+project from their
+    // parent Story. Bug may hang off a Story or directly off a Sprint.
+    remainingHours     : Decimal(7, 2) default 0;     // work left (drives sprint capacity)
+    acceptanceCriteria : String(2000);                // definition of done for a story
+    epic               : Association to ProjectTask;  // optional epic grouping
+}
+
+// Threaded comments on a work item (Jira-style activity).
+entity WorkItemComment : managed {
+    key commentId : String(60);
+    task          : Association to ProjectTask;
+    authorId      : String(20);
+    authorName    : String(100);
+    text          : String(2000);
+    at            : Timestamp;
 }
 
 // Immutable audit trail for every project-module action.

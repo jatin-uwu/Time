@@ -125,10 +125,24 @@ sap.ui.define([
 
             var h = this._host();
             if (!h) return;
-            // Render, then initialise charts + wire selects once DOM exists.
+            // Render, then initialise charts + wire selects once the DOM actually exists.
             h.setContent(html);
             var that = this;
-            setTimeout(function () { that._initCharts(); that._wireSelects(); }, 60);
+            this._afterHostRender(function () { that._initCharts(); that._wireSelects(); });
+        },
+
+        // Runs cb once the host's re-rendered DOM contains a <canvas> (or gives up on an
+        // error/empty state). Reliable across UI5's async core:HTML rendering — a fixed
+        // setTimeout races the render and can silently skip drawing.
+        _afterHostRender: function (cb) {
+            var that = this, n = 0;
+            var tick = function () {
+                var dom = that._host() && that._host().getDomRef();
+                if (dom && dom.querySelector("canvas")) return cb();
+                if (++n > 60) return;
+                window.requestAnimationFrame(tick);
+            };
+            window.requestAnimationFrame(tick);
         },
 
         // ── Header ──────────────────────────────────────────────────────────────

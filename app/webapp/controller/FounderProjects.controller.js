@@ -1003,7 +1003,7 @@
                 var allCats = (existing.costCategories && existing.costCategories.length ? existing.costCategories : RESOURCE_CATEGORIES).slice();
                 var kindPlural = unitKind === "Module" ? "Modules" : unitKind === "Resource Category" ? "Resource Categories" : "Departments";
                 var secALabel = unitKind + " Allocation";
-                var secABtn = "＋ Select " + kindPlural;
+                var secABtn = "＋ Select Role Categories";
                 var secBLabel = "Cost Category Allocation";
                 var secBBtn = "＋ Select Cost Categories";
 

@@ -64,7 +64,7 @@ sap.ui.define([
                     that._view = "list"; that._load();
                     return;
                 }
-                that._detail = d; that._planning = null; that._budgetReqs = null; that._forecast = null; that._pmDash = null; that._view = "detail"; that._render();
+                that._detail = d; that._planning = null; that._budgetReqs = null; that._forecast = null; that._pmDash = null; that._avail = null; that._view = "detail"; that._render();
                 // PM Dashboard summary (KPIs/health/charts) rendered inline on the Overview tab.
                 pprojpost("getPmDashboard", { projectId: projectId }).then(function (pm) {
                     that._pmDash = (pm && !pm.error) ? pm : { error: (pm && pm.error) || "unavailable" };
@@ -91,8 +91,11 @@ sap.ui.define([
         _render: function () {
             var h = this._host(); if (!h) return;
             if (this._view === "detail" && this._detail) {
+                this._attachChartDelegate();
                 h.setContent(this._renderDetail());
-                if ((this._detailTab || "overview") === "overview" && this._pmDash && !this._pmDash.error) this._pmLoadChart();
+                // Charts are (re)drawn by the host's afterRendering delegate once the
+                // DOM is live; here we just make sure the Chart.js lib is loading.
+                if ((this._detailTab || "overview") === "overview" && this._pmDash && !this._pmDash.error && !window.Chart) this._ensureChartLib();
                 return;
             }
             var list = (this._data && this._data.projects) || [];
@@ -234,9 +237,9 @@ sap.ui.define([
             var budgetPanel = "<div class='pmPanel pmSpan2'><div class='pmPanelHead'>Budget · Time-Phased</div>" +
                 "<div class='pmMiniStats pmBudgetStats'>" +
                 "<div><span>Approved</span><b>" + this._pmMoney(b.approved) + "</b></div>" +
-                "<div><span>Spent</span><b style='color:#64748b'>" + this._pmMoney(b.spent != null ? b.spent : 0) + "</b></div>" +
-                "<div><span>Forecast</span><b style='color:#2563eb'>" + this._pmMoney(b.forecast != null ? b.forecast : 0) + "</b></div>" +
                 "<div><span>Estimated</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + this._pmMoney(b.estimated != null ? b.estimated : b.utilized) + "</b></div>" +
+                "<div><span>Money Spent</span><b style='color:#16a34a'>" + this._pmMoney(b.moneySpent != null ? b.moneySpent : (b.spent || 0)) + "</b></div>" +
+                "<div><span>Remaining Forecast</span><b style='color:#2563eb'>" + this._pmMoney(b.remainingResourceBudget != null ? b.remainingResourceBudget : (b.forecast || 0)) + "</b></div>" +
                 "<div><span>Available</span><b style='color:#16a34a'>" + this._pmMoney(b.available != null ? b.available : b.remaining) + "</b></div>" +
                 "<div><span>Utilization</span><b style='color:" + this._pmUtilColor(b.utilizationPct) + "'>" + b.utilizationPct + "%</b></div>" + "</div>" +
                 "<div class='pmProgTrack'><div class='pmProgFill' style='width:" + Math.min(100, b.utilizationPct) + "%;background:" + this._pmUtilColor(b.utilizationPct) + "'></div></div>" +
@@ -286,13 +289,32 @@ sap.ui.define([
             if (b.approved > 0) mk("pmc_bud", { type: "bar", data: { labels: ["Approved", "Utilized", "Remaining"], datasets: [{ data: [b.approved, b.utilized, b.remaining], backgroundColor: ["#2563eb", "#dc2626", "#16a34a"], borderRadius: 5, maxBarThickness: 60 }] },
                 options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (c) { return c.label + ": " + self._pmMoney(c.raw) + (c.dataIndex === 1 ? "  (" + b.utilizationPct + "%)" : ""); } } } }, scales: { y: { grid: grid, ticks: { callback: function (v) { return self._pmMoney(v); } } }, x: { grid: { display: false } } } } });
         },
-        _pmLoadChart: function () {
-            if (window.Chart) { var t = this; setTimeout(function () { t._pmInitCharts(); }, 40); return; }
-            if (this._pmChartLoading) return;
+        // Attach ONCE to the HTML host: its afterRendering fires only after UI5 has
+        // actually flushed the (re)rendered DOM — the reliable moment to (re)draw
+        // charts on the fresh canvases. Replaces the old fragile setTimeout race.
+        _attachChartDelegate: function () {
+            if (this._chartDelegateAttached) return;
+            var h = this._host(); if (!h) return;
+            var that = this;
+            h.addEventDelegate({ onAfterRendering: function () { that._maybeDrawCharts(); } });
+            this._chartDelegateAttached = true;
+        },
+        // Draw the overview charts iff we're actually showing the overview with data.
+        // Ensures Chart.js is loaded first (CDN), then initialises on the live DOM.
+        _maybeDrawCharts: function () {
+            if (this._view !== "detail" || (this._detailTab || "overview") !== "overview") return;
+            if (!this._pmDash || this._pmDash.error) return;
+            if (!document.querySelector(".pmChartRow")) return;   // overview DOM not present
+            if (window.Chart) { this._pmInitCharts(); return; }
+            this._ensureChartLib();
+        },
+        // Load the Chart.js library once; redraw once it's available.
+        _ensureChartLib: function () {
+            if (window.Chart || this._pmChartLoading) return;
             this._pmChartLoading = true;
             var that = this, s = document.createElement("script");
             s.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"; s.async = true;
-            s.onload = function () { that._pmChartLoading = false; that._pmInitCharts(); };
+            s.onload = function () { that._pmChartLoading = false; that._maybeDrawCharts(); };
             s.onerror = function () { that._pmChartLoading = false; };
             document.head.appendChild(s);
         },
@@ -321,55 +343,9 @@ sap.ui.define([
                 // Project Manager Dashboard (hero header + KPIs + charts + panels).
                 body = this._pmOverview(d);
             } else if (activeTab === "resources") {
-                var resCount = (d.resources || []).length;
-                var p2 = d.project || {};
-                var canAllocate = d.isPoc && !(p2.status === "Planning" && p2.lifecycleStage !== "BudgetAllocated");
-                var lcNotice = (d.isPoc && p2.status === "Planning" && p2.lifecycleStage !== "BudgetAllocated")
-                    ? "<div class='pmLcNotice'>Resource allocation will be unlocked once the Founder completes the planning meeting and allocates the budget.</div>"
-                    : "";
-                var resHead = "<div class='pmPanelHead'>Resources <span class='pmCount'>" + resCount + "</span>" +
-                    (canAllocate ? " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onAllocateByMilestone()\">＋ Allocate to Milestone</button>" : "") +
-                    " <button class='pmBtn ghost sm' onclick=\"window._projCtrl.onResourceForecast()\">Capacity Forecast</button></div>";
-                var msList = d.milestones || [];
-                var resRows = (d.resources || []).map(function (r) {
-                    var u = r.utilizationPct || 0;
-                    var uc = u > 100 ? "#dc2626" : u >= 85 ? "#a16207" : "#16a34a";
-                    var ovr = r.isOverridden ? " <span class='pmOvrTag'>Overridden</span>" : "";
-                    var rpm = [r.role, r.phase, r.module].filter(Boolean).map(esc).join(" · ") || "—";
-                    // Optional milestone scope — inline picker (manage) or label (read-only).
-                    var msCell;
-                    if (canAllocate && msList.length) {
-                        var opts = "<option value=''>— Project-level —</option>" + msList.map(function (m) {
-                            return "<option value='" + esc(m.milestoneId) + "'" + (r.milestoneId === m.milestoneId ? " selected" : "") + ">#" + (m.sequence || 0) + " " + esc(m.name) + "</option>";
-                        }).join("");
-                        msCell = "<select class='pmSelect' onchange=\"window._projCtrl.onResMilestone('" + esc(r.employeeId) + "', this.value, " + (r.bandwidth || 0) + ")\">" + opts + "</select>";
-                    } else { msCell = r.milestoneName ? esc(r.milestoneName) : "<span class='pmMuted'>Project-level</span>"; }
-                    var replaceBtn = (canAllocate && r.milestoneId)
-                        ? "<button class='pmLink' onclick=\"window._projCtrl.onReplaceRes('" + esc(r.employeeId) + "','" + esc(r.employeeName) + "','" + esc(r.milestoneId) + "','" + esc(r.milestoneName || "") + "'," + (r.bandwidth || 0) + ")\">Replace</button> "
-                        : "";
-                    return "<tr><td>" + esc(r.employeeName) + " <b style='color:" + uc + "'>(" + u + "%)</b>" + ovr + "</td>" +
-                        "<td>" + esc(r.department) + "</td><td>" + rpm + "</td><td>" + msCell + "</td><td><b>" + r.bandwidth + "%</b></td>" +
-                        (canAllocate ? "<td>" + replaceBtn + "<button class='pmLink danger' onclick=\"window._projCtrl.onRemoveRes('" + esc(r.employeeId) + "','" + esc(r.employeeName) + "')\">Deallocate</button></td>" : "<td></td>") + "</tr>";
-                }).join("");
-                body = "<div class='pmPanel'>" + resHead + lcNotice +
-                    (resRows ? "<table class='pmTable'><thead><tr><th>Employee</th><th>Dept</th><th>Role · Phase · Module</th><th>Milestone</th><th>This Project</th><th></th></tr></thead><tbody>" + resRows + "</tbody></table>"
-                        : "<div class='pmMuted'>No resources allocated.</div>") + "</div>" +
-                    this._capacityPanel();
+                body = this._renderResourcesTab(d);
             } else if (activeTab === "tasks") {
-                var taskRows = (d.tasks || []).map(function (t) {
-                    var statusCell = t.mine
-                        ? "<select class='pmSelect' onchange=\"window._projCtrl.onTaskStatus('" + esc(t.taskId) + "', this.value)\">" +
-                            TASK_STATUSES.map(function (s) { return "<option" + (s === t.status ? " selected" : "") + ">" + s + "</option>"; }).join("") + "</select>"
-                        : esc(t.status);
-                    return "<tr class='" + (t.mine ? "pmMine" : "") + "'><td><b>" + esc(t.taskName) + "</b></td>" +
-                        "<td>" + esc(t.assignedToName || "—") + "</td><td>" + esc(t.priority) + "</td>" +
-                        "<td>" + (t.estimatedHours || 0) + "h / " + (t.actualHours || 0) + "h</td><td>" + statusCell + "</td></tr>";
-                }).join("");
-                var taskHead = "<div class='pmPanelHead'>Tasks <span class='pmCount'>" + ((d.tasks || []).length) + "</span>" +
-                    (d.isPoc ? " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onAssignTask()\">＋ Assign Task</button>" : "") + "</div>";
-                body = "<div class='pmPanel'>" + taskHead +
-                    (taskRows ? "<table class='pmTable'><thead><tr><th>Task</th><th>Assignee</th><th>Priority</th><th>Est/Act</th><th>Status</th></tr></thead><tbody>" + taskRows + "</tbody></table>"
-                        : "<div class='pmMuted'>No tasks yet.</div>") + "</div>";
+                body = this._renderSprintTab(d);
             } else if (activeTab === "milestones") {
                 body = this._renderMilestonesTab();
             } else if (activeTab === "requirements") {
@@ -386,6 +362,142 @@ sap.ui.define([
         },
 
         // Operational resource-planning panel — capacity & utilization only, NO money.
+        // ── Resources tab = Available Resources + Allocated Resources sub-tabs ────
+        onResSubTab: function (key) {
+            this._resSubTab = key;
+            if (key === "available" && !this._avail) this._loadAvailable();
+            else this._render();
+        },
+        _loadAvailable: function () {
+            var that = this, pid = this._detail && this._detail.project && this._detail.project.projectId;
+            if (!pid) return;
+            ppost("getAllocatableEmployees", { projectId: pid }).then(function (a) {
+                that._avail = (a && !a.error) ? a : { departments: [], error: (a && a.error) };
+                if ((that._detailTab || "") === "resources") that._render();
+            }).catch(function () { that._avail = { departments: [] }; if ((that._detailTab || "") === "resources") that._render(); });
+        },
+        _renderResourcesTab: function (d) {
+            var sub = this._resSubTab || "available";
+            var p2 = d.project || {};
+            var canAllocate = d.isPoc && !(p2.status === "Planning" && p2.lifecycleStage !== "BudgetAllocated");
+            var subBar = "<div class='pmSubTabs'>" +
+                "<button class='pmSubTab" + (sub === "available" ? " active" : "") + "' onclick=\"window._projCtrl.onResSubTab('available')\">Available Resources</button>" +
+                "<button class='pmSubTab" + (sub === "allocated" ? " active" : "") + "' onclick=\"window._projCtrl.onResSubTab('allocated')\">Allocated Resources <span class='pmCount'>" + ((d.resources || []).length) + "</span></button>" +
+                "</div>";
+            var content = (sub === "allocated") ? this._renderAllocatedResources(d, canAllocate) : this._renderAvailableResources(d, canAllocate);
+            return "<div class='pmPanel'>" + subBar + content + "</div>";
+        },
+        // Tab 1 — Available Resources (reuses the project's allocatable-employee pool:
+        // availability, utilization, skills, dept, role, rate, recommendation + allocate).
+        _renderAvailableResources: function (d, canAllocate) {
+            var p2 = d.project || {};
+            var lcNotice = (d.isPoc && p2.status === "Planning" && p2.lifecycleStage !== "BudgetAllocated")
+                ? "<div class='pmLcNotice'>Resource allocation will be unlocked once the Founder completes the planning meeting and allocates the budget.</div>" : "";
+            var head = "<div class='pmPanelHead'>Available Resources" +
+                (canAllocate ? " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onAllocateByMilestone()\">＋ Allocate to Milestone</button>" : "") +
+                " <button class='pmBtn ghost sm' onclick=\"window._projCtrl.onResourceForecast()\">Capacity Forecast</button></div>";
+            if (!this._avail) { this._loadAvailable(); return head + "<div class='pmLoading'>Loading available resources…</div>"; }
+            if (this._avail.error) return head + "<div class='pmMuted'>" + esc(this._avail.error) + "</div>";
+            var groups = this._avail.departments || [];
+            var emps = []; groups.forEach(function (g) { (g.employees || []).forEach(function (e) { emps.push(e); }); });
+            if (!emps.length) return head + "<div class='pmMuted'>No available resources match this project's requirements.</div>";
+            var hint = (this._avail.showingAll && this._avail.requirementDefined)
+                ? "<div class='pmMuted' style='margin-bottom:6px'>No employees are tagged to the requirements' roles — showing all available employees.</div>"
+                : (this._avail.demandMatched > 0 ? "<div class='pmMuted' style='margin-bottom:6px'>★ " + this._avail.demandMatched + " employee(s) match this project's Resource Requirements.</div>" : "");
+            var rows = groups.map(function (g) {
+                var grp = "<tr class='pmGroupRow'><td colspan='7'><b>" + esc(g.department) + "</b> <span class='pmCount'>" + (g.employees || []).length + "</span></td></tr>";
+                return grp + (g.employees || []).map(function (e) {
+                    var u = e.currentAllocation || 0, av = e.available != null ? e.available : Math.max(0, 100 - u);
+                    var uc = u > 100 ? "#dc2626" : u >= 85 ? "#a16207" : "#16a34a";
+                    var star = e.recommended ? "<span class='amStar' title='Matches a Resource Requirement'>★</span> " : "";
+                    var skills = esc(e.skills || e.specializationName || "—");
+                    return "<tr><td>" + star + esc(e.employeeName) + "<div class='pmMuted' style='font-size:0.68rem'>" + esc(e.employeeId) + "</div></td>" +
+                        "<td>" + esc(e.roleCategoryName || e.designation || "—") + "</td>" +
+                        "<td>" + skills + "</td>" +
+                        "<td style='text-align:center;color:#16a34a'><b>" + av + "%</b></td>" +
+                        "<td style='text-align:center;color:" + uc + "'>" + u + "%</td>" +
+                        "<td style='text-align:right'>₹" + (Number(e.costRatePerHour) || 0).toLocaleString("en-IN") + "/hr</td>" +
+                        "<td style='text-align:right'>" + (canAllocate ? "<button class='pmLink' onclick=\"window._projCtrl.onAllocateByMilestone()\">Allocate</button>" : "—") + "</td></tr>";
+                }).join("");
+            }).join("");
+            return head + lcNotice + hint +
+                "<table class='pmTable'><thead><tr><th>Employee</th><th>Role</th><th>Skills</th><th>Available</th><th>Utilization</th><th style='text-align:right'>Hourly Rate</th><th></th></tr></thead><tbody>" +
+                rows + "</tbody></table>" + this._capacityPanel();
+        },
+        // Tab 2 — Allocated Resources (every allocation on THIS project, with the full
+        // financial view + management actions). Reuses existing allocate/remove/replace.
+        _renderAllocatedResources: function (d, canAllocate) {
+            var that = this, msList = d.milestones || [];
+            var head = "<div class='pmPanelHead'>Allocated Resources <span class='pmCount'>" + ((d.resources || []).length) + "</span>" +
+                (canAllocate ? " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onAllocateByMilestone()\">＋ Allocate to Milestone</button>" : "") + "</div>";
+            var res = d.resources || [];
+            if (!res.length) return head + "<div class='pmMuted'>No resources allocated to this project yet.</div>";
+            var rows = res.map(function (r) {
+                var u = r.utilizationPct || 0;
+                var ovr = r.isOverridden ? " <span class='pmOvrTag'>Overridden</span>" : "";
+                var msCell;
+                if (canAllocate && msList.length) {
+                    var opts = "<option value=''>— Project-level —</option>" + msList.map(function (m) {
+                        return "<option value='" + esc(m.milestoneId) + "'" + (r.milestoneId === m.milestoneId ? " selected" : "") + ">#" + (m.sequence || 0) + " " + esc(m.name) + "</option>";
+                    }).join("");
+                    msCell = "<select class='pmSelect' onchange=\"window._projCtrl.onResMilestone('" + esc(r.employeeId) + "', this.value, " + (r.bandwidth || 0) + ")\">" + opts + "</select>";
+                } else { msCell = r.milestoneName ? esc(r.milestoneName) : "<span class='pmMuted'>Project-level</span>"; }
+                var actions = "<button class='pmLink' onclick=\"window._projCtrl.onResourceDetails('" + esc(r.employeeId) + "','" + esc(r.milestoneId || "") + "')\">Details</button>";
+                if (canAllocate && r.milestoneId) {
+                    actions += "<button class='pmLink' onclick=\"window._projCtrl.onAdjustMilestoneResource('" + esc(r.milestoneId) + "','" + esc(r.employeeId) + "')\">Edit %</button>";
+                    actions += "<button class='pmLink' onclick=\"window._projCtrl.onReplaceRes('" + esc(r.employeeId) + "','" + esc(r.employeeName) + "','" + esc(r.milestoneId) + "','" + esc(r.milestoneName || "") + "'," + (r.bandwidth || 0) + ")\">Replace</button>";
+                }
+                if (canAllocate) actions += "<button class='pmLink danger' onclick=\"window._projCtrl.onRemoveRes('" + esc(r.employeeId) + "','" + esc(r.employeeName) + "')\">Remove</button>";
+                var statusChip = "<span class='pmResStatus " + (r.status === "Released" ? "rel" : "act") + "'>" + esc(r.status || "Active") + "</span>";
+                return "<tr><td><b>" + esc(r.employeeName) + "</b>" + ovr + "<div class='pmMuted' style='font-size:0.68rem'>" + esc(r.employeeId) + " · " + esc(r.department || "") + "</div></td>" +
+                    "<td>" + esc(r.role || r.roleCategoryName || "—") + "</td>" +
+                    "<td>" + msCell + "</td>" +
+                    "<td style='text-align:center'><b>" + (r.bandwidth || 0) + "%</b></td>" +
+                    "<td style='text-align:center'>" + Math.round(r.estimatedHours || 0) + " h</td>" +
+                    "<td style='text-align:right'>₹" + (Number(r.hourlyCost) || 0).toLocaleString("en-IN") + "</td>" +
+                    "<td style='text-align:right'>" + that._inr2(r.estimatedCost != null ? r.estimatedCost : r.totalAllocationCost) + "</td>" +
+                    "<td style='text-align:right;color:#16a34a'>" + that._inr2(r.moneySpent || 0) + "</td>" +
+                    "<td style='text-align:right;color:#2563eb'>" + that._inr2(r.remainingForecast != null ? r.remainingForecast : r.totalAllocationCost) + "</td>" +
+                    "<td style='text-align:center'>" + statusChip + "</td>" +
+                    "<td class='pmMuted' style='font-size:0.7rem'>" + esc(String(r.allocationDate || "").slice(0, 10)) + "</td>" +
+                    "<td><div class='pmMsActions'>" + actions + "</div></td></tr>";
+            }).join("");
+            return head +
+                "<div style='overflow-x:auto'><table class='pmTable'><thead><tr>" +
+                "<th>Employee</th><th>Role</th><th>Milestone</th><th>Alloc %</th><th>Hours</th><th style='text-align:right'>Hourly Cost</th><th style='text-align:right'>Estimated</th><th style='text-align:right'>Money Spent</th><th style='text-align:right'>Forecast Left</th><th>Status</th><th>Date</th><th>Actions</th>" +
+                "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+        },
+        // View Allocation Details + Cost Breakdown (+ history if the API provides it).
+        onResourceDetails: function (employeeId, milestoneId) {
+            var r = (this._detail.resources || []).filter(function (x) { return x.employeeId === employeeId && (x.milestoneId || "") === (milestoneId || ""); })[0]
+                || (this._detail.resources || []).filter(function (x) { return x.employeeId === employeeId; })[0];
+            if (!r) { MessageToast.show("Allocation not found."); return; }
+            var that = this;
+            var kv = function (k, v) { return "<div class='pmPvRow'><div class='pmPvK'>" + esc(k) + "</div><div class='pmPvV'>" + v + "</div></div>"; };
+            var body =
+                kv("Employee", esc(r.employeeName) + " <span class='pmMuted'>(" + esc(r.employeeId) + ")</span>") +
+                kv("Department / Role", esc(r.department || "—") + " · " + esc(r.role || r.roleCategoryName || "—")) +
+                kv("Milestone", esc(r.milestoneName || "Project-level")) +
+                kv("Allocation %", (r.bandwidth || 0) + "%") +
+                kv("Allocated Hours", Math.round(r.estimatedHours || 0) + " h") +
+                kv("Window", esc(String(r.startDate || "—").slice(0, 10)) + " → " + esc(String(r.endDate || "—").slice(0, 10))) +
+                kv("Hourly Cost", "₹" + (Number(r.hourlyCost) || 0).toLocaleString("en-IN") + "/hr") +
+                "<div class='pmPvK' style='margin-top:8px'>Cost Breakdown</div>" +
+                kv("Estimated Cost", "<b>" + that._inr2(r.estimatedCost != null ? r.estimatedCost : r.totalAllocationCost) + "</b>") +
+                kv("Money Spent", "<b style='color:#16a34a'>" + that._inr2(r.moneySpent || 0) + "</b> <span class='pmMuted'>(accrues as milestone days elapse)</span>") +
+                kv("Forecasted Remaining", "<b style='color:#2563eb'>" + that._inr2(r.remainingForecast != null ? r.remainingForecast : r.totalAllocationCost) + "</b>") +
+                kv("Status", esc(r.status || "Active")) +
+                kv("Allocation Date", esc(String(r.allocationDate || "—").slice(0, 10)));
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>Allocation Details</div>" +
+                "<div class='pmDialogBody pmPvBody' id='rdBody'>" + body + "</div>" +
+                "<div class='pmDialogFoot'><button class='pmBtn primary' id='pmClose'>Close</button></div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); };
+            ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+            ov.querySelector("#pmClose").addEventListener("click", close);
+        },
+
         _capacityPanel: function () {
             var rp = this._planning;
             if (!rp) return "";
@@ -547,7 +659,19 @@ sap.ui.define([
             if (key === "meetings") this._loadMeetings();
             else if (key === "milestones") this._loadMilestones();
             else if (key === "requirements") this._loadRequirements();
+            else if (key === "overview") { this._render(); this._loadPmDash(); }   // refresh KPIs/charts on view
             else this._render();
+        },
+
+        // Refetch the PM dashboard (KPIs + chart data) so the Overview always reflects
+        // the latest allocations/tasks/budget after any related action, then redraw.
+        _loadPmDash: function () {
+            var that = this, pid = this._detail && this._detail.project && this._detail.project.projectId;
+            if (!pid) return;
+            pprojpost("getPmDashboard", { projectId: pid }).then(function (pm) {
+                that._pmDash = (pm && !pm.error) ? pm : { error: (pm && pm.error) || "unavailable" };
+                if ((that._detailTab || "overview") === "overview") that._render();
+            }).catch(function () { that._pmDash = { error: "unavailable" }; if ((that._detailTab || "overview") === "overview") that._render(); });
         },
 
         onOpenChat: function () {
@@ -600,6 +724,7 @@ sap.ui.define([
         },
 
         _inr: function (n) { return "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN"); },
+        _inr2: function (n) { return "₹" + (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
 
         _renderMilestonesTab: function () {
             var m = this._milestones;
@@ -633,17 +758,32 @@ sap.ui.define([
                     "<div class='pmBudgetTrack'><div class='pmBudgetFill' style='width:" + pct + "%;background:" + (alloc > exec ? "#dc2626" : "#16a34a") + "'></div></div></div>";
             }
 
+            // ── Top information box ──────────────────────────────────────────────
+            var infoBox = "<div class='pmInfoBox'><span class='pmInfoIco'>&#9432;</span>" +
+                "<div>Plan and staff each milestone individually. <b>Costs</b> shown below are calculated automatically from the resources allocated to each milestone. " +
+                "Use <b>Allocate Resources</b> to staff a milestone, then track its status, timeline and spend as work progresses. Employees are always allocated to milestones — never directly to the project.</div></div>";
+
             // ── Header + actions ─────────────────────────────────────────────────
-            var actions = "";
+            var leftActions = "";
             if (canManage) {
-                actions = (ms.length === 0
-                        ? " <button class='pmBtn ghost sm' onclick=\"window._projCtrl.onSeedMilestones()\">↻ Seed from Project Type</button>" : "") +
+                leftActions = (ms.length === 0
+                        ? " <button class='pmBtn ghost sm' onclick=\"window._projCtrl.onSeedMilestones()\">&#8635; Seed from Project Type</button>" : "") +
                     " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onMilestoneForm()\">＋ Add Milestone</button>";
             }
-            var head = "<div class='pmPanelHead'>Milestones <span class='pmCount'>" + ms.length + "</span>" + actions + "</div>";
+            // Right-side primary button — label/icon depend on whether any milestone
+            // is already staffed (has allocations).
+            var rightBtn = "";
+            if (canManage && ms.length) {
+                var hasAnyAllocation = ms.some(function (x) { return (x.resourceCount || 0) > 0; });
+                rightBtn = hasAnyAllocation
+                    ? "<button class='pmBtn primary' onclick=\"window._projCtrl.onAllocateByMilestone()\"><span class='pmBtnIco'>&#128101;</span> Manage Milestone Allocation</button>"
+                    : "<button class='pmBtn primary' onclick=\"window._projCtrl.onAllocateByMilestone()\"><span class='pmBtnIco'>&#128100;&#43;</span> Allocate Resources for this Milestone</button>";
+            }
+            var head = "<div class='pmMsHeadBar'><div class='pmMsHeadLeft'>Milestones <span class='pmCount'>" + ms.length + "</span>" + leftActions + "</div>" +
+                "<div class='pmMsHeadRight'>" + rightBtn + "</div></div>";
 
             if (!ms.length) {
-                return "<div class='pmPanel'>" + tiles + budgetBar + head +
+                return "<div class='pmPanel'>" + infoBox + tiles + budgetBar + head +
                     "<div class='pmMuted'>No milestones yet." + (canManage ? " Seed them from the project type's phases, or add one manually." : "") + "</div></div>";
             }
 
@@ -669,28 +809,37 @@ sap.ui.define([
                     var notStarted = (x.status === "Not Started" || x.status === "Planned");
                     if (notStarted && x.predecessorsComplete)
                         btns += "<button class='pmLink' onclick=\"window._projCtrl.onStartMilestone('" + esc(x.milestoneId) + "')\">Start</button>";
-                    if (!terminal && x.progressMode === "manual" && !notStarted)
-                        btns += "<button class='pmLink' onclick=\"window._projCtrl.onMsProgress('" + esc(x.milestoneId) + "'," + (x.progressPct || 0) + ")\">Progress</button>";
                     if (!terminal)
                         btns += "<button class='pmLink' onclick=\"window._projCtrl.onCompleteMilestone('" + esc(x.milestoneId) + "',false)\">Complete</button>";
                     if (x.approvalStatus === "Pending Approval")
                         btns += "<button class='pmLink' onclick=\"window._projCtrl.onDecideApproval('" + esc(x.milestoneId) + "','" + esc(x.name) + "')\">Decide</button>";
                     else if (!terminal)
                         btns += "<button class='pmLink' onclick=\"window._projCtrl.onRequestApproval('" + esc(x.milestoneId) + "','" + esc(x.name) + "')\">Request Approval</button>";
+                    // Plan Resources (which roles/quantities this milestone needs vs the
+                    // project baseline) and Manage Resources (allocate actual employees).
+                    btns += "<button class='pmLink' onclick=\"window._projCtrl.onPlanMilestoneResources('" + esc(x.milestoneId) + "')\">Plan Resources</button>";
+                    btns += "<button class='pmLink' onclick=\"window._projCtrl.onManageMilestoneResources('" + esc(x.milestoneId) + "')\">Manage Resources</button>";
                     btns += "<button class='pmLink' onclick=\"window._projCtrl.onManageDeps('" + esc(x.milestoneId) + "')\">Deps</button>";
                     btns += "<button class='pmLink' onclick=\"window._projCtrl.onMilestoneForm('" + esc(x.milestoneId) + "')\">Edit</button>";
                     btns += "<button class='pmLink danger' onclick=\"window._projCtrl.onDeleteMilestone('" + esc(x.milestoneId) + "','" + esc(x.name) + "')\">Delete</button>";
                 }
+                // Preview is available to everyone (read-only detail view).
+                btns += "<button class='pmBtn outline sm' onclick=\"window._projCtrl.onPreviewMilestone('" + esc(x.milestoneId) + "')\">Preview</button>";
 
-                return "<tr><td><b>#" + (x.sequence || 0) + " " + esc(x.name) + "</b>" + crit + bill + deps +
+                // Three financial values (daily model): Estimated / Money Spent / Remaining Forecast.
+                var costCell = "<div><b>" + that._inr2(x.estimatedCost != null ? x.estimatedCost : (x.allocatedCost || 0)) + "</b> <span class='pmMuted' style='font-size:0.62rem'>est</span></div>" +
+                    "<div style='font-size:0.72rem;color:#16a34a'>Spent " + that._inr2(x.moneySpent || 0) + "</div>" +
+                    "<div style='font-size:0.72rem;color:#2563eb'>Forecast left " + that._inr2(x.remainingForecast != null ? x.remainingForecast : (x.allocatedCost || 0)) + "</div>";
+
+                var planBadge = x.exceedsResourcePlan ? " <span class='pmPlanBadge' title='Milestone resource plan exceeds the project baseline'>⚠ Approval Recommended</span>" : "";
+                return "<tr><td><b>#" + (x.sequence || 0) + " " + esc(x.name) + "</b>" + crit + bill + planBadge + deps +
                         (x.ownerName ? "<div class='pmMuted' style='font-size:0.72rem'>owner: " + esc(x.ownerName) + "</div>" : "") + "</td>" +
                     "<td>" + that._msStatusChip(x.status) +
                         (x.approvalStatus && x.approvalStatus !== "None" ? "<div style='margin-top:4px'>" + that._msApprovalChip(x.approvalStatus) + "</div>" : "") + "</td>" +
-                    "<td style='min-width:120px'>" + that._bar(x.progressPct) + "<div class='pmMuted' style='font-size:0.68rem'>" + esc(x.progressMode) + "</div></td>" +
                     "<td>" + dates + "<div style='font-size:0.74rem;margin-top:2px'>" + timing + "</div></td>" +
-                    "<td>" + budgetCell + "</td>" +
-                    "<td>" + (x.resourceCount || 0) + "👤 · " + (x.taskCount || 0) + "✓</td>" +
-                    (canManage ? "<td><div class='pmMsActions'>" + btns + "</div></td>" : "<td></td>") + "</tr>";
+                    "<td>" + costCell + "</td>" +
+                    "<td><span class='pmResTasks'><span class='pmResIco'>&#128100;</span>" + (x.resourceCount || 0) + " - " + (x.taskCount || 0) + "/</span></td>" +
+                    "<td><div class='pmMsActions'>" + btns + "</div></td></tr>";
             }).join("");
 
             // ── Reports toolbar (Phase 15) — downloadable xlsx / pdf ─────────────
@@ -700,9 +849,9 @@ sap.ui.define([
                 "<button class='pmBtn ghost sm' onclick=\"window._projCtrl.onDownloadReport('xlsx')\">⬇ Excel</button>" +
                 "<button class='pmBtn ghost sm' onclick=\"window._projCtrl.onDownloadReport('pdf')\">⬇ PDF</button></div>";
 
-            return "<div class='pmPanel'>" + tiles + budgetBar + head + reportsBar +
-                "<table class='pmTable pmMsTable'><thead><tr><th>Milestone</th><th>Status</th><th>Progress</th><th>Timeline</th><th>Cost / Budget</th><th>Res/Tasks</th>" +
-                (canManage ? "<th></th>" : "<th></th>") + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+            return "<div class='pmPanel'>" + infoBox + tiles + budgetBar + head + reportsBar +
+                "<table class='pmTable pmMsTable'><thead><tr><th>Milestone</th><th>Status</th><th>Timeline</th><th>Cost</th><th>Res/Tasks</th>" +
+                "<th style='text-align:right'>Actions</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
         },
 
         // ── Download a milestone report (xlsx / pdf) ────────────────────────────
@@ -724,6 +873,297 @@ sap.ui.define([
                 document.body.appendChild(a); a.click();
                 setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
             }).catch(function () { MessageToast.show("Could not generate the report."); });
+        },
+
+        // ── Read-only milestone preview (detail view) ───────────────────────────
+        onPreviewMilestone: function (milestoneId) {
+            var that = this;
+            var x = ((this._milestones && this._milestones.milestones) || []).find(function (m) { return m.milestoneId === milestoneId; });
+            if (!x) { MessageToast.show("Milestone not found."); return; }
+            var prColors = { Low: "#64748b", Medium: "#2563eb", High: "#c2410c", Critical: "#dc2626" };
+            var prBadge = "<span class='pmPrBadge' style='background:" + (prColors[x.priority] || "#2563eb") + "'>" + esc(x.priority || "Medium") + "</span>";
+            var timing = (x.delayDays > 0 ? "<span style='color:#dc2626;font-weight:700'>" + x.delayDays + "d late</span>"
+                : x.earlyDays > 0 ? "<span style='color:#16a34a;font-weight:700'>" + x.earlyDays + "d early</span>" : "<span style='color:#16a34a'>on track</span>");
+            var kv = function (label, val) {
+                return "<div class='pmPvRow'><div class='pmPvK'>" + esc(label) + "</div><div class='pmPvV'>" + val + "</div></div>";
+            };
+            var block = function (label, text) {
+                return "<div class='pmPvBlock'><div class='pmPvK'>" + esc(label) + "</div><div class='pmPvText'>" + (text ? esc(text) : "<span class='pmMuted'>—</span>") + "</div></div>";
+            };
+            var deps = (x.dependencies || []).length
+                ? x.dependencies.map(function (d) { return esc(d.predecessorName); }).join(", ") : "<span class='pmMuted'>None</span>";
+            var body =
+                kv("Status", that._msStatusChip(x.status) + (x.approvalStatus && x.approvalStatus !== "None" ? " " + that._msApprovalChip(x.approvalStatus) : "")) +
+                kv("Priority", prBadge) +
+                kv("Timeline", esc(x.plannedStartDate || "—") + " → " + esc(x.plannedEndDate || "—") + " &nbsp; " + timing) +
+                kv("Owner", x.ownerName ? esc(x.ownerName) : "<span class='pmMuted'>Unassigned</span>") +
+                kv("Estimated Cost", "<b>" + that._inr2(x.estimatedCost != null ? x.estimatedCost : (x.allocatedCost || 0)) + "</b> <span class='pmMuted'>(current allocation plan)</span>") +
+                kv("Money Spent", "<b style='color:#16a34a'>" + that._inr2(x.moneySpent || 0) + "</b> <span class='pmMuted'>(actual — accrues as milestone days elapse)</span>") +
+                kv("Remaining Forecast", "<b style='color:#2563eb'>" + that._inr2(x.remainingForecast != null ? x.remainingForecast : (x.allocatedCost || 0)) + "</b> <span class='pmMuted'>(Estimated − Money Spent)</span>") +
+                kv("Planned Budget", that._inr2(x.plannedBudget || 0)) +
+                kv("Resources / Tasks", (x.resourceCount || 0) + " resource(s) · " + (x.taskCount || 0) + " task(s)") +
+                kv("Estimated Effort", (x.estimatedEffort || 0) + " hrs") +
+                kv("Billable", x.isBillable ? "Yes" : "No") +
+                kv("Critical Path", x.isCritical ? "Yes ★" : "No") +
+                kv("Depends On", deps) +
+                block("Description", x.description) +
+                block("Completion Criteria", x.completionCriteria) +
+                block("Deliverables", x.deliverables);
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>#" + (x.sequence || 0) + " " + esc(x.name) + "</div>" +
+                "<div class='pmDialogBody pmPvBody'>" + body + "</div>" +
+                "<div class='pmDialogFoot'><button class='pmBtn primary' id='pmClose'>Close</button></div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); };
+            ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+            ov.querySelector("#pmClose").addEventListener("click", close);
+        },
+
+        // ── Plan Resources for a milestone (execution plan vs project baseline) ──
+        // Non-blocking: quantities may exceed the project plan (real-world temporary
+        // increases) — deviations are flagged with warnings + budget impact, never
+        // prevented. Reuses getMilestoneResources / saveMilestoneResources.
+        onPlanMilestoneResources: function (milestoneId) {
+            var that = this;
+            ppost("getMilestoneResources", { milestoneId: milestoneId }).then(function (d) {
+                if (d && d.error) { MessageToast.show(d.error); return; }
+                var reqs = d.requirements || [], unplanned = d.unplanned || [];
+                if (!reqs.length && !unplanned.length) {
+                    MessageToast.show("Define the project's Resource Requirements first — they are the baseline for milestone planning.");
+                    that.onTab("requirements"); return;
+                }
+                var inr = function (n) { return "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN"); };
+                // Per-requirement planning rows.
+                var rowHtml = reqs.map(function (r) {
+                    var rid = esc(r.requirementId);
+                    return "<div class='mrpRow' data-req='" + rid + "'>" +
+                        "<label class='mrpHead'><input type='checkbox' class='mrpChk' data-req='" + rid + "'" + (r.included ? " checked" : "") + "/> " +
+                        "<span class='mrpRole'>" + esc(r.roleName) + "</span> <span class='pmMuted'>" + esc(r.departmentName || "") + " · planned " + r.plannedQuantity + " · " + r.hoursPerEmployee + "h/emp · " + inr(r.ratePerHour) + "/hr</span></label>" +
+                        "<div class='mrpInputs' data-req='" + rid + "'" + (r.included ? "" : " style='display:none'") + ">" +
+                        "<div class='mrpGrid'>" +
+                        "<div><label>Quantity</label><input type='number' min='0' step='1' class='mrpI mrpQty' data-req='" + rid + "' value='" + (r.included ? r.milestoneQuantity : r.plannedQuantity) + "'/></div>" +
+                        "<div><label>Hours/emp</label><input type='number' min='0' step='1' class='mrpI mrpHrs' data-req='" + rid + "' value='" + (r.hoursPerEmployee || "") + "'/></div>" +
+                        "<div class='mrpNotesCell'><label>Notes</label><input type='text' class='mrpI mrpNotes' data-req='" + rid + "' value='" + esc(r.notes || "") + "'/></div>" +
+                        "</div><div class='mrpStatus' data-req='" + rid + "'></div></div></div>";
+                }).join("");
+                var unplannedHtml = unplanned.length ? "<div class='mrpUnplanned'><b style='color:#dc2626'>Unplanned roles (requirement removed from project):</b>" +
+                    unplanned.map(function (u) { return "<div class='pmMuted'>" + esc(u.roleName) + " — milestone qty " + u.milestoneQuantity + " · <span style='color:#dc2626'>not in the approved project plan</span></div>"; }).join("") + "</div>" : "";
+                var auditHtml = (d.audit || []).length ? "<details class='mrpAudit'><summary>Change history (" + d.audit.length + ")</summary>" +
+                    d.audit.map(function (a) { return "<div class='mrpAuditRow'><b>" + esc(a.roleName) + "</b>: " + a.previousQuantity + " → " + a.newQuantity + " <span class='pmMuted'>by " + esc(a.changedByName || "—") + " · " + esc(String(a.changedAt || "").slice(0, 16).replace("T", " ")) + (a.reason ? " · " + esc(a.reason) : "") + "</span></div>"; }).join("") + "</details>" : "";
+
+                var ov = document.createElement("div"); ov.className = "pmOverlay";
+                ov.innerHTML = "<div class='pmDialog wide'><div class='pmDialogHead'>Plan Resources — " + esc(d.milestoneName || "") + "</div>" +
+                    "<div class='pmDialogBody'>" +
+                    "<div class='pmMuted' style='margin-bottom:6px'>Select the roles this milestone needs. The project resource requirements are the baseline — you may request more (temporary increases are allowed) and deviations are flagged, never blocked.</div>" +
+                    "<div id='mrpBanner'></div>" +
+                    "<div class='mrpRows'>" + rowHtml + "</div>" + unplannedHtml +
+                    "<div class='mrpSummary' id='mrpSummary'></div>" +
+                    "<label class='pmLbl' style='margin-top:8px'>Reason for changes <span class='pmMuted'>(optional — recorded in the audit trail)</span></label>" +
+                    "<input type='text' id='mrpReason' class='pmInput' placeholder='e.g. Additional integration work identified'/>" +
+                    auditHtml +
+                    "<div id='mrpErr' class='pmErr' style='display:none'></div>" +
+                    "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>Save Plan</button></div></div>";
+                document.body.appendChild(ov);
+                var close = function () { ov.remove(); };
+                var $ = function (s) { return ov.querySelector(s); };
+                ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+                $("#pmCancel").addEventListener("click", close);
+                var reqById = {}; reqs.forEach(function (r) { reqById[r.requirementId] = r; });
+
+                // Live validation + budget impact + summary (Parts 5–8).
+                var recompute = function () {
+                    var anyExceeds = false, totalAdditional = 0, summaryRows = "";
+                    reqs.forEach(function (r) {
+                        var rid = r.requirementId;
+                        var chk = ov.querySelector(".mrpChk[data-req='" + rid + "']");
+                        var included = chk.checked;
+                        var qty = parseInt(ov.querySelector(".mrpQty[data-req='" + rid + "']").value, 10) || 0;
+                        var hrs = parseFloat(ov.querySelector(".mrpHrs[data-req='" + rid + "']").value) || r.hoursPerEmployee || 0;
+                        var st = ov.querySelector(".mrpStatus[data-req='" + rid + "']");
+                        var planned = r.plannedQuantity, status, statusLabel, color;
+                        if (!included || qty === 0) { status = "not-used"; }
+                        else if (qty <= planned) { status = "within"; }
+                        else { status = "exceeds"; anyExceeds = true; }
+                        if (status === "within") {
+                            st.innerHTML = "<span class='mrpOk'>✓ Within Project Resource Plan</span>";
+                        } else if (status === "exceeds") {
+                            var add = qty - planned, cost = Math.round(add * hrs * r.ratePerHour);
+                            totalAdditional += cost;
+                            st.innerHTML = "<div class='mrpWarn'>⚠ Milestone exceeds planned project requirement." +
+                                "<div class='mrpWarnDetail'>Planned Quantity: <b>" + planned + "</b> · Requested: <b>" + qty + "</b> · Additional Required: <b>" + add + "</b>" +
+                                " · Estimated Additional Cost: <b>" + inr(cost) + "</b> <span class='pmMuted'>(" + add + " × " + hrs + "h × " + inr(r.ratePerHour) + "/hr)</span></div>" +
+                                "<div class='mrpWarnDetail'>This exceeds the originally approved project staffing plan. Please ensure additional budget and resource approval before proceeding.</div></div>";
+                        } else { st.innerHTML = ""; }
+                        // Summary row
+                        var scolor = status === "within" ? "#16a34a" : status === "not-used" ? "#a16207" : "#c2410c";
+                        var stxt = status === "within" ? "Within Plan" : status === "not-used" ? "Not Used" : "Exceeds Plan";
+                        summaryRows += "<tr><td>" + esc(r.roleName) + "</td><td style='text-align:center'>" + planned + "</td><td style='text-align:center'>" + (included ? qty : 0) + "</td>" +
+                            "<td><span class='mrpDot' style='background:" + scolor + "'></span>" + stxt + "</td></tr>";
+                    });
+                    (unplanned || []).forEach(function (u) {
+                        summaryRows += "<tr><td>" + esc(u.roleName) + "</td><td style='text-align:center'>0</td><td style='text-align:center'>" + u.milestoneQuantity + "</td>" +
+                            "<td><span class='mrpDot' style='background:#dc2626'></span>Unplanned Role</td></tr>";
+                    });
+                    if (unplanned && unplanned.length) anyExceeds = true;
+                    $("#mrpSummary").innerHTML = "<div class='mrpSummaryHead'>Milestone Resource Summary</div>" +
+                        "<table class='pmTable'><thead><tr><th>Role</th><th style='text-align:center'>Planned</th><th style='text-align:center'>Allocated</th><th>Status</th></tr></thead><tbody>" + summaryRows + "</tbody></table>" +
+                        (totalAdditional > 0 ? "<div class='mrpTotalCost'>Estimated Additional Cost (over baseline): <b>" + inr(totalAdditional) + "</b></div>" : "");
+                    $("#mrpBanner").innerHTML = anyExceeds
+                        ? "<div class='mrpBanner'>⚠ <b>Resource Plan Changed — Additional Approval Recommended.</b> This milestone requests more than (or roles outside) the approved project resource plan.</div>"
+                        : "<div class='mrpBannerOk'>✓ This milestone is within the approved project resource plan.</div>";
+                };
+                ov.querySelectorAll(".mrpChk").forEach(function (chk) {
+                    chk.addEventListener("change", function () {
+                        var rid = this.getAttribute("data-req");
+                        ov.querySelector(".mrpInputs[data-req='" + rid + "']").style.display = this.checked ? "block" : "none";
+                        recompute();
+                    });
+                });
+                ov.querySelectorAll(".mrpI").forEach(function (i) { i.addEventListener("input", recompute); });
+                recompute();
+
+                $("#pmSave").addEventListener("click", function () {
+                    var items = reqs.map(function (r) {
+                        var rid = r.requirementId;
+                        return {
+                            requirementId: rid,
+                            included: ov.querySelector(".mrpChk[data-req='" + rid + "']").checked,
+                            quantity: parseInt(ov.querySelector(".mrpQty[data-req='" + rid + "']").value, 10) || 0,
+                            hours: parseFloat(ov.querySelector(".mrpHrs[data-req='" + rid + "']").value) || 0,
+                            notes: ov.querySelector(".mrpNotes[data-req='" + rid + "']").value || ""
+                        };
+                    });
+                    var btn = this; btn.disabled = true; btn.textContent = "Saving…";
+                    ppost("saveMilestoneResources", { milestoneId: milestoneId, items: JSON.stringify(items), reason: ($("#mrpReason").value || "").trim() })
+                        .then(function (res) {
+                            btn.disabled = false; btn.textContent = "Save Plan";
+                            if (res && res.error) { var e = $("#mrpErr"); e.style.display = "block"; e.textContent = res.error; return; }
+                            close();
+                            MessageToast.show(res.exceedsResourcePlan ? "Plan saved — exceeds baseline, approval recommended." : "Milestone resource plan saved.");
+                            that._loadMilestones();
+                        }).catch(function () { btn.disabled = false; btn.textContent = "Save Plan"; var e = $("#mrpErr"); e.style.display = "block"; e.textContent = "Could not save the plan."; });
+                });
+            }).catch(function () { MessageToast.show("Could not load milestone resources."); });
+        },
+
+        // ── Manage Resources for a milestone (always available) ─────────────────
+        // Reuses the existing allocate / remove / replace engines. Lists current
+        // allocations for the milestone with adjust (%/hours/dates), remove, replace,
+        // and an add-employees entry (the grouped multi-select allocation screen).
+        onManageMilestoneResources: function (milestoneId) {
+            var that = this, pid = this._detail.project.projectId;
+            var msList = (this._milestones && this._milestones.milestones) || this._detail.milestones || [];
+            var ms = msList.filter(function (m) { return m.milestoneId === milestoneId; })[0] || {};
+            var mine = (this._detail.resources || []).filter(function (r) { return r.milestoneId === milestoneId; });
+            // Summary cards from the milestone rollup.
+            var sm = ((this._milestones && this._milestones.milestones) || []).filter(function (m) { return m.milestoneId === milestoneId; })[0] || ms;
+            var totHrs = mine.reduce(function (s, r) { return s + (Number(r.milestoneAllocatedHours || r.estimatedHours) || 0); }, 0);
+            var totSpentHrs = mine.reduce(function (s, r) { return s + (Number(r.actualSpentHours) || 0); }, 0);
+            var cards = "<div class='mrGridCards'>" +
+                "<div class='mrCard'><div class='mrCardVal'>" + mine.length + "</div><div class='mrCardLbl'>Employees</div></div>" +
+                "<div class='mrCard'><div class='mrCardVal'>" + Math.round(totHrs) + " h</div><div class='mrCardLbl'>Allocated Hours</div></div>" +
+                "<div class='mrCard'><div class='mrCardVal' style='color:#16a34a'>" + Math.round(totSpentHrs) + " h</div><div class='mrCardLbl'>Consumed</div></div>" +
+                "<div class='mrCard'><div class='mrCardVal' style='color:#2563eb'>" + that._inr2(sm.remainingForecast || 0) + "</div><div class='mrCardLbl'>Forecast Remaining</div></div>" +
+                "</div>";
+            var rows = mine.length ? mine.map(function (r) {
+                var projH = Number(r.projectAllocationHours) || 0;
+                var mPct = Number(r.milestoneAllocationPercent) || (projH > 0 ? Math.round((Number(r.milestoneAllocatedHours || r.estimatedHours) || 0) / projH * 100) : 0);
+                var mHrs = Number(r.milestoneAllocatedHours != null ? r.milestoneAllocatedHours : r.estimatedHours) || 0;
+                return "<tr><td><b>" + esc(r.employeeName) + "</b><div class='pmMuted' style='font-size:0.7rem'>" + esc(r.employeeId) + " · " + esc(r.department || "") + "</div></td>" +
+                    "<td>" + esc(r.role || r.roleCategoryName || "—") + "</td>" +
+                    "<td style='text-align:center'>" + (projH ? projH + " h" : "—") + "</td>" +
+                    "<td style='text-align:center'><b>" + mPct + "%</b></td>" +
+                    "<td style='text-align:center'>" + Math.round(mHrs) + " h</td>" +
+                    "<td style='text-align:center;color:#16a34a'>" + Math.round(Number(r.actualSpentHours) || 0) + " h</td>" +
+                    "<td style='text-align:center;color:#2563eb'>" + Math.round(Number(r.forecastRemainingHours) || 0) + " h</td>" +
+                    "<td style='text-align:right;color:#16a34a'>" + that._inr2(r.actualCost || 0) + "</td>" +
+                    "<td style='text-align:right;color:#2563eb'>" + that._inr2(r.forecastCost != null ? r.forecastCost : r.remainingForecast) + "</td>" +
+                    "<td style='text-align:right;white-space:nowrap'>" +
+                    "<button class='pmLink' onclick=\"window._projCtrl.onAdjustMilestoneResource('" + esc(milestoneId) + "','" + esc(r.employeeId) + "')\">✏️ Edit</button>" +
+                    "<button class='pmLink' onclick=\"window._projCtrl.onReplaceRes('" + esc(r.employeeId) + "','" + esc(r.employeeName) + "','" + esc(milestoneId) + "','" + esc(ms.name || "") + "'," + mPct + ")\">Replace</button>" +
+                    "<button class='pmLink danger' onclick=\"window._projCtrl.onRemoveRes('" + esc(r.employeeId) + "','" + esc(r.employeeName) + "')\">Remove</button>" +
+                    "</td></tr>";
+            }).join("") : "<tr><td colspan='10' class='pmMuted' style='text-align:center;padding:14px'>No resources allocated to this milestone yet.</td></tr>";
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog wide'><div class='pmDialogHead'>Manage Resources — #" + (ms.sequence || 0) + " " + esc(ms.name || "") + "</div>" +
+                "<div class='pmDialogBody'>" + cards +
+                "<div style='text-align:right;margin-bottom:8px'><button class='pmBtn primary sm' onclick=\"window._projCtrl.onAddMilestoneResources('" + esc(milestoneId) + "')\">＋ Add Employees</button></div>" +
+                "<div style='overflow-x:auto'><table class='pmTable'><thead><tr><th>Employee</th><th>Role</th><th>Project Hrs</th><th>Milestone %</th><th>Milestone Hrs</th><th>Spent</th><th>Forecast</th><th style='text-align:right'>Actual Cost</th><th style='text-align:right'>Forecast Cost</th><th style='text-align:right'>Actions</th></tr></thead>" +
+                "<tbody>" + rows + "</tbody></table></div>" +
+                "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmClose'>Close</button></div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); };
+            ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+            ov.querySelector("#pmClose").addEventListener("click", close);
+            this._manageOverlay = ov;   // so refreshes can re-open it
+        },
+
+        // Add employees to a specific milestone → the grouped multi-select screen.
+        onAddMilestoneResources: function (milestoneId) {
+            if (this._manageOverlay) { this._manageOverlay.remove(); this._manageOverlay = null; }
+            var msList = (this._milestones && this._milestones.milestones) || this._detail.milestones || [];
+            this._openAllocationScreen(this._detail.project.projectId, msList, milestoneId);
+        },
+
+        // Increase/decrease % or hours, extend/reduce dates for one milestone resource.
+        // Reuses allocateResourceToMilestone (re-allocation recomputes cost/forecast).
+        onAdjustMilestoneResource: function (milestoneId, employeeId) {
+            var that = this, pid = this._detail.project.projectId;
+            var ms = ((this._milestones && this._milestones.milestones) || this._detail.milestones || []).filter(function (m) { return m.milestoneId === milestoneId; })[0] || {};
+            var r = (this._detail.resources || []).filter(function (x) { return x.milestoneId === milestoneId && x.employeeId === employeeId; })[0] || {};
+            var projH = Number(r.projectAllocationHours) || 0;
+            var curPct = Number(r.milestoneAllocationPercent) || (projH > 0 ? Math.round((Number(r.milestoneAllocatedHours || r.estimatedHours) || 0) / projH * 100) : 0);
+            var spentH = Number(r.actualSpentHours) || 0;
+            var rate = Number(r.hourlyCost) || 0;
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>Edit Allocation — " + esc(r.employeeName || employeeId) + "</div>" +
+                "<div class='pmDialogBody'>" +
+                "<div class='adjInfo'>Project Allocation: <b>" + (projH || "—") + " h</b> · Actual Spent: <b style='color:#16a34a'>" + Math.round(spentH) + " h</b> <span class='pmMuted'>(never changes)</span></div>" +
+                "<label class='pmLbl'>Milestone Allocation % <span class='pmMuted'>(of project hours)</span></label>" +
+                "<input id='adjPct' type='number' min='1' max='100' step='5' class='pmInput' value='" + curPct + "'/>" +
+                "<div class='adjPreview' id='adjPrev'></div>" +
+                "<div class='pmFRow' style='margin-top:8px'><div><label class='pmLbl'>Start</label><input id='adjStart' type='date' class='pmInput' value='" + esc(String(r.startDate || ms.plannedStartDate || "").slice(0, 10)) + "'/></div>" +
+                "<div><label class='pmLbl'>End</label><input id='adjEnd' type='date' class='pmInput' value='" + esc(String(r.endDate || ms.plannedEndDate || "").slice(0, 10)) + "'/></div></div>" +
+                "<label class='amRadio' style='margin-top:8px'><input type='checkbox' id='adjOverride'/> Allow override (over-capacity / over-budget)</label>" +
+                "<div id='adjErr' class='pmErr' style='display:none'></div>" +
+                "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>Apply</button></div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); };
+            var $ = function (s) { return ov.querySelector(s); };
+            ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+            $("#pmCancel").addEventListener("click", close);
+            // Live preview: milestone hours = projectHours × %/100; spent unchanged; forecast = hours − spent.
+            var inr = function (n) { return "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN"); };
+            var preview = function () {
+                var p = parseFloat($("#adjPct").value) || 0;
+                var newHrs = Math.round(projH * (p / 100) * 100) / 100;
+                var fRem = Math.max(0, Math.round((newHrs - spentH) * 100) / 100);
+                var warn = (spentH > newHrs) ? "<div class='adjWarn'>⚠ Actual spent (" + Math.round(spentH) + "h) exceeds the new allocation (" + Math.round(newHrs) + "h).</div>" : "";
+                $("#adjPrev").innerHTML =
+                    "<div class='adjRow'><span>Milestone Hours</span><b>" + Math.round(newHrs) + " h</b></div>" +
+                    "<div class='adjRow'><span>Actual Spent (frozen)</span><b style='color:#16a34a'>" + Math.round(spentH) + " h · " + inr(spentH * rate) + "</b></div>" +
+                    "<div class='adjRow'><span>Forecast Remaining</span><b style='color:#2563eb'>" + Math.round(fRem) + " h · " + inr(fRem * rate) + "</b></div>" +
+                    "<div class='adjRow adjTot'><span>New Estimated Cost</span><b>" + inr(newHrs * rate) + "</b></div>" + warn;
+            };
+            $("#adjPct").addEventListener("input", preview); preview();
+            $("#pmSave").addEventListener("click", function () {
+                var err = $("#adjErr");
+                var p = parseFloat($("#adjPct").value) || 0;
+                if (p <= 0 || p > 100) { err.style.display = "block"; err.textContent = "Enter a % between 1 and 100."; return; }
+                var s = $("#adjStart").value || null, en = $("#adjEnd").value || null;
+                if (s && en && en < s) { err.style.display = "block"; err.textContent = "End date is before start date."; return; }
+                var newHrs = Math.round(projH * (p / 100) * 100) / 100;
+                var payload = { projectId: pid, employeeId: employeeId, milestoneId: milestoneId, allocationType: r.allocationType || "Hard",
+                    estimatedHours: newHrs, projectAllocationHours: projH, milestoneAllocationPercent: p,
+                    startDate: s, endDate: en, force: $("#adjOverride").checked, overrideReason: $("#adjOverride").checked ? "Manage Resources adjustment" : "" };
+                var btn = this; btn.disabled = true; btn.textContent = "Applying…";
+                ppost("allocateResourceToMilestone", payload).then(function (res) {
+                    btn.disabled = false; btn.textContent = "Apply";
+                    if (res && (res.overallocation || res.budgetOverrun)) { err.style.display = "block"; err.textContent = res.error + " Enable “Allow override”."; return; }
+                    if (res && res.error) { err.style.display = "block"; err.textContent = res.error; return; }
+                    close(); MessageToast.show("Allocation updated to " + p + "%."); that._open(pid); that._loadMilestones();
+                }).catch(function () { btn.disabled = false; btn.textContent = "Apply"; err.style.display = "block"; err.textContent = "Could not update."; });
+            });
         },
 
         // ── Seed milestones from the project type's phases ──────────────────────
@@ -1041,108 +1481,235 @@ sap.ui.define([
             }).catch(function () { that._requirements = { requirements: [], canManage: false }; that._render(); });
         },
 
+        // Experience badge from a range string (Junior / Mid / Senior / Expert).
+        _expBadge: function (range) {
+            var s = String(range || "").toLowerCase();
+            var lvl, col;
+            if (/12|expert/.test(s)) { lvl = "Expert"; col = "#7c3aed"; }
+            else if (/\b(8|9|10|11)\b|8\+|senior/.test(s)) { lvl = "Senior"; col = "#2563eb"; }
+            else if (/\b(3|4|5|6|7)\b|mid/.test(s)) { lvl = "Mid Level"; col = "#16a34a"; }
+            else { lvl = "Junior"; col = "#0891b2"; }
+            return "<span class='rqExpBadge' style='--c:" + col + "'>● " + lvl + (range ? " <span class='rqExpYrs'>(" + esc(range) + ")</span>" : "") + "</span>";
+        },
+        // Allocation-driven status (Part 11).
+        _reqStatusBadge: function (allocated, required, status) {
+            if (status === "Closed" || status === "Fulfilled") return "<span class='rqStatus' style='--c:#64748b'>⚪ Closed</span>";
+            if (allocated <= 0) return "<span class='rqStatus' style='--c:#dc2626'>🔴 Not Allocated</span>";
+            if (allocated < required) return "<span class='rqStatus' style='--c:#d97706'>🟡 Partially Allocated</span>";
+            if (allocated === required) return "<span class='rqStatus' style='--c:#16a34a'>🟢 Fully Allocated</span>";
+            return "<span class='rqStatus' style='--c:#ea580c'>🟠 Over Allocated</span>";
+        },
+        _roleIcon: function (role) {
+            var s = String(role || "").toLowerCase();
+            if (/qa|test/.test(s)) return "🧪"; if (/basis|security|admin/.test(s)) return "🛡️";
+            if (/fico|fi|finance|funds/.test(s)) return "💹"; if (/mm|sd|pp|functional|mdg/.test(s)) return "📦";
+            if (/ui5|fiori|frontend|ux/.test(s)) return "🎨"; if (/cap|abap|backend|developer|engineer/.test(s)) return "👨‍💻";
+            return "👤";
+        },
         _renderRequirementsTab: function () {
-            var r = this._requirements;
-            if (!r) return "<div class='pmPanel'><div class='pmLoading'>Loading requirements…</div></div>";
-            var canManage = !!r.canManage, reqs = r.requirements || [], that = this;
-            var head = "<div class='pmPanelHead'>Resource Requirements <span class='pmCount'>" + reqs.length + "</span>" +
-                (canManage ? " <button class='pmBtn primary sm' onclick=\"window._projCtrl.onAddRequirement()\">＋ Add Requirement</button>" : "") + "</div>";
-            if (!reqs.length) {
-                return "<div class='pmPanel'>" + head + "<div class='pmMuted'>No resource requirements defined yet." +
-                    (canManage ? " Declare what the project needs (Department → Role → Specialization)." : "") + "</div></div>";
+            var r = this._requirements, that = this;
+            if (!r) {
+                // Loading skeletons.
+                var sk = "<div class='rqGrid'>" + [0, 1, 2].map(function () { return "<div class='rqCard rqSkeleton'><div class='sk sk1'></div><div class='sk sk2'></div><div class='sk sk3'></div><div class='sk sk4'></div></div>"; }).join("") + "</div>";
+                return "<div class='pmPanel'>" + sk + "</div>";
             }
-            var rows = reqs.map(function (x) {
-                var hier = [x.departmentName, x.roleCategoryName, x.specializationName].filter(Boolean).map(esc).join(" › ");
-                var window = (x.startDate || "—") + " → " + (x.endDate || "—");
-                var meta = [x.skillCategory, x.experienceRange].filter(Boolean).map(esc).join(" · ");
-                var skillTags = (x.skills || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean)
-                    .map(function (s) { return "<span class='pmTag'>" + esc(s) + "</span>"; }).join(" ");
-                return "<tr><td><b>" + hier + "</b>" +
-                    (meta ? "<div class='pmMuted' style='font-size:0.72rem'>" + meta + "</div>" : "") +
-                    (skillTags ? "<div style='margin-top:3px'>" + skillTags + "</div>" : "") +
-                    (x.notes ? "<div class='pmMuted' style='font-size:0.72rem'>" + esc(x.notes) + "</div>" : "") + "</td>" +
-                    "<td style='text-align:center'><b>" + (x.requiredCount || 0) + "</b>" + (x.allocationPct ? "<div class='pmMuted' style='font-size:0.68rem'>@ " + x.allocationPct + "%</div>" : "") + "</td>" +
-                    "<td style='text-align:center'>" + (x.requiredHours || 0) + " h</td>" +
-                    "<td>" + esc(window) + "</td>" +
-                    "<td>" + that._statusChip(x.status || "Open") + "</td>" +
-                    (canManage ? "<td><button class='pmLink danger' onclick=\"window._projCtrl.onDeleteRequirement('" + esc(x.requirementId) + "')\">Remove</button></td>" : "<td></td>") + "</tr>";
+            // The POC / founder can always add requirements. Fall back to the reliably-
+            // loaded project-detail flags so the button is never hidden by a stale or
+            // partial requirements payload.
+            var d = this._detail || {};
+            var canManage = !!r.canManage || !!(d.isPoc || d.canManage || (d.project && d.project.isPoc));
+            var reqs = r.requirements || [];
+            var inr = function (n) { return "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN"); };
+            var head = "<div class='rqHead'><div class='rqHeadTitle'>Resource Requirements</div>" +
+                (canManage ? "<button class='pmBtn primary' onclick=\"window._projCtrl.onAddRequirement()\">＋ Add Requirement</button>" : "") + "</div>";
+
+            if (!reqs.length) {
+                return "<div class='pmPanel'>" + head +
+                    "<div class='rqEmpty'><div class='rqEmptyIco'>🗂️</div><div class='rqEmptyTitle'>No resource requirements yet</div>" +
+                    "<div class='pmMuted'>Define what the project needs — Department, Role, Experience &amp; Skills — to build the staffing baseline.</div>" +
+                    (canManage ? "<button class='pmBtn primary' style='margin-top:12px' onclick=\"window._projCtrl.onAddRequirement()\">＋ Add your first requirement</button>" : "") +
+                    "</div></div>";
+            }
+
+            var cards = reqs.map(function (x) {
+                var qty = x.requiredCount || 0;
+                var estH = (x.estimatedHours != null ? x.estimatedHours : x.requiredHours) || 0;
+                var totalH = (x.totalPlannedHours != null) ? x.totalPlannedHours : (qty * estH);
+                var skillChips = (x.skills || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean)
+                    .map(function (s) { return "<span class='rqChip'>" + esc(s) + "</span>"; }).join("");
+                var acts = canManage
+                    ? "<button class='rqIconBtn primary' title='Manage Allocation' onclick=\"window._projCtrl.onManageRequirementAllocation('" + esc(x.requirementId) + "')\">👥 Allocate</button>" +
+                      "<button class='rqIconBtn' title='Edit Requirement' onclick=\"window._projCtrl.onEditRequirement('" + esc(x.requirementId) + "')\">✏️</button>" +
+                      "<button class='rqIconBtn danger' title='Delete Requirement' onclick=\"window._projCtrl.onDeleteRequirement('" + esc(x.requirementId) + "','" + esc(x.roleCategoryName || "") + "')\">🗑️</button>"
+                    : "";
+                return "<div class='rqCard'>" +
+                    "<div class='rqCardTop'><div class='rqRole'><span class='rqRoleIco'>" + that._roleIcon(x.roleCategoryName) + "</span>" +
+                        "<div><div class='rqRoleName'>" + esc(x.roleCategoryName || "—") + "</div><div class='pmMuted' style='font-size:0.72rem'>" + esc(x.departmentName || "") + (x.skillCategory ? " · " + esc(x.skillCategory) : "") + "</div></div></div></div>" +
+                    "<div class='rqExpRow'>" + that._expBadge(x.experienceRange) + "</div>" +
+                    "<div class='rqMetrics'>" +
+                        "<div><span class='rqMLbl'>👥 Required</span><span class='rqMVal'>" + qty + "</span></div>" +
+                        "<div><span class='rqMLbl'>⏱ Effort / Emp</span><span class='rqMVal'>" + estH + " h</span></div>" +
+                        "<div><span class='rqMLbl'>📈 Total Planned</span><span class='rqMVal'>" + totalH + " h</span></div>" +
+                    "</div>" +
+                    (skillChips ? "<div class='rqSkillsBlk'><div class='rqMLbl'>🏷 Required Skills</div><div class='rqChips'>" + skillChips + "</div></div>" : "") +
+                    (acts ? "<div class='rqActions'>" + acts + "</div>" : "") +
+                    "</div>";
             }).join("");
-            return "<div class='pmPanel'>" + head +
-                "<table class='pmTable'><thead><tr><th>Department › Role › Specialization</th><th>Count</th><th>Hours</th><th>Window</th><th>Status</th><th></th></tr></thead><tbody>" +
-                rows + "</tbody></table></div>";
+            return "<div class='pmPanel'>" + head + "<div class='rqGrid'>" + cards + "</div></div>";
+        },
+        // Manage Allocation from a requirement card → the milestone allocation flow.
+        onManageRequirementAllocation: function () { this.onAllocateByMilestone(); },
+
+        onAddRequirement: function () { this._openRequirementForm(null); },
+        onEditRequirement: function (requirementId) {
+            var existing = ((this._requirements && this._requirements.requirements) || []).filter(function (x) { return x.requirementId === requirementId; })[0];
+            if (!existing) { MessageToast.show("Requirement not found."); return; }
+            this._openRequirementForm(existing);
         },
 
-        onAddRequirement: function () {
-            var that = this, pid = this._detail.project.projectId;
-            var hier = this._resHier || { departments: [] };
-            var depts = hier.departments || [];
-            var ov = document.createElement("div");
-            ov.className = "pmOverlay";
-            var deptOpts = "<option value=''>— Select department —</option>" + depts.map(function (d) { return "<option value='" + esc(d.deptId) + "'>" + esc(d.name) + "</option>"; }).join("");
-            ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>Add Resource Requirement</div>" +
+        // Autocomplete over the ALREADY-LOADED company master data (getResourceHierarchy
+        // skills + specializations) — same source of truth as HR, filtered client-side
+        // so it's instant and needs no extra endpoint. `candidates` = array of names.
+        _reqAutocomplete: function (input, drop, candidates, onPick, clearOnPick) {
+            var show = function () {
+                var q = (input.value || "").trim().toLowerCase();
+                var list = (typeof candidates === "function" ? candidates() : candidates) || [];
+                var items = (q ? list.filter(function (n) { return String(n).toLowerCase().indexOf(q) !== -1; }) : list.slice());
+                items.sort(function (a, b) {
+                    var as = String(a).toLowerCase().indexOf(q) === 0 ? 0 : 1, bs = String(b).toLowerCase().indexOf(q) === 0 ? 0 : 1;
+                    return as - bs || String(a).localeCompare(String(b));
+                });
+                items = items.slice(0, 10);
+                if (!items.length) { drop.style.display = "none"; return; }
+                drop.innerHTML = items.map(function (n) { return "<div class='acItem' data-name='" + esc(n) + "'>" + esc(n) + "</div>"; }).join("");
+                drop.style.display = "block";
+                drop.querySelectorAll(".acItem").forEach(function (it) {
+                    it.addEventListener("mousedown", function (e) {
+                        e.preventDefault();
+                        var name = it.getAttribute("data-name");
+                        onPick(name); drop.style.display = "none";
+                        input.value = clearOnPick ? "" : name;
+                    });
+                });
+            };
+            input.addEventListener("input", show);
+            input.addEventListener("focus", show);
+            input.addEventListener("blur", function () { setTimeout(function () { drop.style.display = "none"; }, 160); });
+        },
+
+        // Shared Add/Edit requirement dialog — sectioned, standardized inputs.
+        _openRequirementForm: function (existing) {
+            var that = this, pid = this._detail.project.projectId, isEdit = !!existing;
+            var depts = (this._resHier && this._resHier.departments) || [];
+            var projDepts = (this._requirements && this._requirements.projectDepartments) || [];
+            var defaultDept = existing ? existing.departmentId : null;
+            if (!defaultDept) projDepts.forEach(function (pd) {
+                if (defaultDept) return;
+                var m = depts.filter(function (d) { return String(d.name).toLowerCase() === String(pd).toLowerCase() || String(d.deptId).toLowerCase() === String(pd).toLowerCase(); })[0];
+                if (m) defaultDept = m.deptId;
+            });
+            var EXP = [["0-2 Years", "Junior"], ["3-5 Years", "Mid Level"], ["8+ Years", "Senior"], ["12+ Years", "Expert"]];
+            var curExp = existing ? existing.experienceRange : "";
+            var deptOpts = "<option value=''>— Select department —</option>" + depts.map(function (d) { return "<option value='" + esc(d.deptId) + "'" + (d.deptId === defaultDept ? " selected" : "") + ">" + esc(d.name) + "</option>"; }).join("");
+            var expOpts = "<option value=''>— Select experience —</option>" + EXP.map(function (e) { return "<option value='" + e[0] + "'" + (curExp === e[0] ? " selected" : "") + ">" + e[1] + " (" + e[0] + ")</option>"; }).join("");
+
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog rqDialog'><div class='pmDialogHead'>" + (isEdit ? "Edit Resource Requirement" : "Add Resource Requirement") + "</div>" +
                 "<div class='pmDialogBody'>" +
-                "<label class='pmFLbl'>Department *</label><select class='pmFInput' id='rqDept'>" + deptOpts + "</select>" +
-                "<label class='pmFLbl'>Role Category</label><select class='pmFInput' id='rqRole'><option value=''>— Any —</option></select>" +
-                "<label class='pmFLbl'>Specialization</label><select class='pmFInput' id='rqSpec'><option value=''>— Any —</option></select>" +
-                "<div class='pmFRow'><div><label class='pmFLbl'>Skill Category</label><input type='text' class='pmFInput' id='rqSkillCat' placeholder='e.g. Backend, Cloud'/></div>" +
-                "<div><label class='pmFLbl'>Experience Range</label><input type='text' class='pmFInput' id='rqExp' placeholder='e.g. 3-5 yrs'/></div></div>" +
-                "<label class='pmFLbl'>Required Skills</label><input type='text' class='pmFInput' id='rqSkills' placeholder='Comma-separated, e.g. Node.js, CAP, SQL'/>" +
-                "<div class='pmFRow'><div><label class='pmFLbl'>Required Count</label><input type='number' min='1' step='1' class='pmFInput' id='rqCount' value='1'/></div>" +
-                "<div><label class='pmFLbl'>Required Hours</label><input type='number' min='0' step='1' class='pmFInput' id='rqHours' value='0'/></div></div>" +
-                "<div class='pmFRow'><div><label class='pmFLbl'>Allocation % (per head)</label><input type='number' min='1' max='100' step='5' class='pmFInput' id='rqAllocPct' value='100'/></div>" +
-                "<div></div></div>" +
-                "<div class='pmFRow'><div><label class='pmFLbl'>Start Date</label><input type='date' class='pmFInput' id='rqStart'/></div>" +
-                "<div><label class='pmFLbl'>End Date</label><input type='date' class='pmFInput' id='rqEnd'/></div></div>" +
-                "<label class='pmFLbl'>Notes</label><textarea class='pmFInput' id='rqNotes' rows='2'></textarea>" +
+                "<div class='rqSection'><div class='rqSecTitle'>1 · Basic Information</div>" +
+                    "<label class='pmFLbl'>Department <span class='rqReq'>*</span></label><select class='pmFInput' id='rqDept'>" + deptOpts + "</select>" +
+                    "<div class='pmFRow'><div><label class='pmFLbl'>Role <span class='rqReq'>*</span></label><select class='pmFInput' id='rqRole'><option value=''>— Select role —</option></select></div>" +
+                    "<div><label class='pmFLbl'>Experience <span class='rqReq'>*</span></label><select class='pmFInput' id='rqExp'>" + expOpts + "</select></div></div></div>" +
+                "<div class='rqSection'><div class='rqSecTitle'>2 · Skill Category</div>" +
+                    "<label class='pmFLbl'>Skills Category <span class='rqReq'>*</span></label><div class='acWrap'><input type='text' class='pmFInput' id='rqSkillCat' autocomplete='off' placeholder='Select a role first, then choose a category' value='" + esc(existing ? (existing.skillCategory || "") : "") + "'/><div class='acDrop' id='rqSkillCatDrop'></div></div>" +
+                    "<div class='pmMuted' style='font-size:0.7rem;margin-top:2px'>Suggestions come from the selected role's specializations (company master).</div></div>" +
+                "<div class='rqSection'><div class='rqSecTitle'>3 · Planning</div>" +
+                    "<div class='pmFRow'><div><label class='pmFLbl'>Quantity <span class='rqReq'>*</span></label><input type='number' min='1' step='1' class='pmFInput' id='rqCount' value='" + (existing ? existing.requiredCount : 1) + "'/></div>" +
+                    "<div><label class='pmFLbl'>Estimated Hours (Per Employee) <span class='rqReq'>*</span></label><input type='number' min='1' step='1' class='pmFInput' id='rqHours' value='" + (existing ? (existing.estimatedHours || "") : "") + "' placeholder='e.g. 40'/></div></div>" +
+                    "<div class='rqTotalBox'>Total Planned Hours: <b id='rqTotal'>0 h</b> <span class='pmMuted' id='rqTotalCalc'></span></div></div>" +
                 "<div class='pmErr' id='rqErr' style='display:none'></div>" +
-                "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>Add</button></div></div>";
+                "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>" + (isEdit ? "Save Changes" : "Add Requirement") + "</button></div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); };
+            var $ = function (s) { return ov.querySelector(s); };
+            ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+            $("#pmCancel").addEventListener("click", close);
+
+            // Department → Role (company master via hierarchy). No Category/Module.
+            var deptSel = $("#rqDept"), roleSel = $("#rqRole");
+            var populateRoles = function (preRole) {
+                var dept = depts.filter(function (d) { return d.deptId === deptSel.value; })[0];
+                var roles = (dept && dept.roles) || [];
+                roleSel.innerHTML = "<option value=''>— Select role —</option>" + roles.map(function (r) { return "<option value='" + esc(r.roleId) + "'" + (preRole === r.roleId ? " selected" : "") + ">" + esc(r.name) + "</option>"; }).join("");
+            };
+            // Skill Category candidates = the SELECTED ROLE's specializations only.
+            var categoryFor = function () {
+                var role = null;
+                (depts || []).forEach(function (d) { (d.roles || []).forEach(function (r) { if (r.roleId === roleSel.value) role = r; }); });
+                return role ? (role.specializations || []).map(function (sp) { return sp.name; }) : [];
+            };
+            var onRoleChange = function () {
+                // Clear a category that no longer belongs to the newly-selected role.
+                var valid = categoryFor();
+                if ($("#rqSkillCat").value && valid.indexOf($("#rqSkillCat").value) === -1) $("#rqSkillCat").value = "";
+            };
+            deptSel.addEventListener("change", function () { populateRoles(); onRoleChange(); recalc(); });
+            roleSel.addEventListener("change", onRoleChange);
+            if (defaultDept) populateRoles(existing ? existing.roleCategoryId : null);
+
+            // Skills Category autocomplete — scoped to the selected role (dynamic list).
+            this._reqAutocomplete($("#rqSkillCat"), $("#rqSkillCatDrop"), categoryFor, function (name) { $("#rqSkillCat").value = name; }, false);
+
+            // Live total planned hours.
+            var recalc = function () {
+                var q = parseInt($("#rqCount").value, 10) || 0, h = parseFloat($("#rqHours").value) || 0;
+                var total = Math.round(q * h * 100) / 100;
+                $("#rqTotal").textContent = total + " h";
+                $("#rqTotalCalc").textContent = (q && h) ? ("(" + q + " × " + h + ")") : "";
+            };
+            $("#rqCount").addEventListener("input", recalc); $("#rqHours").addEventListener("input", recalc); recalc();
+
+            $("#pmSave").addEventListener("click", function () {
+                var btn = this, showErr = function (m) { var e = $("#rqErr"); e.textContent = "⚠ " + m; e.style.display = "block"; };
+                var deptId = deptSel.value, roleId = roleSel.value;
+                var skillCat = ($("#rqSkillCat").value || "").trim(), exp = $("#rqExp").value;
+                var qty = parseInt($("#rqCount").value, 10) || 0, hrs = parseFloat($("#rqHours").value) || 0;
+                if (!deptId) return showErr("Department is required.");
+                if (!roleId) return showErr("Role is required.");
+                if (!exp) return showErr("Experience is required.");
+                if (!skillCat) return showErr("Skills Category is required.");
+                if (qty < 1) return showErr("Quantity must be at least 1.");
+                if (hrs < 1) return showErr("Estimated Hours must be greater than 0.");
+                btn.disabled = true; btn.textContent = "Saving…";
+                var payload = { departmentId: deptId, roleCategoryId: roleId, requiredCount: qty, estimatedHours: hrs, skillCategory: skillCat, experienceRange: exp };
+                var action = isEdit ? "updateResourceRequirement" : "createResourceRequirement";
+                if (isEdit) payload.requirementId = existing.requirementId; else payload.projectId = pid;
+                ppost(action, payload).then(function (res) {
+                    btn.disabled = false; btn.textContent = isEdit ? "Save Changes" : "Add Requirement";
+                    if (res && res.error) { showErr(res.error); return; }
+                    close(); MessageToast.show(isEdit ? "Requirement updated." : "Requirement added."); that._loadRequirements();
+                }).catch(function () { btn.disabled = false; btn.textContent = isEdit ? "Save Changes" : "Add Requirement"; showErr("Could not save the requirement."); });
+            });
+        },
+
+        onDeleteRequirement: function (requirementId, roleName) {
+            var that = this;
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog sm'><div class='pmDialogHead'>Delete Requirement</div>" +
+                "<div class='pmDialogBody'><p>Delete the requirement for <b>" + esc(roleName || "this role") + "</b>? This removes it from the project's staffing baseline.</p></div>" +
+                "<div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn danger' id='pmConfirm'>Delete</button></div></div>";
             document.body.appendChild(ov);
             var close = function () { ov.remove(); };
             ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
             ov.querySelector("#pmCancel").addEventListener("click", close);
-            // Cascading population.
-            var roleSel = ov.querySelector("#rqRole"), specSel = ov.querySelector("#rqSpec");
-            var curRoles = [];
-            ov.querySelector("#rqDept").addEventListener("change", function () {
-                var dept = depts.find(function (d) { return d.deptId === this.value; }.bind(this));
-                curRoles = (dept && dept.roles) || [];
-                roleSel.innerHTML = "<option value=''>— Any —</option>" + curRoles.map(function (r) { return "<option value='" + esc(r.roleId) + "'>" + esc(r.name) + "</option>"; }).join("");
-                specSel.innerHTML = "<option value=''>— Any —</option>";
+            ov.querySelector("#pmConfirm").addEventListener("click", function () {
+                this.disabled = true; this.textContent = "Deleting…";
+                ppost("deleteResourceRequirement", { requirementId: requirementId }).then(function (res) {
+                    close();
+                    if (res && res.error) { MessageToast.show(res.error); return; }
+                    MessageToast.show("Requirement deleted."); that._loadRequirements();
+                }).catch(function () { close(); MessageToast.show("Could not delete the requirement."); });
             });
-            roleSel.addEventListener("change", function () {
-                var role = curRoles.find(function (r) { return r.roleId === this.value; }.bind(this));
-                var specs = (role && role.specializations) || [];
-                specSel.innerHTML = "<option value=''>— Any —</option>" + specs.map(function (s) { return "<option value='" + esc(s.specId) + "'>" + esc(s.name) + "</option>"; }).join("");
-            });
-            ov.querySelector("#pmSave").addEventListener("click", function () {
-                var btn = this, deptId = ov.querySelector("#rqDept").value;
-                if (!deptId) { var e = ov.querySelector("#rqErr"); e.textContent = "⚠ Department is required."; e.style.display = "block"; return; }
-                btn.disabled = true; btn.textContent = "Adding…";
-                ppost("createResourceRequirement", {
-                    projectId: pid, departmentId: deptId,
-                    roleCategoryId: roleSel.value || null, specializationId: specSel.value || null,
-                    requiredCount: parseInt(ov.querySelector("#rqCount").value, 10) || 1,
-                    requiredHours: parseFloat(ov.querySelector("#rqHours").value) || 0,
-                    skillCategory: (ov.querySelector("#rqSkillCat").value || "").trim(),
-                    skills: (ov.querySelector("#rqSkills").value || "").trim(),
-                    experienceRange: (ov.querySelector("#rqExp").value || "").trim(),
-                    allocationPct: parseInt(ov.querySelector("#rqAllocPct").value, 10) || 100,
-                    startDate: ov.querySelector("#rqStart").value || null, endDate: ov.querySelector("#rqEnd").value || null,
-                    notes: (ov.querySelector("#rqNotes").value || "").trim()
-                }).then(function (res) {
-                    btn.disabled = false; btn.textContent = "Add";
-                    if (res && res.error) { var e = ov.querySelector("#rqErr"); e.textContent = "⚠ " + res.error; e.style.display = "block"; return; }
-                    close(); MessageToast.show("Requirement added."); that._loadRequirements();
-                }).catch(function () { btn.disabled = false; btn.textContent = "Add"; var e = ov.querySelector("#rqErr"); e.textContent = "⚠ Could not add requirement."; e.style.display = "block"; });
-            });
-        },
-
-        onDeleteRequirement: function (requirementId) {
-            var that = this;
-            ppost("deleteResourceRequirement", { requirementId: requirementId }).then(function (res) {
-                if (res && res.error) { MessageToast.show(res.error); return; }
-                MessageToast.show("Requirement removed."); that._loadRequirements();
-            }).catch(function () { MessageToast.show("Could not remove the requirement."); });
         },
 
         _renderMeetingsTab: function () {
@@ -1188,6 +1755,567 @@ sap.ui.define([
         onOpen: function (id) { this._open(id); },
         onBack: function () { this._load(); },
 
+        // ════════════════════════════════════════════════════════════════════════
+        // SPRINT MANAGEMENT (Tasks tab) — Milestone → Sprints → Work Items → Kanban.
+        // ════════════════════════════════════════════════════════════════════════
+        _wiIcon: function (t) { var m = { Epic: "🟪", Story: "📗", Task: "✅", Bug: "🐞", Subtask: "🔗", Spike: "🔬" }; return m[t] || "✅"; },
+        _prioDot: function (p) { var c = { Critical: "#dc2626", High: "#ea580c", Medium: "#2563eb", Low: "#64748b" }; return "<span class='spDot' style='background:" + (c[p] || "#64748b") + "'></span>"; },
+
+        _renderSprintTab: function (d) {
+            var ms = (this._milestones && this._milestones.milestones) || d.milestones || [];
+            var sel = this._sprintMilestone || "";
+            var opts = "<option value=''>— Select a milestone —</option>" + ms.map(function (m) {
+                return "<option value='" + esc(m.milestoneId) + "'" + (m.milestoneId === sel ? " selected" : "") + ">#" + (m.sequence || 0) + " " + esc(m.name) + "</option>";
+            }).join("");
+            var head = "<div class='pmPanel'><div class='spHead'><div><div class='rqHeadTitle'>Sprints</div>" +
+                "<div class='pmMuted'>Milestones plan the business · Sprints execute the work inside them.</div></div>" +
+                "<div class='spMsPick'><label class='pmFLbl' style='margin:0'>Milestone <span class='rqReq'>*</span></label>" +
+                "<select class='pmSelect wide' onchange=\"window._projCtrl.onSprintMilestone(this.value)\">" + opts + "</select></div></div>";
+            if (!sel) {
+                return head + "<div class='rqEmpty'><div class='rqEmptyIco'>🏃</div><div class='rqEmptyTitle'>Select a milestone to plan sprints</div>" +
+                    "<div class='pmMuted'>Sprints, stories, tasks and bugs live inside a milestone. Pick one above to view its Sprint Backlog and boards.</div></div></div>";
+            }
+            // Board view takes over when a sprint board is open.
+            if (this._sprintBoard && this._sprintBoard.milestoneId === sel) return head + this._renderSprintBoard() + "</div>";
+            return head + this._renderSprintList() + "</div>";
+        },
+        _renderWorkflowStrip: function () {
+            var w = this._workflow; if (!w || !(w.stages || []).length) return "";
+            var steps = w.stages.map(function (st, i) {
+                var cls = st.done ? "done" : (st.key === w.nextStage ? "next" : "todo");
+                return "<div class='wfStep " + cls + "'><span class='wfDot'>" + (st.done ? "✓" : (i + 1)) + "</span>" +
+                    "<span class='wfLbl'>" + esc(st.label) + (st.count ? " <b>" + st.count + "</b>" : "") + "</span></div>";
+            }).join("<span class='wfSep'></span>");
+            return "<div class='wfStrip'><div class='wfTitle'>Workflow <span class='pmMuted'>" + (w.completedStages || 0) + "/" + (w.totalStages || 0) +
+                " · next: " + esc(w.nextLabel || "Complete") + "</span></div><div class='wfSteps'>" + steps + "</div></div>";
+        },
+        onSprintMilestone: function (msId) {
+            this._sprintMilestone = msId; this._sprints = null; this._sprintBoard = null;
+            if (msId) this._loadSprints(); else this._render();
+        },
+        _loadSprints: function () {
+            var that = this, msId = this._sprintMilestone;
+            if (!msId) return;
+            Promise.all([ppost("getSprints", { projectId: this._detail.project.projectId }), ppost("getMilestoneTeam", { milestoneId: msId }), ppost("getProjectWorkflow", { projectId: this._detail.project.projectId })]).then(function (a) {
+                that._sprints = (a[0] && !a[0].error) ? a[0] : { sprints: [], error: (a[0] && a[0].error) };
+                that._team = (a[1] && a[1].team) || [];
+                that._workflow = (a[2] && !a[2].error) ? a[2] : null;
+                if ((that._detailTab || "") === "tasks") that._render();
+            }).catch(function () { that._sprints = { sprints: [] }; that._render(); });
+        },
+        _renderSprintList: function () {
+            var s = this._sprints;
+            if (!s) { this._loadSprints(); return "<div class='pmLoading'>Loading sprints…</div>"; }
+            if (s.error) return "<div class='pmMuted'>" + esc(s.error) + "</div>";
+            var canManage = !!s.canManage, that = this;
+            var wf = this._renderWorkflowStrip();
+            var bar = wf + "<div class='spListBar'><div class='spMsProg'>Project execution progress: <b>" + (s.overallProgress || s.milestoneProgress || 0) + "%</b>" +
+                "<div class='rqProgTrack' style='width:180px;display:inline-block;margin-left:8px;vertical-align:middle'><div class='rqProgFill' style='width:" + (s.milestoneProgress || 0) + "%;background:#16a34a'></div></div></div>" +
+                (canManage ? "<button class='pmBtn primary sm' onclick=\"window._projCtrl.onCreateSprint()\">＋ Create Sprint</button>" : "") + "</div>";
+            if (!(s.sprints || []).length) {
+                return bar + "<div class='rqEmpty'><div class='rqEmptyIco'>🏃</div><div class='rqEmptyTitle'>No sprints in this milestone yet</div>" +
+                    "<div class='pmMuted'>Create your first sprint to start planning execution." + (s.backlog && s.backlog.count ? " There are " + s.backlog.count + " backlog item(s)." : "") + "</div></div>";
+            }
+            var cards = s.sprints.map(function (sp) {
+                var stCol = { Backlog: "#64748b", Planned: "#4338ca", Active: "#16a34a", Completed: "#0891b2", Cancelled: "#94a3b8" }[sp.status] || "#64748b";
+                var m = sp.metrics || {};
+                var overCap = sp.estimatedCapacityHours > 0 && sp.allocatedCapacity > sp.estimatedCapacityHours;
+                var acts = "";
+                if (canManage) {
+                    if (sp.status === "Backlog" || sp.status === "Planned") acts += "<button class='pmLink' onclick=\"window._projCtrl.onSprintAction('" + esc(sp.sprintId) + "','start')\">▶ Start</button>";
+                    if (sp.status === "Active") acts += "<button class='pmLink' onclick=\"window._projCtrl.onSprintAction('" + esc(sp.sprintId) + "','complete')\">✓ Complete</button>";
+                    if (sp.status !== "Completed" && sp.status !== "Cancelled") acts += "<button class='pmLink' onclick=\"window._projCtrl.onEditSprint('" + esc(sp.sprintId) + "')\">Edit</button>";
+                    if (sp.status !== "Completed" && sp.status !== "Cancelled") acts += "<button class='pmLink' onclick=\"window._projCtrl.onSprintAction('" + esc(sp.sprintId) + "','cancel')\">Cancel</button>";
+                    acts += "<button class='pmLink danger' onclick=\"window._projCtrl.onDeleteSprint('" + esc(sp.sprintId) + "','" + esc(sp.name) + "')\">Delete</button>";
+                }
+                return "<div class='spCard'>" +
+                    "<div class='spCardTop'><div><span class='spBadge' style='background:" + stCol + "'>" + esc(sp.status) + "</span> <b class='spName'>" + esc(sp.name) + "</b>" +
+                        "<div class='pmMuted' style='font-size:0.74rem'>🎯 " + esc(sp.goal || "—") + "</div></div>" +
+                        "<div class='spCardBtns'>" + (canManage ? "<button class='pmBtn outline sm' onclick=\"window._projCtrl.onSprintPlanning('" + esc(sp.sprintId) + "')\">🗓 Plan</button>" : "") +
+                        "<button class='pmBtn outline sm' onclick=\"window._projCtrl.onOpenBoard('" + esc(sp.sprintId) + "')\">Open Board →</button></div></div>" +
+                    "<div class='spMeta'>" + esc(String(sp.startDate || "—").slice(0, 10)) + " → " + esc(String(sp.endDate || "—").slice(0, 10)) +
+                        (sp.ownerName ? " · 👤 " + esc(sp.ownerName) : "") + "</div>" +
+                    "<div class='spStats'>" +
+                        "<span>📗 " + (m.stories ? m.stories.done + "/" + m.stories.total : "0/0") + " stories</span>" +
+                        "<span>✅ " + (m.tasks ? m.tasks.done + "/" + m.tasks.total : "0/0") + " tasks</span>" +
+                        "<span>🐞 " + (m.bugs ? m.bugs.done + "/" + m.bugs.total : "0/0") + " bugs</span>" +
+                        "<span>⭐ " + (m.storyPointsDone || 0) + "/" + (m.storyPointsTotal || 0) + " pts</span>" +
+                        "<span>⏱ " + (m.loggedHours || 0) + "/" + (m.estHours || 0) + " h</span>" +
+                        "<span class='" + (overCap ? "spOver" : "") + "'>📊 Cap " + sp.allocatedCapacity + "/" + sp.estimatedCapacityHours + " h</span>" +
+                    "</div>" +
+                    "<div class='spProgRow'><div class='rqProgTrack'><div class='rqProgFill' style='width:" + (m.progressPct || 0) + "%;background:" + (m.progressPct >= 100 ? "#16a34a" : "#2563eb") + "'></div></div><span class='spProgPct'>" + (m.progressPct || 0) + "%</span></div>" +
+                    (overCap ? "<div class='spWarn'>⚠ Allocated hours exceed the sprint's estimated capacity.</div>" : "") +
+                    (acts ? "<div class='spActions'>" + acts + "</div>" : "") +
+                    "</div>";
+            }).join("");
+            return bar + "<div class='spGrid'>" + cards + "</div>";
+        },
+        _renderSprintBoard: function () {
+            var b = this._sprintBoard, that = this;
+            if (!b) return "";
+            var m = b.metrics || {};
+            var canManage = !!b.canManage;
+            var head = "<div class='spBoardHead'><button class='pmBtn ghost sm' onclick=\"window._projCtrl.onCloseBoard()\">← Sprints</button>" +
+                "<div class='spBoardTitle'><b>" + esc(b.name) + "</b> <span class='spBadge' style='background:#2563eb'>" + esc(b.status) + "</span><div class='pmMuted' style='font-size:0.74rem'>🎯 " + esc(b.goal || "") + "</div></div>" +
+                "<div class='spBoardStats'>⭐ " + (m.storyPointsDone || 0) + "/" + (m.storyPointsTotal || 0) + " pts · ⏱ " + (m.loggedHours || 0) + "/" + (m.estHours || 0) + " h · " + (m.progressPct || 0) + "%</div>" +
+                "<button class='pmBtn ghost sm' onclick=\"window._projCtrl.onSprintReport()\">📊 Reports</button>" +
+                (canManage ? "<button class='pmBtn primary sm' onclick=\"window._projCtrl.onCreateWorkItem()\">＋ Work Item</button>" : "") + "</div>";
+            var cols = (b.columns || []).map(function (col) {
+                var items = (col.items || []).map(function (it) {
+                    return "<div class='spCardItem' draggable='true' data-task='" + esc(it.taskId) + "' " +
+                        "onclick=\"window._projCtrl.onWorkItemDetail('" + esc(it.taskId) + "')\" " +
+                        "ondragstart=\"window._projCtrl.onWiDragStart(event,'" + esc(it.taskId) + "')\">" +
+                        "<div class='spItemTop'>" + that._wiIcon(it.type) + " <span class='spItemType'>" + esc(it.type) + "</span> " + that._prioDot(it.priority) +
+                        (it.storyPoints ? "<span class='spPts'>" + it.storyPoints + "</span>" : "") + "</div>" +
+                        "<div class='spItemTitle'>" + esc(it.title) + "</div>" +
+                        "<div class='spItemFoot'><span class='pmMuted'>" + esc(it.assignee || "Unassigned") + "</span>" +
+                        (it.estimatedHours ? "<span class='pmMuted'>" + it.loggedHours + "/" + it.estimatedHours + "h</span>" : "") + "</div>" +
+                        (it.labels ? "<div class='spLabels'>" + it.labels.split(",").map(function (l) { return l.trim() ? "<span class='spLabel'>" + esc(l.trim()) + "</span>" : ""; }).join("") + "</div>" : "") +
+                        "</div>";
+                }).join("");
+                return "<div class='spCol' ondragover='event.preventDefault()' ondrop=\"window._projCtrl.onWiDrop(event,'" + esc(col.key) + "')\">" +
+                    "<div class='spColHead'>" + esc(col.key) + " <span class='pmCount'>" + (col.items || []).length + "</span></div>" +
+                    "<div class='spColBody'>" + (items || "<div class='spColEmpty'>—</div>") + "</div></div>";
+            }).join("");
+            return head + "<div class='spBoard'>" + cols + "</div>";
+        },
+        onOpenBoard: function (sprintId) {
+            var that = this;
+            ppost("getSprintBoard", { sprintId: sprintId }).then(function (b) {
+                if (b && b.error) { MessageToast.show(b.error); return; }
+                that._sprintBoard = b; that._render();
+            }).catch(function () { MessageToast.show("Could not open the board."); });
+        },
+        onCloseBoard: function () { this._sprintBoard = null; this._loadSprints(); },
+
+        // ── Sprint Planning: cross-project availability + drag stories into the sprint ──
+        onSprintPlanning: function (sprintId) {
+            var that = this; this._planSprintId = sprintId;
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog alFull'><div id='spPlanRoot'><div class='pmLoading'>Loading sprint planning…</div></div></div>";
+            document.body.appendChild(ov);
+            ov.addEventListener("click", function (e) { if (e.target === ov) ov.remove(); });
+            this._planOverlay = ov; this._loadSprintPlanning();
+        },
+        _loadSprintPlanning: function () {
+            var that = this;
+            ppost("getSprintPlanning", { sprintId: this._planSprintId }).then(function (d) {
+                if (d && d.error) { MessageToast.show(d.error); if (that._planOverlay) that._planOverlay.remove(); return; }
+                that._planData = d; that._renderSprintPlanning();
+            }).catch(function () { MessageToast.show("Could not load sprint planning."); });
+        },
+        onCloseSprintPlanning: function () { if (this._planOverlay) { this._planOverlay.remove(); this._planOverlay = null; } this._loadSprints(); },
+        _renderSprintPlanning: function () {
+            var d = this._planData, ov = this._planOverlay; if (!ov) return;
+            var sp = d.sprint || {}, sm = d.summary || {}, cm = !!d.canManage;
+            var inr = function (n) { return Math.round(Number(n) || 0); };
+            var stC = { Available: "#16a34a", "Partially Loaded": "#2563eb", "Fully Loaded": "#d97706", Overallocated: "#dc2626" };
+            var head = "<div class='alHeader'><div class='alHTitle'>Sprint Planning <span class='alHSub'>· " + esc(sp.name || "") + "</span></div>" +
+                "<button class='alClose' onclick=\"window._projCtrl.onCloseSprintPlanning()\">✕ Close</button></div>" +
+                "<div class='alMsBar'><span class='alMsChip' style='--c:#2563eb'>" + esc(sp.status || "") + "</span>" +
+                "<span class='alMsDates'>" + esc(String(sp.startDate || "—").slice(0, 10)) + " → " + esc(String(sp.endDate || "—").slice(0, 10)) + "</span>" +
+                "<span class='alMsDays'>🎯 " + esc(sp.goal || "") + "</span></div>";
+
+            var card = function (v, l, c) { return "<div class='alCard'><div class='alCardBody'><div class='alCardVal'" + (c ? " style='color:" + c + "'" : "") + ">" + v + "</div><div class='alCardLbl'>" + l + "</div></div></div>"; };
+            var cards = "<div class='alCards' style='grid-template-columns:repeat(5,1fr)'>" +
+                card(sm.teamSize || 0, "Team") +
+                card((sm.teamCapacity || 0) + " h", "Team Capacity", "#2563eb") +
+                card((sm.committedHours || 0) + " h", "Committed (this sprint)", "#7c3aed") +
+                card((sm.availableHours || 0) + " h", "Available", "#16a34a") +
+                card(sm.overallocated || 0, "Overallocated", (sm.overallocated > 0 ? "#dc2626" : "#16a34a")) +
+                "</div>";
+
+            var warn = "";
+            if ((d.milestoneWarnings || []).length) {
+                warn = "<div class='alWarnBanner'>⚠ <b>Milestone plan exceeded:</b> " + d.milestoneWarnings.map(function (w) {
+                    return esc(w.milestoneName) + " (planned " + w.plannedHours + "h vs allocated " + w.allocatedHours + "h, +" + w.exceedBy + "h)";
+                }).join("; ") + ". Increase milestone allocation or move stories to another sprint.</div>";
+            }
+
+            // Availability list
+            var emps = (d.employees || []).map(function (e) {
+                var p = String(e.employeeName || "").trim().split(/\s+/), ini = (((p[0] || "")[0] || "") + ((p[1] || "")[0] || "")).toUpperCase();
+                var barPct = Math.min(100, e.utilizationPct || 0), col = e.overallocated ? "#ef4444" : (e.utilizationPct >= 85 ? "#d97706" : "#22c55e");
+                return "<div class='spPlanEmp" + (e.overallocated ? " over" : "") + "' onclick=\"window._projCtrl.onWorkloadEmployee('" + esc(e.employeeId) + "')\" title='View cross-project workload'>" +
+                    "<div class='spPlanEmpTop'><span class='alAvatar' style='background:#4338ca;width:34px;height:34px;font-size:0.75rem'>" + esc(ini) + "</span>" +
+                    "<div style='min-width:0;flex:1'><b class='alEmpName'>" + esc(e.employeeName) + "</b><div class='alEmpRole'>" + esc(e.department) + (e.role ? " · " + esc(e.role) : "") + "</div></div>" +
+                    "<span class='alStatus' style='--c:" + (stC[e.status] || "#64748b") + "'>" + esc(e.status) + "</span></div>" +
+                    "<div class='spCapBar'><div class='spCapFill' style='width:" + barPct + "%;background:" + col + "'></div></div>" +
+                    "<div class='spCapNums'><span>Cap <b>" + e.capacity + "h</b></span><span>This <b>" + e.thisSprintHours + "h</b></span>" +
+                    "<span>Other <b>" + e.otherProjectHours + "h</b></span><span class='" + (e.availableHours < 0 ? "neg" : "pos") + "'>Free <b>" + e.availableHours + "h</b></span>" +
+                    "<span>Util <b>" + e.utilizationPct + "%</b></span></div></div>";
+            }).join("") || "<div class='pmMuted' style='padding:16px'>No employees allocated to this project yet.</div>";
+
+            // Stories: sprint (assigned) + backlog (draggable/add)
+            var storyRow = function (s, inSprint) {
+                return "<div class='spStoryRow'><div style='min-width:0;flex:1'><b>" + esc(s.title) + "</b>" +
+                    "<div class='pmMuted' style='font-size:0.68rem'>" + (s.milestoneName ? "📌 " + esc(s.milestoneName) + " · " : "") + (s.storyPoints || 0) + " pts · " + s.estimatedHours + "h</div></div>" +
+                    (cm ? (inSprint
+                        ? "<button class='pmLink danger' onclick=\"window._projCtrl.onAssignStoryToSprint('" + esc(s.taskId) + "','')\">Remove</button>"
+                        : "<button class='pmBtn primary sm' onclick=\"window._projCtrl.onAssignStoryToSprint('" + esc(s.taskId) + "','" + esc(sp.sprintId) + "')\">Add →</button>") : "") + "</div>";
+            };
+            var sprintStories = (d.sprintStories || []).map(function (s) { return storyRow(s, true); }).join("") || "<div class='spColEmpty'>No stories in this sprint yet.</div>";
+            var backlog = (d.backlogStories || []).map(function (s) { return storyRow(s, false); }).join("") || "<div class='spColEmpty'>Backlog is empty. Create stories on the board.</div>";
+
+            var body = "<div class='spPlanGrid'>" +
+                "<div class='spPlanCol'><div class='spPlanColHead'>Team Availability <span class='pmMuted'>(cross-project)</span></div><div class='spPlanScroll'>" + emps + "</div></div>" +
+                "<div class='spPlanCol'><div class='spPlanColHead'>In this Sprint (" + (d.sprintStories || []).length + ")</div><div class='spPlanScroll spPlanShort'>" + sprintStories + "</div>" +
+                "<div class='spPlanColHead'>Backlog Stories (" + (d.backlogStories || []).length + ")</div><div class='spPlanScroll spPlanShort'>" + backlog + "</div></div>" +
+                "</div>";
+
+            ov.querySelector("#spPlanRoot").innerHTML = head + cards + warn + body;
+        },
+        onAssignStoryToSprint: function (taskId, sprintId) {
+            var that = this;
+            ppost("moveWorkItem", { taskId: taskId, sprintId: sprintId || null }).then(function (res) {
+                if (res && res.error) { MessageToast.show(res.error); return; }
+                MessageToast.show(sprintId ? "Story added to sprint." : "Story removed from sprint.");
+                that._loadSprintPlanning();
+            }).catch(function () { MessageToast.show("Could not update the story."); });
+        },
+        // ── Cross-project workload popup for one employee ──
+        onWorkloadEmployee: function (empId) {
+            var that = this;
+            ppost("getEmployeeWorkload", { employeeId: empId }).then(function (d) {
+                if (d && d.error) { MessageToast.show(d.error); return; }
+                that._renderWorkload(d);
+            }).catch(function () { MessageToast.show("Could not load workload."); });
+        },
+        _renderWorkload: function (d) {
+            var e = d.employee || {}, cm = d.currentMonth || {};
+            var stC = { Available: "#16a34a", "Partially Loaded": "#2563eb", "Fully Loaded": "#d97706", Overallocated: "#dc2626" };
+            var projs = (d.projects || []).map(function (p) {
+                var sprints = (p.sprints || []).map(function (s) { return "<div class='wlSprint'><span>" + esc(s.sprintName) + "</span><span class='pmMuted'>" + esc(String(s.startDate || "").slice(0, 10)) + "→" + esc(String(s.endDate || "").slice(0, 10)) + "</span><b>" + s.remainingHours + "h</b></div>"; }).join("");
+                return "<div class='wlProj'><div class='wlProjHead'><b>" + esc(p.projectName) + "</b><span class='wlProjHrs'>" + p.totalHours + "h</span></div>" + sprints + "</div>";
+            }).join("") || "<div class='pmMuted'>No active sprint commitments.</div>";
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>Workload · " + esc(e.employeeName) + " <span class='pmMuted' style='font-size:0.75rem;font-weight:400'>" + esc(e.department || "") + "</span></div>" +
+                "<div class='pmDialogBody'>" +
+                "<div class='wlSnap'><div class='wlSnapCard'><div class='wlSnapVal'>" + (cm.capacity || 0) + "h</div><div class='wlSnapLbl'>Capacity (month)</div></div>" +
+                "<div class='wlSnapCard'><div class='wlSnapVal' style='color:#7c3aed'>" + (cm.committedHours || 0) + "h</div><div class='wlSnapLbl'>Committed</div></div>" +
+                "<div class='wlSnapCard'><div class='wlSnapVal' style='color:" + (cm.availableHours < 0 ? "#dc2626" : "#16a34a") + "'>" + (cm.availableHours || 0) + "h</div><div class='wlSnapLbl'>Available</div></div>" +
+                "<div class='wlSnapCard'><div class='wlSnapVal'>" + (cm.utilizationPct || 0) + "%</div><div class='wlSnapLbl'><span class='alStatus' style='--c:" + (stC[cm.status] || "#64748b") + "'>" + esc(cm.status || "") + "</span></div></div></div>" +
+                "<div class='wlProjsTitle'>Active commitments across " + (d.projectCount || 0) + " project(s) · " + (d.totalCommittedHours || 0) + "h total</div>" +
+                projs +
+                "</div><div class='pmDialogFoot'><button class='pmBtn primary' id='wlClose'>Close</button></div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); };
+            ov.addEventListener("click", function (ev) { if (ev.target === ov) close(); });
+            ov.querySelector("#wlClose").addEventListener("click", close);
+        },
+        onWiDragStart: function (ev, taskId) { ev.dataTransfer.setData("text/plain", taskId); ev.dataTransfer.effectAllowed = "move"; },
+        onWiDrop: function (ev, column) {
+            ev.preventDefault();
+            var taskId = ev.dataTransfer.getData("text/plain"); if (!taskId) return;
+            var that = this, sprintId = this._sprintBoard && this._sprintBoard.sprintId;
+            ppost("moveWorkItem", { taskId: taskId, status: column }).then(function (res) {
+                if (res && res.error) { MessageToast.show(res.error); return; }
+                if (sprintId) that.onOpenBoard(sprintId);   // refresh board + metrics
+            }).catch(function () { MessageToast.show("Could not move the item."); });
+        },
+        onSprintAction: function (sprintId, action) {
+            var that = this;
+            ppost("setSprintStatus", { sprintId: sprintId, action: action }).then(function (res) {
+                if (res && res.error) { MessageToast.show(res.error); return; }
+                MessageToast.show(action === "complete" ? ("Sprint completed" + (res.movedToBacklog ? " · " + res.movedToBacklog + " unfinished → backlog" : "")) : ("Sprint " + action + "ed."));
+                that._loadSprints();
+            }).catch(function () { MessageToast.show("Could not update the sprint."); });
+        },
+        onDeleteSprint: function (sprintId, name) {
+            var that = this;
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog sm'><div class='pmDialogHead'>Delete Sprint</div>" +
+                "<div class='pmDialogBody'><p>Delete <b>" + esc(name) + "</b>? Its work items return to the milestone backlog (nothing is lost).</p></div>" +
+                "<div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn danger' id='pmConfirm'>Delete</button></div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); };
+            ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+            ov.querySelector("#pmCancel").addEventListener("click", close);
+            ov.querySelector("#pmConfirm").addEventListener("click", function () {
+                ppost("deleteSprint", { sprintId: sprintId }).then(function (res) { close(); if (res && res.error) { MessageToast.show(res.error); return; } MessageToast.show("Sprint deleted."); that._loadSprints(); });
+            });
+        },
+        onCreateSprint: function () { this._openSprintForm(null); },
+        onEditSprint: function (sprintId) {
+            var sp = ((this._sprints && this._sprints.sprints) || []).filter(function (x) { return x.sprintId === sprintId; })[0];
+            this._openSprintForm(sp || null);
+        },
+        _openSprintForm: function (existing) {
+            var that = this, msId = this._sprintMilestone, isEdit = !!existing;
+            var team = this._team || [];
+            var ownerOpts = "<option value=''>— No owner —</option>" + team.map(function (t) { return "<option value='" + esc(t.employeeId) + "'" + (existing && existing.ownerId === t.employeeId ? " selected" : "") + ">" + esc(t.employeeName) + "</option>"; }).join("");
+            var win = (this._sprints && this._sprints.window) || {};
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>" + (isEdit ? "Edit Sprint" : "Create Sprint") + "</div>" +
+                "<div class='pmDialogBody'>" +
+                "<label class='pmFLbl'>Sprint Name <span class='rqReq'>*</span></label><input class='pmFInput' id='spName' value='" + esc(existing ? existing.name : "") + "' placeholder='e.g. Sprint 1'/>" +
+                "<label class='pmFLbl'>Sprint Goal <span class='rqReq'>*</span></label><input class='pmFInput' id='spGoal' value='" + esc(existing ? existing.goal : "") + "' placeholder='What will this sprint achieve?'/>" +
+                "<div class='pmFRow'><div><label class='pmFLbl'>Sprint Number</label><input type='number' min='1' class='pmFInput' id='spNum' value='" + (existing ? existing.sprintNumber : "") + "'/></div>" +
+                "<div><label class='pmFLbl'>Estimated Capacity (h)</label><input type='number' min='0' class='pmFInput' id='spCap' value='" + (existing ? existing.estimatedCapacityHours : "") + "'/></div></div>" +
+                "<div class='pmFRow'><div><label class='pmFLbl'>Start Date <span class='rqReq'>*</span></label><input type='date' class='pmFInput' id='spStart' value='" + esc(existing ? String(existing.startDate || "").slice(0, 10) : String(win.start || "").slice(0, 10)) + "'/></div>" +
+                "<div><label class='pmFLbl'>End Date <span class='rqReq'>*</span></label><input type='date' class='pmFInput' id='spEnd' value='" + esc(existing ? String(existing.endDate || "").slice(0, 10) : String(win.end || "").slice(0, 10)) + "'/></div></div>" +
+                "<label class='pmFLbl'>Sprint Owner</label><select class='pmFInput' id='spOwner'>" + ownerOpts + "</select>" +
+                "<label class='pmFLbl'>Description</label><textarea class='pmFInput' id='spDesc' rows='2'>" + esc(existing ? existing.description : "") + "</textarea>" +
+                "<div class='pmErr' id='spErr' style='display:none'></div>" +
+                "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>" + (isEdit ? "Save" : "Create") + "</button></div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); }; var $ = function (s) { return ov.querySelector(s); };
+            ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+            $("#pmCancel").addEventListener("click", close);
+            $("#pmSave").addEventListener("click", function () {
+                var btn = this, err = $("#spErr"), showErr = function (m) { err.textContent = "⚠ " + m; err.style.display = "block"; };
+                var payload = { name: ($("#spName").value || "").trim(), goal: ($("#spGoal").value || "").trim(),
+                    sprintNumber: parseInt($("#spNum").value, 10) || null, estimatedCapacityHours: parseFloat($("#spCap").value) || 0,
+                    startDate: $("#spStart").value || null, endDate: $("#spEnd").value || null, ownerId: $("#spOwner").value || null, description: ($("#spDesc").value || "").trim() };
+                if (!payload.name) return showErr("Sprint Name is required.");
+                if (!payload.goal) return showErr("Sprint Goal is required.");
+                if (!payload.startDate || !payload.endDate) return showErr("Start and End dates are required.");
+                if (payload.endDate < payload.startDate) return showErr("End Date cannot be before Start Date.");
+                btn.disabled = true; btn.textContent = "Saving…";
+                if (isEdit) payload.sprintId = existing.sprintId; else payload.projectId = that._detail.project.projectId;
+                ppost(isEdit ? "updateSprint" : "createSprint", payload).then(function (res) {
+                    btn.disabled = false; btn.textContent = isEdit ? "Save" : "Create";
+                    if (res && res.error) { showErr(res.error); return; }
+                    close(); MessageToast.show(isEdit ? "Sprint updated." : "Sprint created."); that._loadSprints();
+                }).catch(function () { btn.disabled = false; btn.textContent = isEdit ? "Save" : "Create"; showErr("Could not save the sprint."); });
+            });
+        },
+        onCreateWorkItem: function () {
+            var that = this, b = this._sprintBoard; if (!b) return;
+            var pid = this._detail.project.projectId, team = this._team || [];
+            var TYPES = ["Story", "Task", "Bug", "Subtask", "Epic", "Spike"];
+            var assigneeOpts = "<option value=''>— Unassigned —</option>" + team.map(function (t) { return "<option value='" + esc(t.employeeId) + "'>" + esc(t.employeeName) + "</option>"; }).join("");
+            // Milestone (business bridge) + parent Story options for the new architecture.
+            var msList = this._milestones || [];
+            var msOpts = "<option value=''>— Select milestone —</option>" + msList.map(function (m) { return "<option value='" + esc(m.milestoneId) + "'>#" + (m.sequence || 0) + " " + esc(m.name) + "</option>"; }).join("");
+            var storyItems = []; ((b.columns) || []).forEach(function (col) { (col.items || []).forEach(function (it) { if (it.type === "Story" || it.type === "Epic") storyItems.push(it); }); });
+            var storyOpts = "<option value=''>— Select parent story —</option>" + storyItems.map(function (s) { return "<option value='" + esc(s.taskId) + "'>" + esc(s.title) + "</option>"; }).join("");
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>New Work Item · " + esc(b.name) + "</div>" +
+                "<div class='pmDialogBody'>" +
+                "<div class='pmFRow'><div><label class='pmFLbl'>Type</label><select class='pmFInput' id='wiType'>" + TYPES.map(function (t) { return "<option>" + t + "</option>"; }).join("") + "</select></div>" +
+                "<div><label class='pmFLbl'>Priority</label><select class='pmFInput' id='wiPrio'><option>Medium</option><option>High</option><option>Critical</option><option>Low</option></select></div></div>" +
+                "<label class='pmFLbl'>Title <span class='rqReq'>*</span></label><input class='pmFInput' id='wiTitle' placeholder='Short summary'/>" +
+                "<div id='wiMsWrap'><label class='pmFLbl'>Milestone <span class='rqReq'>*</span> <span class='pmMuted'>(business deliverable a Story belongs to)</span></label><select class='pmFInput' id='wiMs'>" + msOpts + "</select></div>" +
+                "<div id='wiParentWrap' style='display:none'><label class='pmFLbl'>Parent Story <span class='rqReq'>*</span> <span class='pmMuted'>(Task/Subtask inherit its milestone &amp; sprint)</span></label><select class='pmFInput' id='wiParent'>" + storyOpts + "</select></div>" +
+                "<label class='pmFLbl'>Description</label><textarea class='pmFInput' id='wiDesc' rows='2'></textarea>" +
+                "<div class='pmFRow'><div><label class='pmFLbl'>Assignee <span class='pmMuted'>(milestone team)</span></label><select class='pmFInput' id='wiAssignee'>" + assigneeOpts + "</select></div>" +
+                "<div><label class='pmFLbl'>Story Points</label><input type='number' min='0' step='1' class='pmFInput' id='wiPts' placeholder='0'/></div></div>" +
+                "<div class='pmFRow'><div><label class='pmFLbl'>Estimated Hours</label><input type='number' min='0' step='1' class='pmFInput' id='wiEst' placeholder='e.g. 8'/></div>" +
+                "<div><label class='pmFLbl'>Due Date</label><input type='date' class='pmFInput' id='wiDue'/></div></div>" +
+                "<label class='pmFLbl'>Labels <span class='pmMuted'>(comma-separated)</span></label><input class='pmFInput' id='wiLabels' placeholder='backend, api'/>" +
+                "<div class='pmMuted' style='font-size:0.7rem;margin-top:4px'>Assignee, hours &amp; points are optional for Epic / Story / Spike.</div>" +
+                "<div class='pmErr' id='wiErr' style='display:none'></div>" +
+                "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>Create</button></div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); }; var $ = function (s) { return ov.querySelector(s); };
+            ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+            $("#pmCancel").addEventListener("click", close);
+            // Type drives which linkage is required: Story→milestone, Task/Subtask→parent
+            // story, Bug→milestone OR parent story, Epic/Spike→neither.
+            var syncType = function () {
+                var t = $("#wiType").value;
+                var needParent = (t === "Task" || t === "Subtask");
+                var needMs = (t === "Story" || t === "Bug");
+                $("#wiParentWrap").style.display = needParent ? "" : "none";
+                $("#wiMsWrap").style.display = needMs ? "" : "none";
+            };
+            $("#wiType").addEventListener("change", syncType); syncType();
+            $("#pmSave").addEventListener("click", function () {
+                var btn = this, err = $("#wiErr"), showErr = function (m) { err.textContent = "⚠ " + m; err.style.display = "block"; };
+                if (!($("#wiTitle").value || "").trim()) return showErr("Title is required.");
+                var t = $("#wiType").value, msId = $("#wiMs").value || null, parentId = $("#wiParent").value || null;
+                if (t === "Story" && !msId) return showErr("A Story must belong to a Milestone.");
+                if ((t === "Task" || t === "Subtask") && !parentId) return showErr("A " + t + " must belong to a parent Story.");
+                btn.disabled = true; btn.textContent = "Creating…";
+                ppost("createProjectTask", {
+                    projectId: pid, sprintId: b.sprintId, taskName: ($("#wiTitle").value || "").trim(),
+                    description: ($("#wiDesc").value || "").trim(), workItemType: t,
+                    milestoneId: msId, parentTaskId: parentId,
+                    assignedToId: $("#wiAssignee").value || null, priority: $("#wiPrio").value,
+                    storyPoints: parseFloat($("#wiPts").value) || 0, estimatedHours: parseFloat($("#wiEst").value) || 0,
+                    dueDate: $("#wiDue").value || null, labels: ($("#wiLabels").value || "").trim()
+                }).then(function (res) {
+                    btn.disabled = false; btn.textContent = "Create";
+                    if (res && res.error) { showErr(res.error); return; }
+                    close(); MessageToast.show("Work item created."); that.onOpenBoard(b.sprintId);
+                }).catch(function () { btn.disabled = false; btn.textContent = "Create"; showErr("Could not create the work item."); });
+            });
+        },
+        // Sprint reports: burndown + velocity charts + completion breakdown.
+        onSprintReport: function () {
+            var that = this, b = this._sprintBoard; if (!b) return;
+            ppost("getSprintReport", { sprintId: b.sprintId }).then(function (r) {
+                if (r && r.error) { MessageToast.show(r.error); return; }
+                var m = r.metrics || {};
+                var stat = function (l, v, c) { return "<div class='rqStat'><div class='rqStatVal' style='color:" + (c || "#0f172a") + "'>" + v + "</div><div class='rqStatLbl'>" + l + "</div></div>"; };
+                var dash = "<div class='rqDash' style='grid-template-columns:repeat(4,1fr)'>" +
+                    stat("Progress", (m.progressPct || 0) + "%", "#16a34a") +
+                    stat("Story Points", (m.storyPointsDone || 0) + "/" + (m.storyPointsTotal || 0), "#2563eb") +
+                    stat("Avg Velocity", r.avgVelocity || 0) +
+                    stat("Hours", (m.loggedHours || 0) + "/" + (m.estHours || 0)) +
+                    stat("Stories", (m.stories ? m.stories.done + "/" + m.stories.total : "0/0")) +
+                    stat("Tasks", (m.tasks ? m.tasks.done + "/" + m.tasks.total : "0/0")) +
+                    stat("Bugs", (m.bugs ? m.bugs.done + "/" + m.bugs.total : "0/0"), "#dc2626") +
+                    stat("Remaining", (m.storyPointsRemaining || 0) + " pts") +
+                    "</div>";
+                var ov = document.createElement("div"); ov.className = "pmOverlay";
+                ov.innerHTML = "<div class='pmDialog wide'><div class='pmDialogHead'>Sprint Report · " + esc(r.name) + "</div>" +
+                    "<div class='pmDialogBody'>" + dash +
+                    "<div class='spReportGrid'>" +
+                    "<div class='spChartBox'><div class='spChartTitle'>Burndown (" + esc(r.unit) + ")</div><div style='position:relative;height:240px'><canvas id='spBurn'></canvas></div></div>" +
+                    "<div class='spChartBox'><div class='spChartTitle'>Velocity (Story Points)</div><div style='position:relative;height:240px'><canvas id='spVel'></canvas></div></div>" +
+                    "</div></div><div class='pmDialogFoot'><button class='pmBtn primary' id='pmClose'>Close</button></div></div>";
+                document.body.appendChild(ov);
+                var close = function () { if (that._spCharts) { that._spCharts.forEach(function (c) { try { c.destroy(); } catch (e) {} }); that._spCharts = null; } ov.remove(); };
+                ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+                ov.querySelector("#pmClose").addEventListener("click", close);
+                var draw = function () {
+                    if (!window.Chart) { that._ensureChartLib(); return setTimeout(draw, 250); }
+                    if (!document.getElementById("spBurn")) return setTimeout(draw, 60);
+                    that._spCharts = [];
+                    var bd = r.burndown || [];
+                    that._spCharts.push(new window.Chart(document.getElementById("spBurn").getContext("2d"), {
+                        type: "line", data: { labels: bd.map(function (p) { return String(p.date).slice(5); }), datasets: [
+                            { label: "Ideal", data: bd.map(function (p) { return p.ideal; }), borderColor: "#cbd5e1", borderDash: [6, 4], pointRadius: 0, tension: 0 },
+                            { label: "Remaining", data: bd.map(function (p) { return p.remaining; }), borderColor: "#2563eb", backgroundColor: "rgba(37,99,235,.08)", fill: true, spanGaps: false, tension: .15, pointRadius: 2 }
+                        ] }, options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 10 } } } }, scales: { y: { beginAtZero: true } } }
+                    }));
+                    var vel = r.velocity || [];
+                    that._spCharts.push(new window.Chart(document.getElementById("spVel").getContext("2d"), {
+                        type: "bar", data: { labels: vel.map(function (v) { return v.name; }), datasets: [
+                            { label: "Committed", data: vel.map(function (v) { return v.committed; }), backgroundColor: "#c7d2fe" },
+                            { label: "Completed", data: vel.map(function (v) { return v.completed; }), backgroundColor: "#2563eb" }
+                        ] }, options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 10 } } } }, scales: { y: { beginAtZero: true } } }
+                    }));
+                };
+                window.requestAnimationFrame(draw);
+            }).catch(function () { MessageToast.show("Could not load the report."); });
+        },
+
+        // ── Work-item detail: view/edit/status/delete + subtasks/time/comments ──
+        onWorkItemDetail: function (taskId) {
+            var that = this;
+            ppost("getWorkItem", { taskId: taskId }).then(function (w) {
+                if (w && w.error) { MessageToast.show(w.error); return; }
+                that._renderWorkItemModal(w);
+            }).catch(function () { MessageToast.show("Could not load the work item."); });
+        },
+        _renderWorkItemModal: function (w) {
+            var that = this, cm = !!w.canManage, sprintId = this._sprintBoard && this._sprintBoard.sprintId;
+            var STATUSES = ["To Do", "In Progress", "In Review", "Testing", "Done", "Blocked"];
+            var team = w.team || [];
+            var statusOpts = STATUSES.map(function (s) { return "<option" + (this._sameStatus(w.status, s) ? " selected" : "") + ">" + s + "</option>"; }.bind(this)).join("");
+            var assigneeOpts = "<option value=''>— Unassigned —</option>" + team.map(function (t) { return "<option value='" + esc(t.employeeId) + "'" + (w.assigneeId === t.employeeId ? " selected" : "") + ">" + esc(t.employeeName) + "</option>"; }).join("");
+            var prioOpts = ["Low", "Medium", "High", "Critical"].map(function (p) { return "<option" + (w.priority === p ? " selected" : "") + ">" + p + "</option>"; }).join("");
+            var typeOpts = ["Epic", "Story", "Task", "Bug", "Subtask", "Spike"].map(function (t) { return "<option" + (w.type === t ? " selected" : "") + ">" + t + "</option>"; }).join("");
+            var parentOpts = "<option value=''>— None —</option>" + (w.parents || []).map(function (p) { return "<option value='" + esc(p.taskId) + "'" + (w.parentTaskId === p.taskId ? " selected" : "") + ">" + that._wiIcon(p.workItemType) + " " + esc(p.taskName) + "</option>"; }).join("");
+            var subs = (w.subtasks || []).length ? "<div class='wiSubs'>" + w.subtasks.map(function (s) {
+                return "<div class='wiSubRow' onclick=\"window._projCtrl.onWorkItemDetail('" + esc(s.taskId) + "')\">" + that._wiIcon(s.type) + " <span>" + esc(s.title) + "</span> <span class='wiSubMeta'>" + esc(s.status) + " · " + (s.assignee || "—") + "</span></div>";
+            }).join("") + "</div>" : "<div class='pmMuted' style='font-size:0.76rem'>No subtasks.</div>";
+            var comments = (w.comments || []).length ? w.comments.map(function (c) {
+                return "<div class='wiComment'><div class='wiCAuthor'>" + esc(c.authorName || "—") + " <span class='pmMuted'>· " + esc(String(c.at || "").slice(0, 16).replace("T", " ")) + "</span></div><div class='wiCText'>" + esc(c.text) + "</div></div>";
+            }).join("") : "<div class='pmMuted' style='font-size:0.76rem'>No comments yet.</div>";
+            var ro = cm ? "" : " disabled";
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog wide'><div class='pmDialogHead'>" + that._wiIcon(w.type) + " " + esc(w.taskId) + " · " + esc(w.title) + "</div>" +
+                "<div class='pmDialogBody wiBody'>" +
+                "<div class='wiGrid'>" +
+                "<div class='wiMain'>" +
+                    "<label class='pmFLbl'>Title</label><input class='pmFInput' id='wiTitle'" + ro + " value='" + esc(w.title) + "'/>" +
+                    "<label class='pmFLbl'>Description</label><textarea class='pmFInput' id='wiDesc' rows='3'" + ro + ">" + esc(w.description) + "</textarea>" +
+                    "<div class='wiSecTitle'>Subtasks" + (cm && w.type !== "Subtask" ? " <button class='pmLink' onclick=\"window._projCtrl.onAddSubtask('" + esc(w.taskId) + "')\">＋ Add</button>" : "") + "</div>" + subs +
+                    "<div class='wiSecTitle'>Comments</div><div class='wiComments'>" + comments + "</div>" +
+                    "<div class='wiAddComment'><input class='pmFInput' id='wiComment' placeholder='Add a comment…'/><button class='pmBtn ghost sm' id='wiCommentBtn'>Comment</button></div>" +
+                "</div>" +
+                "<div class='wiSide'>" +
+                    "<label class='pmFLbl'>Status</label><select class='pmFInput' id='wiStatus'>" + statusOpts + "</select>" +
+                    "<label class='pmFLbl'>Assignee</label><select class='pmFInput' id='wiAssignee'" + ro + ">" + assigneeOpts + "</select>" +
+                    "<div class='pmFRow'><div><label class='pmFLbl'>Type</label><select class='pmFInput' id='wiType'" + ro + ">" + typeOpts + "</select></div>" +
+                    "<div><label class='pmFLbl'>Priority</label><select class='pmFInput' id='wiPrio'" + ro + ">" + prioOpts + "</select></div></div>" +
+                    "<div class='pmFRow'><div><label class='pmFLbl'>Story Points</label><input type='number' min='0' class='pmFInput' id='wiPts'" + ro + " value='" + (w.storyPoints || 0) + "'/></div>" +
+                    "<div><label class='pmFLbl'>Est. Hours</label><input type='number' min='0' class='pmFInput' id='wiEst'" + ro + " value='" + (w.estimatedHours || 0) + "'/></div></div>" +
+                    "<div class='wiHours'>⏱ Logged <b>" + w.loggedHours + "h</b> · Remaining <b>" + w.remainingHours + "h</b></div>" +
+                    "<div class='wiLog'><input type='number' min='0' step='0.5' class='pmFInput' id='wiLogH' placeholder='Hrs'/><input type='date' class='pmFInput' id='wiLogD'/><button class='pmBtn primary sm' id='wiLogBtn'>Log</button></div>" +
+                    "<div class='pmMuted' style='font-size:0.66rem;margin-bottom:6px'>Logged time posts to the assignee's timesheet &amp; project actuals.</div>" +
+                    "<label class='pmFLbl'>Parent</label><select class='pmFInput' id='wiParent'" + ro + ">" + parentOpts + "</select>" +
+                    "<div class='pmFRow'><div><label class='pmFLbl'>Due Date</label><input type='date' class='pmFInput' id='wiDue'" + ro + " value='" + esc(String(w.dueDate || "").slice(0, 10)) + "'/></div>" +
+                    "<div><label class='pmFLbl'>Labels</label><input class='pmFInput' id='wiLabels'" + ro + " value='" + esc(w.labels) + "'/></div></div>" +
+                    "<div class='pmMuted' style='font-size:0.7rem;margin-top:6px'>Reporter: " + esc(w.reporterName || "—") + "</div>" +
+                "</div></div>" +
+                "<div class='pmErr' id='wiErr' style='display:none'></div>" +
+                "</div><div class='pmDialogFoot'>" +
+                (cm ? "<button class='pmBtn danger' id='wiDelete' style='margin-right:auto'>Delete</button>" : "") +
+                "<button class='pmBtn ghost' id='pmCancel'>Close</button>" +
+                (cm ? "<button class='pmBtn primary' id='wiSave'>Save</button>" : "") + "</div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); }; var $ = function (s) { return ov.querySelector(s); };
+            var refresh = function () { that.onWorkItemDetail(w.taskId); };
+            var reopenBoard = function () { if (sprintId) that.onOpenBoard(sprintId); };
+            ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+            $("#pmCancel").addEventListener("click", close);
+            // Status change (anyone allowed on their items via moveWorkItem).
+            $("#wiStatus").addEventListener("change", function () {
+                ppost("moveWorkItem", { taskId: w.taskId, status: this.value }).then(function (res) { if (res && res.error) { MessageToast.show(res.error); return; } MessageToast.show("Status updated."); reopenBoard(); });
+            });
+            // Log time.
+            $("#wiLogBtn").addEventListener("click", function () {
+                var h = parseFloat($("#wiLogH").value) || 0; if (h <= 0) { MessageToast.show("Enter hours > 0."); return; }
+                ppost("logWorkItemTime", { taskId: w.taskId, hours: h, comment: "", workDate: $("#wiLogD").value || null }).then(function (res) { if (res && res.error) { MessageToast.show(res.error); return; } MessageToast.show("Logged " + h + "h" + (res.timesheetLogged ? " → timesheet" : "") + "."); close(); that.onWorkItemDetail(w.taskId); });
+            });
+            // Add comment.
+            $("#wiCommentBtn").addEventListener("click", function () {
+                var txt = ($("#wiComment").value || "").trim(); if (!txt) return;
+                ppost("addWorkItemComment", { taskId: w.taskId, text: txt }).then(function (res) { if (res && res.error) { MessageToast.show(res.error); return; } close(); that.onWorkItemDetail(w.taskId); });
+            });
+            if (cm) {
+                $("#wiSave").addEventListener("click", function () {
+                    var btn = this; btn.disabled = true; btn.textContent = "Saving…";
+                    ppost("updateWorkItem", {
+                        taskId: w.taskId, title: ($("#wiTitle").value || "").trim(), description: ($("#wiDesc").value || "").trim(),
+                        priority: $("#wiPrio").value, workItemType: $("#wiType").value, storyPoints: parseFloat($("#wiPts").value) || 0,
+                        estimatedHours: parseFloat($("#wiEst").value) || 0, labels: ($("#wiLabels").value || "").trim(),
+                        dueDate: $("#wiDue").value || null, parentTaskId: $("#wiParent").value || null, assigneeId: $("#wiAssignee").value || null
+                    }).then(function (res) {
+                        btn.disabled = false; btn.textContent = "Save";
+                        if (res && res.error) { var e = $("#wiErr"); e.textContent = "⚠ " + res.error; e.style.display = "block"; return; }
+                        MessageToast.show("Saved."); close(); reopenBoard();
+                    }).catch(function () { btn.disabled = false; btn.textContent = "Save"; });
+                });
+                $("#wiDelete").addEventListener("click", function () {
+                    if (!window.confirm("Delete this work item? Subtasks are unlinked; comments removed.")) return;
+                    ppost("deleteWorkItem", { taskId: w.taskId }).then(function (res) { if (res && res.error) { MessageToast.show(res.error); return; } MessageToast.show("Deleted."); close(); reopenBoard(); });
+                });
+            }
+        },
+        _sameStatus: function (a, b) {
+            var map = { "not started": "To Do", "to do": "To Do", "in progress": "In Progress", "in review": "In Review", "review": "In Review", "testing": "Testing", "done": "Done", "completed": "Done", "blocked": "Blocked" };
+            return map[String(a || "").toLowerCase()] === b;
+        },
+        onAddSubtask: function (parentTaskId) {
+            var that = this, b = this._sprintBoard; if (!b) return;
+            var pid = this._detail.project.projectId, team = this._team || [];
+            var assigneeOpts = "<option value=''>— Unassigned —</option>" + team.map(function (t) { return "<option value='" + esc(t.employeeId) + "'>" + esc(t.employeeName) + "</option>"; }).join("");
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>New Subtask</div><div class='pmDialogBody'>" +
+                "<label class='pmFLbl'>Title <span class='rqReq'>*</span></label><input class='pmFInput' id='stTitle'/>" +
+                "<div class='pmFRow'><div><label class='pmFLbl'>Assignee</label><select class='pmFInput' id='stAssignee'>" + assigneeOpts + "</select></div>" +
+                "<div><label class='pmFLbl'>Est. Hours</label><input type='number' min='0' class='pmFInput' id='stEst'/></div></div>" +
+                "<div class='pmErr' id='stErr' style='display:none'></div>" +
+                "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>Create</button></div></div>";
+            document.body.appendChild(ov);
+            var close = function () { ov.remove(); }; var $ = function (s) { return ov.querySelector(s); };
+            ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+            $("#pmCancel").addEventListener("click", close);
+            $("#pmSave").addEventListener("click", function () {
+                if (!($("#stTitle").value || "").trim()) { var e = $("#stErr"); e.textContent = "⚠ Title is required."; e.style.display = "block"; return; }
+                ppost("createProjectTask", { projectId: pid, sprintId: b.sprintId, taskName: ($("#stTitle").value || "").trim(), workItemType: "Subtask", parentTaskId: parentTaskId, assignedToId: $("#stAssignee").value || null, estimatedHours: parseFloat($("#stEst").value) || 0 }).then(function (res) {
+                    if (res && res.error) { var e = $("#stErr"); e.textContent = "⚠ " + res.error; e.style.display = "block"; return; }
+                    close(); MessageToast.show("Subtask created."); that.onWorkItemDetail(parentTaskId);
+                });
+            });
+        },
+
         onTaskStatus: function (taskId, status) {
             var that = this, pid = this._detail.project.projectId;
             ppost("updateProjectTaskStatus", { taskId: taskId, status: status }).then(function (res) {
@@ -1230,7 +2358,7 @@ sap.ui.define([
                         } else { MessageToast.show(res.error); }
                         return;
                     }
-                    MessageToast.show("Resource deallocated."); that._open(pid);
+                    MessageToast.show("Resource deallocated."); that._open(pid); that._loadMilestones();
                 }).catch(function () { close(); MessageToast.show("Could not deallocate."); });
             });
         },
@@ -1285,7 +2413,7 @@ sap.ui.define([
                         if (res && res.error) { err.style.display = "block"; err.textContent = res.error; return; }
                         close();
                         MessageToast.show("Replaced " + (res.outgoingEmployee || oldEmpName) + (res.spentPreserved ? " · ₹" + Number(res.spentPreserved).toLocaleString("en-IN") + " spend preserved" : ""));
-                        that._open(pid);
+                        that._open(pid); that._loadMilestones();
                     }).catch(function () { btn.disabled = false; btn.textContent = "Replace"; err.style.display = "block"; err.textContent = "Could not replace — please try again."; });
                 };
                 $("#pmSave").addEventListener("click", function () { save(false, ""); });
@@ -1410,7 +2538,7 @@ sap.ui.define([
         // ── Resource Planning v2 — allocate by milestone + estimated hours ───────
         onAllocateByMilestone: function () {
             var that = this, pid = this._detail.project.projectId;
-            var msList = (this._detail.milestones || []);
+            var msList = (this._milestones && this._milestones.milestones && this._milestones.milestones.length ? this._milestones.milestones : (this._detail.milestones || []));
             if (!msList.length) { MessageToast.show("Add project milestones first — resources are allocated against a milestone."); this.onTab("milestones"); return; }
             // ── Planning-first gate: Resource Requirements must exist before staffing.
             ppost("getResourceRequirements", { projectId: pid }).then(function (rq) {
@@ -1421,92 +2549,558 @@ sap.ui.define([
                     that.onTab("requirements");
                     return;
                 }
-                that._openMilestoneAllocationModal(pid, msList);
-            }).catch(function () { that._openMilestoneAllocationModal(pid, msList); });
+                that._openAllocationScreen(pid, msList, (msList[0] && msList[0].milestoneId));
+            }).catch(function () { that._openAllocationScreen(pid, msList, (msList[0] && msList[0].milestoneId)); });
         },
-        _openMilestoneAllocationModal: function (pid, msList) {
-            var that = this;
-            ppost("getAllocatableEmployees", { projectId: pid }).then(function (d) {
-                if (d && d.error) { MessageToast.show(d.error); return; }
-                // Flatten employees whether grouped by department or a flat list.
-                var emps = [];
-                if (d.departments && d.departments.length) d.departments.forEach(function (g) { (g.employees || []).forEach(function (e) { emps.push(e); }); });
-                else if (d.employees) emps = d.employees;
-                emps.sort(function (a, b) { return (a.employeeName || "").localeCompare(b.employeeName || ""); });
-                if (!emps.length) { MessageToast.show("No allocatable employees found."); return; }
 
-                var empOpts = emps.map(function (e) { return "<option value='" + esc(e.employeeId) + "'>" + esc(e.employeeName) + " · " + esc(e.department || e.specializationName || "") + "</option>"; }).join("");
-                var msOpts = msList.map(function (m) {
-                    var win = (m.plannedStartDate || m.startDate || "") + " → " + (m.plannedEndDate || m.endDate || "");
-                    return "<option value='" + esc(m.milestoneId) + "' data-win='" + esc(win) + "'>#" + (m.sequence || 0) + " " + esc(m.name) + "</option>";
+        // ── Integrated Milestone Allocation screen (single page — no popup) ─────────
+        _allocFilters: null,
+        _openAllocationScreen: function (pid, msList, milestoneId) {
+            this._allocPid = pid; this._allocMsList = msList || [];
+            this._allocMsId = milestoneId || (msList[0] && msList[0].milestoneId);
+            this._allocFilters = { q: "", role: "", dept: "", status: "", overOnly: false, assignedOnly: false };
+            this._allocPage = 1; this._allocRpp = 10;
+            var ov = document.createElement("div"); ov.className = "pmOverlay";
+            ov.innerHTML = "<div class='pmDialog alFull'><div id='alRoot'><div class='pmLoading'>Loading allocation screen…</div></div></div>";
+            document.body.appendChild(ov);
+            ov.addEventListener("click", function (e) { if (e.target === ov) ov.remove(); });
+            this._allocOverlay = ov;
+            this._loadAllocScreen();
+        },
+        _loadAllocScreen: function () {
+            var that = this;
+            ppost("getMilestoneAllocationScreen", { milestoneId: this._allocMsId }).then(function (d) {
+                if (d && d.error) { MessageToast.show(d.error); return; }
+                that._allocData = d; that._renderAllocScreen();
+            }).catch(function () { MessageToast.show("Could not load the allocation screen."); });
+        },
+        onAllocMilestone: function (msId) { this._allocMsId = msId; this._loadAllocScreen(); },
+        onAllocFilter: function () {
+            var ov = this._allocOverlay; if (!ov) return;
+            this._allocFilters = {
+                q: (ov.querySelector("#alSearch") || {}).value || "",
+                role: (ov.querySelector("#alRole") || {}).value || "",
+                dept: (ov.querySelector("#alDept") || {}).value || "",
+                status: (ov.querySelector("#alStatus") || {}).value || "",
+                overOnly: (ov.querySelector("#alOverOnly") || {}).checked || false,
+                assignedOnly: (ov.querySelector("#alAssignedOnly") || {}).checked || false
+            };
+            this._allocPage = 1;
+            this._applyAllocFilters();
+        },
+        onAllocPage: function (p) { this._allocPage = p; this._applyAllocFilters(); },
+        onAllocRowsPerPage: function (n) { this._allocRpp = parseInt(n, 10) || 10; this._allocPage = 1; this._applyAllocFilters(); },
+        _applyAllocFilters: function () {
+            var ov = this._allocOverlay, f = this._allocFilters || {}; if (!ov) return;
+            var q = (f.q || "").toLowerCase();
+            var matched = [];
+            ov.querySelectorAll(".alRow").forEach(function (tr) {
+                var show = true;
+                if (q && (tr.getAttribute("data-name") || "").toLowerCase().indexOf(q) === -1) show = false;
+                if (f.role && tr.getAttribute("data-role") !== f.role) show = false;
+                if (f.dept && tr.getAttribute("data-dept") !== f.dept) show = false;
+                if (f.status && tr.getAttribute("data-status") !== f.status) show = false;
+                if (f.overOnly && tr.getAttribute("data-over") !== "1") show = false;
+                if (f.assignedOnly && tr.getAttribute("data-assigned") !== "1") show = false;
+                if (show) matched.push(tr); else tr.style.display = "none";
+            });
+            // Pagination over the matched set
+            var rpp = this._allocRpp || 10, total = matched.length;
+            var pages = Math.max(1, Math.ceil(total / rpp));
+            if (this._allocPage > pages) this._allocPage = pages;
+            var pg = this._allocPage, start = (pg - 1) * rpp, end = start + rpp;
+            matched.forEach(function (tr, i) { tr.style.display = (i >= start && i < end) ? "" : "none"; });
+            // Footer
+            var foot = ov.querySelector("#alFoot");
+            if (foot) {
+                var shownFrom = total ? start + 1 : 0, shownTo = Math.min(end, total);
+                var btns = "";
+                for (var i = 1; i <= pages; i++) btns += "<button class='alPgBtn" + (i === pg ? " on" : "") + "' onclick='window._projCtrl.onAllocPage(" + i + ")'>" + i + "</button>";
+                foot.innerHTML =
+                    "<div class='alFootInfo'>Showing " + shownFrom + " to " + shownTo + " of " + total + " employees</div>" +
+                    "<div class='alPager'>" +
+                        "<button class='alPgNav' " + (pg <= 1 ? "disabled" : "onclick='window._projCtrl.onAllocPage(" + (pg - 1) + ")'") + ">‹</button>" +
+                        btns +
+                        "<button class='alPgNav' " + (pg >= pages ? "disabled" : "onclick='window._projCtrl.onAllocPage(" + (pg + 1) + ")'") + ">›</button>" +
+                    "</div>" +
+                    "<div class='alRpp'>Rows per page <select onchange='window._projCtrl.onAllocRowsPerPage(this.value)'>" +
+                        [10, 20, 50].map(function (n) { return "<option" + (n === rpp ? " selected" : "") + ">" + n + "</option>"; }).join("") +
+                    "</select></div>";
+            }
+        },
+        _renderAllocScreen: function () {
+            var d = this._allocData, that = this, ov = this._allocOverlay; if (!ov) return;
+            var m = d.milestone || {}, sm = d.summary || {}, rows = d.rows || [], cm = !!d.canManage;
+            var inr = function (n) { return "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN"); };
+            var msOpts = (this._allocMsList || []).map(function (x) { return "<option value='" + esc(x.milestoneId) + "'" + (x.milestoneId === m.milestoneId ? " selected" : "") + ">#" + (x.sequence || 0) + " " + esc(x.name) + "</option>"; }).join("");
+            var roles = [...new Set(rows.map(function (r) { return r.role; }).filter(Boolean))].sort();
+            var depts = [...new Set(rows.map(function (r) { return r.department; }).filter(Boolean))].sort();
+            var statuses = ["Fully Allocated", "Partially Allocated", "Available", "Overallocated", "Assigned Elsewhere"];
+            var stColor = { "Fully Allocated": "#16a34a", "Partially Allocated": "#d97706", "Available": "#64748b", "Overallocated": "#dc2626", "Assigned Elsewhere": "#7c3aed" };
+            var avatar = function (name) { var p = String(name || "").trim().split(/\s+/); var ini = ((p[0] || "")[0] || "") + ((p[1] || "")[0] || ""); return "<span class='alAvatar'>" + esc(ini.toUpperCase()) + "</span>"; };
+
+            var AVCOLORS = ["#4f46e5", "#7c3aed", "#0ea5e9", "#0891b2", "#059669", "#d97706", "#db2777", "#dc2626"];
+            var avColor = function (name) { var s = String(name || ""); var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return AVCOLORS[h % AVCOLORS.length]; };
+
+            var head = "<div class='alHeader'>" +
+                "<div class='alHTitle'>Allocate Resources <span class='alHSub'>· project-hours based</span></div>" +
+                "<button class='alClose' onclick=\"window._projCtrl.onCloseAllocScreen()\">✕ Close</button></div>" +
+                "<div class='alMsBar'><label class='alMsLbl'>Milestone</label>" +
+                "<select class='alMsSelect' onchange=\"window._projCtrl.onAllocMilestone(this.value)\">" + msOpts + "</select>" +
+                "<span class='alMsChip' style='--c:" + (stColor[m.status] || "#16a34a") + "'>" + esc(m.status || "") + "</span>" +
+                "<span class='alMsDates'><svg class='alMsIc' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4' width='18' height='18' rx='2'/><line x1='16' y1='2' x2='16' y2='6'/><line x1='8' y1='2' x2='8' y2='6'/><line x1='3' y1='10' x2='21' y2='10'/></svg> " + esc(String(m.plannedStartDate || "—").slice(0, 10)) + " → " + esc(String(m.plannedEndDate || "—").slice(0, 10)) + "</span>" +
+                "<span class='alMsProg'>Progress " + (m.progressPct || 0) + "% <span class='alRing' style='--p:" + (m.progressPct || 0) + "'></span></span>" +
+                "<span class='alMsDays'>" + (m.remainingDays || 0) + "d left</span></div>";
+
+            var ICN = {
+                users: "<path d='M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2'/><circle cx='9' cy='7' r='4'/><path d='M23 21v-2a4 4 0 0 0-3-3.87'/><path d='M16 3.13a4 4 0 0 1 0 7.75'/>",
+                userCheck: "<path d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/><circle cx='9' cy='7' r='4'/><polyline points='17 11 19 13 23 9'/>",
+                clock: "<circle cx='12' cy='12' r='9'/><polyline points='12 7 12 12 15 14'/>",
+                check: "<path d='M22 11.08V12a10 10 0 1 1-5.93-9.14'/><polyline points='22 4 12 14.01 9 11.01'/>",
+                chart: "<polyline points='23 6 13.5 15.5 8.5 10.5 1 18'/><polyline points='17 6 23 6 23 12'/>",
+                rupee: "<path d='M7 4h10M7 8h10M6 12h5a4 4 0 0 0 0-8M6 12l7 8'/>",
+                alert: "<path d='M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z'/><line x1='12' y1='9' x2='12' y2='13'/><line x1='12' y1='17' x2='12.01' y2='17'/>",
+                calendar: "<rect x='3' y='4' width='18' height='18' rx='2'/><line x1='16' y1='2' x2='16' y2='6'/><line x1='8' y1='2' x2='8' y2='6'/><line x1='3' y1='10' x2='21' y2='10'/>",
+                search: "<circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/>"
+            };
+            var svg = function (name) { return "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>" + (ICN[name] || "") + "</svg>"; };
+            var cardDefs = [
+                { v: (sm.totalEmployees || 0), l: "Employees", ic: "users", c: "#4f46e5", bg: "#eef2ff" },
+                { v: (sm.assigned || 0), l: "Assigned", ic: "userCheck", c: "#059669", bg: "#ecfdf5", id: "alcAssigned" },
+                { v: (sm.allocatedHours || 0) + " h", l: "Allocated Hrs", ic: "clock", c: "#2563eb", bg: "#eff6ff", id: "alcAllocH" },
+                { v: (sm.actualHours || 0) + " h", l: "Actual Hrs", ic: "check", c: "#059669", bg: "#ecfdf5", vc: "#16a34a" },
+                { v: (sm.forecastHours || 0) + " h", l: "Forecast Hrs", ic: "chart", c: "#2563eb", bg: "#eff6ff", vc: "#2563eb", id: "alcForeH" },
+                { v: inr(sm.actualCost), l: "Actual Cost", ic: "rupee", c: "#059669", bg: "#ecfdf5", vc: "#16a34a" },
+                { v: inr(sm.forecastCost), l: "Forecast Cost", ic: "rupee", c: "#2563eb", bg: "#eff6ff", vc: "#2563eb", id: "alcForeC" },
+                { v: (sm.overallocated || 0), l: "Overallocated", ic: "alert", c: "#ea580c", bg: "#fff7ed", vc: (sm.overallocated > 0 ? "#dc2626" : "#16a34a"), id: "alcOver" }
+            ];
+            var cards = "<div class='alCards'>" + cardDefs.map(function (c) {
+                return "<div class='alCard'><span class='alCardIc' style='background:" + c.bg + ";color:" + c.c + "'>" + svg(c.ic) + "</span>" +
+                    "<div class='alCardBody'><div class='alCardVal'" + (c.id ? " id='" + c.id + "'" : "") + (c.vc ? " style='color:" + c.vc + "'" : "") + ">" + c.v + "</div>" +
+                    "<div class='alCardLbl'>" + c.l + "</div></div></div>";
+            }).join("") + "</div>";
+
+            var filters = "<div class='alFilters'>" +
+                "<div class='alSearchWrap'><span class='alSearchIc'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg></span><input id='alSearch' class='alSearchInp' placeholder='Search employee' oninput='window._projCtrl.onAllocFilter()'/></div>" +
+                "<select id='alRole' class='alFSelect' onchange='window._projCtrl.onAllocFilter()'><option value=''>All Roles</option>" + roles.map(function (r) { return "<option>" + esc(r) + "</option>"; }).join("") + "</select>" +
+                "<select id='alDept' class='alFSelect' onchange='window._projCtrl.onAllocFilter()'><option value=''>All Departments</option>" + depts.map(function (r) { return "<option>" + esc(r) + "</option>"; }).join("") + "</select>" +
+                "<select id='alStatus' class='alFSelect' onchange='window._projCtrl.onAllocFilter()'><option value=''>All Statuses</option>" + statuses.map(function (r) { return "<option>" + esc(r) + "</option>"; }).join("") + "</select>" +
+                "<span class='alFSpacer'></span>" +
+                "<label class='alToggle'><input type='checkbox' id='alOverOnly' onchange='window._projCtrl.onAllocFilter()'/> Overallocated only</label>" +
+                "<label class='alToggle'><input type='checkbox' id='alAssignedOnly' onchange='window._projCtrl.onAllocFilter()'/> Assigned only</label>" +
+                "</div>";
+
+            var colHead = "<div class='alColHead'>" +
+                "<div>EMPLOYEE</div><div>PROJECT ALLOCATION <span class='alInfo'>ⓘ</span></div>" +
+                "<div>MILESTONE ALLOCATION <span class='alInfo'>ⓘ</span></div><div>COST <span class='alInfo'>ⓘ</span></div>" +
+                "<div>STATUS</div><div>ACTIONS</div></div>";
+
+            // ── Each employee is a CARD row (grid: emp | project | milestone | cost | status | actions) ──
+            var tri = function (label, val, cls, vcls) { return "<div class='alTri " + (cls || "") + "'><span class='alTriLbl'>" + label + "</span><span class='alTriVal " + (vcls || "") + "'>" + val + "</span></div>"; };
+            var trs = rows.map(function (r) {
+                var sc = stColor[r.status] || "#64748b";
+                var skills = r.skills ? "<div class='alSkills'>" + r.skills.split(",").slice(0, 3).map(function (s) { return s.trim() ? "<span class='alSkill'>" + esc(s.trim()) + "</span>" : ""; }).join("") + "</div>" : "";
+                var p = String(r.employeeName || "").trim().split(/\s+/); var ini = (((p[0] || "")[0] || "") + ((p[1] || "")[0] || "")).toUpperCase();
+                var pct = r.milestonePercent || 0;
+                var projH = r.projectHours || 0, usedH = (r.otherMilestoneHours || 0) + (r.milestoneHours || 0);
+                var barPct = projH > 0 ? Math.min(100, Math.round(usedH / projH * 100)) : 0;
+                var availPct = Math.max(0, 100 - barPct);
+                var pctInput = cm
+                    ? "<div class='alPctWrap'><input type='number' min='0' max='100' step='5' class='alPct' data-emp='" + esc(r.employeeId) + "' value='" + pct + "'/><span class='alPctSign'>%</span></div>"
+                    : "<span class='alTriVal'>" + pct + "%</span>";
+                var slider = cm ? "<input type='range' min='0' max='100' step='5' class='alSlider' value='" + pct + "'/>" : "";
+                var kebab = cm && r.allocated
+                    ? "<div class='alKebabWrap'><button class='alKebab' onclick='window._projCtrl.onAllocKebab(event,\"" + esc(r.employeeId) + "\")'>⋮</button>" +
+                        "<div class='alKebabMenu'>" +
+                        "<button onclick=\"window._projCtrl.onAdjustMilestoneResource('" + esc(m.milestoneId) + "','" + esc(r.employeeId) + "')\">✏️ Edit / dates</button>" +
+                        "<button class='danger' onclick=\"window._projCtrl.onRemoveRes('" + esc(r.employeeId) + "','" + esc(r.employeeName) + "')\">🗑️ Remove</button>" +
+                        "</div></div>"
+                    : "";
+                var actions = cm ? "<button class='alApply' data-emp='" + esc(r.employeeId) + "'>Apply</button>" + kebab : "";
+                return "<div class='alRow alCard2' data-emp='" + esc(r.employeeId) + "' data-name='" + esc(r.employeeName) + "' data-role='" + esc(r.role) + "' data-dept='" + esc(r.department) + "' data-status='" + esc(r.status) + "' data-over='" + (r.overallocated ? 1 : 0) + "' data-assigned='" + (r.allocated ? 1 : 0) + "' " +
+                    "data-projh='" + projH + "' data-otherh='" + (r.otherMilestoneHours || 0) + "' data-spenth='" + r.actualSpentHours + "' data-rate='" + r.hourlyCost + "'>" +
+                    // EMPLOYEE
+                    "<div class='alcEmp'><span class='alAvatar' style='background:" + avColor(r.employeeName) + "'>" + esc(ini) + "</span>" +
+                        "<div class='alEmpMeta'><b class='alEmpName'>" + esc(r.employeeName) + "</b>" +
+                        "<div class='alEmpRole'>" + esc(r.department) + " · " + esc(r.role) + "</div>" + skills + "</div></div>" +
+                    // PROJECT ALLOCATION
+                    "<div class='alcGroup'><div class='alTriRow'>" +
+                        tri("Project Hrs", (projH) + " h") +
+                        tri("Other MS", Math.round(r.otherMilestoneHours) + " h") +
+                        tri("Remaining", "<span class='alRemain'>" + Math.round(r.remainingProjectHours) + " h</span>") + "</div>" +
+                        "<div class='alBar'><div class='alBarFill' style='width:" + barPct + "%'></div></div>" +
+                        "<div class='alBarNote " + (availPct > 0 ? "pos" : "neg") + "'>" + availPct + "% available</div></div>" +
+                    // MILESTONE ALLOCATION
+                    "<div class='alcGroup'><div class='alTriRow'>" +
+                        "<div class='alTri'><span class='alTriLbl'>% Allocation</span>" + pctInput + "</div>" +
+                        tri("MS Hrs", "<span class='alMh'>" + Math.round(r.milestoneHours) + " h</span>") +
+                        tri("Spent", Math.round(r.actualSpentHours) + " h", "", "green") +
+                        tri("Forecast", "<span class='alFh'>" + Math.round(r.forecastRemainingHours) + " h</span>", "", "blue") + "</div>" +
+                        slider + "</div>" +
+                    // COST
+                    "<div class='alcGroup'><div class='alMini'><span class='alTriLbl'>Rate</span><span class='alTriVal'>" + inr(r.hourlyCost) + " /hr</span></div>" +
+                        "<div class='alTriRow'>" +
+                        tri("Actual Cost", inr(r.actualCost), "", "green") +
+                        tri("Forecast Cost", "<span class='alFc'>" + inr(r.forecastCost) + "</span>", "", "blue") + "</div></div>" +
+                    // STATUS
+                    "<div class='alcStatus'><span class='alStatus' style='--c:" + sc + "'>" + esc(r.status) + "</span></div>" +
+                    // ACTIONS
+                    "<div class='alcActions'>" + actions + "</div>" +
+                    "</div>";
+            }).join("");
+
+            var table = "<div class='alCardList'>" + colHead + (trs || "<div class='pmMuted' style='padding:28px;text-align:center'>No employees match this project's requirements yet.</div>") + "</div>";
+            var footer = "<div id='alFoot' class='alFooter'></div>";
+
+            ov.querySelector("#alRoot").innerHTML = head + cards + "<div id='alWarn'></div>" + filters + table + footer;
+            this._wireAllocScreen();
+            this._applyAllocFilters();
+        },
+        onAllocKebab: function (ev, empId) {
+            ev.stopPropagation();
+            var ov = this._allocOverlay; if (!ov) return;
+            var wrap = ev.target.closest(".alKebabWrap"); var open = wrap.classList.contains("open");
+            ov.querySelectorAll(".alKebabWrap.open").forEach(function (w) { w.classList.remove("open"); });
+            if (!open) {
+                wrap.classList.add("open");
+                var close = function () { wrap.classList.remove("open"); document.removeEventListener("click", close); };
+                setTimeout(function () { document.addEventListener("click", close); }, 0);
+            }
+        },
+        _wireAllocScreen: function () {
+            var that = this, ov = this._allocOverlay; if (!ov) return;
+            var inr = function (n) { return "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN"); };
+            // Live recalc on % change (no save).
+            var recalcRow = function (tr, pct) {
+                var projH = parseFloat(tr.getAttribute("data-projh")) || 0, otherH = parseFloat(tr.getAttribute("data-otherh")) || 0;
+                var spentH = parseFloat(tr.getAttribute("data-spenth")) || 0, rate = parseFloat(tr.getAttribute("data-rate")) || 0;
+                pct = Math.max(0, Math.min(100, pct || 0));
+                var mh = Math.round(projH * (pct / 100) * 100) / 100;
+                var fh = Math.max(0, Math.round((mh - spentH) * 100) / 100);
+                var rem = Math.round((projH - (otherH + mh)) * 100) / 100;
+                var used = otherH + mh, barPct = projH > 0 ? Math.min(100, Math.round(used / projH * 100)) : 0, avail = Math.max(0, 100 - barPct);
+                tr.querySelector(".alMh").textContent = Math.round(mh) + " h";
+                tr.querySelector(".alFh").textContent = Math.round(fh) + " h";
+                tr.querySelector(".alFc").textContent = inr(fh * rate);
+                var remCell = tr.querySelector(".alRemain"); remCell.textContent = Math.round(rem) + " h"; remCell.style.color = rem < 0 ? "#dc2626" : "";
+                var fill = tr.querySelector(".alBarFill"); if (fill) { fill.style.width = barPct + "%"; fill.classList.toggle("over", used > projH); }
+                var note = tr.querySelector(".alBarNote"); if (note) { note.textContent = avail + "% available"; note.className = "alBarNote " + (avail > 0 ? "pos" : "neg"); }
+                tr.setAttribute("data-over", (projH > 0 && used > projH) ? 1 : 0);
+                that._recalcAllocWarn();
+            };
+            ov.querySelectorAll(".alPct").forEach(function (inp) {
+                inp.addEventListener("input", function () {
+                    var tr = inp.closest(".alRow"); var sl = tr.querySelector(".alSlider"); if (sl) sl.value = inp.value;
+                    recalcRow(tr, parseFloat(inp.value) || 0);
+                });
+            });
+            ov.querySelectorAll(".alSlider").forEach(function (sl) {
+                sl.addEventListener("input", function () {
+                    var tr = sl.closest(".alRow"); var inp = tr.querySelector(".alPct"); if (inp) inp.value = sl.value;
+                    recalcRow(tr, parseFloat(sl.value) || 0);
+                });
+            });
+            ov.querySelectorAll(".alApply").forEach(function (btn) {
+                btn.addEventListener("click", function () { that._applyAllocRow(btn.getAttribute("data-emp")); });
+            });
+            this._recalcAllocWarn();
+        },
+        _recalcAllocWarn: function () {
+            var ov = this._allocOverlay; if (!ov) return;
+            var over = [];
+            ov.querySelectorAll(".alRow").forEach(function (tr) {
+                if (tr.getAttribute("data-over") === "1") {
+                    var projH = parseFloat(tr.getAttribute("data-projh")) || 0, otherH = parseFloat(tr.getAttribute("data-otherh")) || 0;
+                    var pct = parseFloat((tr.querySelector(".alPct") || {}).value) || 0;
+                    var mh = projH * (pct / 100);
+                    over.push({ name: tr.getAttribute("data-name"), by: Math.round((otherH + mh) - projH) });
+                }
+            });
+            var el = ov.querySelector("#alWarn");
+            if (over.length) {
+                el.innerHTML = "<div class='alWarnBanner'>⚠ <b>" + over.length + " employee(s) exceed their approved project allocation.</b> " +
+                    over.slice(0, 3).map(function (o) { return esc(o.name) + " (+" + o.by + "h)"; }).join(", ") +
+                    ". Allocation is allowed — review resource planning (increase project allocation, add a resource, or move work to another milestone).</div>";
+            } else el.innerHTML = "";
+            var oc = ov.querySelector("#alcOver"); if (oc) { oc.textContent = over.length; oc.style.color = over.length ? "#dc2626" : "#16a34a"; }
+        },
+        _applyAllocRow: function (empId) {
+            var that = this, ov = this._allocOverlay; if (!ov) return;
+            var tr = ov.querySelector(".alRow[data-emp='" + empId + "']"); if (!tr) return;
+            var projH = parseFloat(tr.getAttribute("data-projh")) || 0;
+            var pct = Math.max(0, Math.min(100, parseFloat((tr.querySelector(".alPct") || {}).value) || 0));
+            if (pct <= 0) { MessageToast.show("Enter an allocation % greater than 0."); return; }
+            var hrs = Math.round(projH * (pct / 100) * 100) / 100;
+            var btn = tr.querySelector(".alApply"); if (btn) { btn.disabled = true; btn.textContent = "…"; }
+            ppost("allocateResourceToMilestone", {
+                projectId: this._allocPid, employeeId: empId, milestoneId: this._allocMsId, allocationType: "Hard",
+                estimatedHours: hrs, projectAllocationHours: projH, milestoneAllocationPercent: pct,
+                force: true, overrideReason: "Integrated allocation screen"   // over-allocation warns, never blocks
+            }).then(function (res) {
+                if (btn) { btn.disabled = false; btn.textContent = "Apply"; }
+                if (res && res.error && !res.overallocation && !res.budgetOverrun) { MessageToast.show(res.error); return; }
+                MessageToast.show(pct + "% applied to " + (tr.getAttribute("data-name") || "employee") + ".");
+                that._loadAllocScreen();                 // refresh grid + summary
+                that._open(that._allocPid); that._loadMilestones();   // sync project/milestone/requirements
+            }).catch(function () { if (btn) { btn.disabled = false; btn.textContent = "Apply"; } MessageToast.show("Could not apply."); });
+        },
+        onCloseAllocScreen: function () { if (this._allocOverlay) { this._allocOverlay.remove(); this._allocOverlay = null; } },
+
+        // preMsId (optional): when supplied the milestone is FIXED — the screen is
+        // scoped to that milestone (shown as a header, no dropdown). Reuses the
+        // existing allocation engine (allocateResourceToMilestone) unchanged.
+        // Grouped, collapsible, multi-select milestone allocation. Reuses the existing
+        // allocateResourceToMilestone engine (one call per selected employee) — no new
+        // cost/availability logic. Estimated Hours from the project's requirements are
+        // the planning baseline the PM distributes across selected employees.
+        _openMilestoneAllocationModal: function (pid, msList, preMsId) {
+            var that = this;
+            Promise.all([
+                ppost("getAllocatableEmployees", { projectId: pid }),
+                ppost("getResourceRequirements", { projectId: pid })
+            ]).then(function (arr) {
+                var d = arr[0] || {}, rq = arr[1] || {};
+                if (d && d.error) { MessageToast.show(d.error); return; }
+                // Department groups (preserve server grouping + recommendation order).
+                var groups = (d.departments && d.departments.length)
+                    ? d.departments.map(function (g) { return { department: g.department, employees: (g.employees || []).slice() }; })
+                    : [];
+                var allEmps = [];
+                groups.forEach(function (g) { g.employees.forEach(function (e) { allEmps.push(e); }); });
+                if (!allEmps.length) { MessageToast.show("No allocatable employees found."); return; }
+                var empById = {}; allEmps.forEach(function (e) { empById[e.employeeId] = e; });
+                var projMonths = Number(d.projectMonths) || 0;
+                var monthSpan = function (s, e) {
+                    if (!s || !e) return projMonths || 1;
+                    var a = new Date(s), b = new Date(e);
+                    if (isNaN(a) || isNaN(b)) return projMonths || 1;
+                    return Math.max(1, (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()) + 1);
+                };
+                var inr = function (n) { return "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN"); };
+
+                // ── Requirement-driven baseline ──────────────────────────────────────
+                // Each employee's allocated hours derive from THEIR matching Resource
+                // Requirement's per-employee estimated hours × allocation %. Match by role
+                // category first, then department, else the average requirement hours.
+                var reqs = (rq && rq.requirements) || [];
+                var perEmpHoursOf = function (r) { return Number(r.estimatedHours != null ? r.estimatedHours : r.requiredHours) || 0; };
+                var reqByRole = {}, reqByDept = {};
+                reqs.forEach(function (r) {
+                    if (r.roleCategoryId && !reqByRole[r.roleCategoryId]) reqByRole[r.roleCategoryId] = r;
+                    var dk = String(r.departmentName || "").toLowerCase(); if (dk && !reqByDept[dk]) reqByDept[dk] = r;
+                });
+                var avgReqHours = reqs.length ? Math.round(reqs.reduce(function (s, r) { return s + perEmpHoursOf(r); }, 0) / reqs.length) : 0;
+                var matchReqFor = function (e) {
+                    return (e.roleCategoryId && reqByRole[e.roleCategoryId]) || reqByDept[String(e.department || "").toLowerCase()] || null;
+                };
+                var baselineFor = function (e) { var r = matchReqFor(e); return r ? perEmpHoursOf(r) : avgReqHours; };
+                var roleLabelFor = function (e) { var r = matchReqFor(e); return (r && r.roleCategoryName) || e.roleCategoryName || e.designation || "—"; };
+                // Project baseline = Σ (quantity × per-employee hours) across requirements.
+                var projectBaselineHours = reqs.reduce(function (s, r) { return s + ((Number(r.requiredCount) || 0) * perEmpHoursOf(r)); }, 0);
+
+                // Fixed milestone (from Step 1) or a dropdown fallback.
+                var winOf = function (m) { return (m.plannedStartDate || m.startDate || "—") + " → " + (m.plannedEndDate || m.endDate || "—"); };
+                var preMs = preMsId ? msList.filter(function (m) { return m.milestoneId === preMsId; })[0] : (msList[0] || null);
+                var msStart = preMs ? (preMs.plannedStartDate || preMs.startDate || "") : "";
+                var msEnd = preMs ? (preMs.plannedEndDate || preMs.endDate || "") : "";
+
+                var matchHint = "";
+                if (d.showingAll && d.requirementDefined) {
+                    matchHint = "<div class='pmInfoBox' style='margin:0 0 10px'><span class='pmInfoIco'>&#9432;</span><div>No employees are tagged to the departments/roles in this project's Resource Requirements, so <b>all available employees</b> are shown.</div></div>";
+                } else if (d.demandMatched > 0) {
+                    matchHint = "<div class='pmMuted' style='margin:0 0 8px'>★ " + d.demandMatched + " employee(s) match this project's Resource Requirements.</div>";
+                }
+
+                // ── Department accordions with checkbox rows + per-employee inputs ────
+                var groupsHtml = groups.map(function (g, gi) {
+                    var rows = g.employees.map(function (e) {
+                        var eid = esc(e.employeeId);
+                        var star = e.recommended ? "<span class='amStar' title='Matches a Resource Requirement'>★</span> " : "";
+                        var avail = (e.available != null ? e.available + "% free" : "");
+                        var rate = Number(e.costRatePerHour) || 0;
+                        var base = baselineFor(e);
+                        return "<div class='amEmpRow' data-emp='" + eid + "'>" +
+                            "<label class='amEmpHead'><input type='checkbox' class='amChk' data-emp='" + eid + "'/> " +
+                            "<span class='amEmpName'>" + star + esc(e.employeeName) + "</span>" +
+                            "<span class='amEmpMeta'>" + esc(roleLabelFor(e)) + " · " + avail + " · " + inr(rate) + "/hr</span></label>" +
+                            "<div class='amEmpInputs' data-emp='" + eid + "' style='display:none'>" +
+                            "<div class='amCalcGrid'>" +
+                            "<div><label>Allocation %</label><input type='number' min='1' max='100' step='5' class='amI amPct' data-emp='" + eid + "' value='100'/></div>" +
+                            "<div><label>Allocated Hours</label><div class='amRO amHrsOut' data-emp='" + eid + "'>0 h</div></div>" +
+                            "<div><label>Estimated Cost</label><div class='amRO amCostOut' data-emp='" + eid + "'>₹0</div></div>" +
+                            "</div>" +
+                            "<div class='amBaseNote'>Baseline effort: <b>" + base + " h</b> per employee (from Resource Requirement) · Inherits milestone dates</div>" +
+                            "<div class='amEmpErr' data-emp='" + eid + "'></div></div></div>";
+                    }).join("");
+                    return "<div class='amGroup'><div class='amGroupHead' data-gi='" + gi + "'>" +
+                        "<span class='amCaret'>▾</span> <b>" + esc(g.department) + "</b> <span class='pmCount'>" + g.employees.length + "</span></div>" +
+                        "<div class='amGroupBody' data-gi='" + gi + "'>" + rows + "</div></div>";
                 }).join("");
 
+                var msHeader = preMs
+                    ? "<div class='pmFixedMs'><b>#" + (preMs.sequence || 0) + " " + esc(preMs.name) + "</b><div class='pmMuted' style='font-size:0.74rem'>Window: " + esc(winOf(preMs)) + "</div></div>"
+                    : "";
+
+                // Live allocation summary (Part 7) — updates on every % change.
+                var baselineBar = "<div class='amSummary'>" +
+                    "<div class='amSumCard'><div class='amSumLbl'>Estimated Hours Baseline</div><div class='amSumVal'>" + projectBaselineHours + " h</div></div>" +
+                    "<div class='amSumCard'><div class='amSumLbl'>Allocated Hours</div><div class='amSumVal' id='amAllocTotal'>0 h</div></div>" +
+                    "<div class='amSumCard'><div class='amSumLbl'>Remaining Hours</div><div class='amSumVal' id='amRemain'>" + projectBaselineHours + " h</div></div>" +
+                    "<div class='amSumCard'><div class='amSumLbl'>Estimated Cost</div><div class='amSumVal' id='amEstCost'>₹0</div></div>" +
+                    "<div class='amBaseTrack' style='grid-column:1/-1'><div id='amBaseFill' class='amBaseFill' style='width:0%'></div></div>" +
+                    "<div id='amBaseWarn' class='pmMuted' style='font-size:0.72rem;grid-column:1/-1'></div></div>";
+
+                // Per-role-category budget exhaustion (what each department/category has left).
+                var catRows = (d.categoryConsumption || []).map(function (cc) {
+                    var col = cc.overrun ? "#dc2626" : cc.pct >= 85 ? "#d97706" : "#16a34a";
+                    return "<div class='amCatRow'><div class='amCatName'>" + esc(cc.category) + "</div>" +
+                        "<div class='amCatBar'><div class='amCatFill' style='width:" + Math.min(100, cc.pct) + "%;background:" + col + "'></div></div>" +
+                        "<div class='amCatNums'>" + that._inr2(cc.consumed) + " / " + that._inr2(cc.allocated) + " · <b style='color:" + col + "'>" + that._inr2(cc.remaining) + " left</b>" + (cc.overrun ? " ⚠" : "") + "</div></div>";
+                }).join("");
+                var catPanel = (d.categoryConsumption && d.categoryConsumption.length)
+                    ? "<div class='amCatPanel'><div class='amCatHead'>Budget by Role Category — allocated vs consumed</div>" + catRows + "</div>" : "";
+
                 var ov = document.createElement("div"); ov.className = "pmOverlay";
-                ov.innerHTML = "<div class='pmDialog'><div class='pmDialogHead'>Allocate Resource by Hours</div>" +
+                ov.innerHTML = "<div class='pmDialog wide'><div class='pmDialogHead'>Allocate Resources to Milestone</div>" +
                     "<div class='pmDialogBody'>" +
-                    "<label class='pmLbl'>Employee</label><select id='amEmp' class='pmSelect wide'>" + empOpts + "</select>" +
-                    "<label class='pmLbl'>Milestone</label><select id='amMs' class='pmSelect wide'>" + msOpts + "</select>" +
-                    "<div class='pmMuted' id='amWin' style='margin:2px 0 8px'></div>" +
-                    "<div class='amBasisRow'><label class='amRadio'><input type='radio' name='amBasis' value='pct' checked/> By Allocation %</label>" +
-                    "<label class='amRadio'><input type='radio' name='amBasis' value='hours'/> By Total Hours</label></div>" +
-                    "<div id='amPctBox'><label class='pmLbl'>Monthly Allocation %</label><input id='amPct' type='number' min='1' max='100' step='5' class='pmInput' placeholder='e.g. 50'/>" +
-                    "<div class='pmMuted' style='margin-top:2px'>Cost per month = employee monthly cost × %. Past months are frozen; only current &amp; future months are re-forecast.</div></div>" +
-                    "<div id='amHrsBox' style='display:none'><label class='pmLbl'>Estimated Hours (total)</label><input id='amHrs' type='number' min='1' step='1' class='pmInput' placeholder='e.g. 60'/></div>" +
-                    "<label class='pmLbl'>Allocation Type</label>" +
-                    "<div class='amTypeRow'><label class='amRadio'><input type='radio' name='amType' value='Hard' checked/> Hard <span class='pmMuted'>(confirmed, consumes capacity)</span></label>" +
-                    "<label class='amRadio'><input type='radio' name='amType' value='Soft'/> Soft <span class='pmMuted'>(tentative reservation)</span></label></div>" +
-                    "<label class='pmLbl'>Client Billing Rate (₹/hr) <span class='pmMuted'>optional</span></label><input id='amBill' type='number' min='0' step='1' class='pmInput' placeholder='e.g. 120'/>" +
-                    "<div id='amPreview' class='amPreview'></div>" +
+                    msHeader + matchHint + baselineBar + catPanel +
+                    "<div class='amGroups'>" + groupsHtml + "</div>" +
+                    "<div class='amTypeRow' style='margin-top:10px'><label class='amRadio'><input type='radio' name='amType' value='Hard' checked/> Hard <span class='pmMuted'>(confirmed)</span></label>" +
+                    "<label class='amRadio'><input type='radio' name='amType' value='Soft'/> Soft <span class='pmMuted'>(tentative)</span></label>" +
+                    "<label class='amRadio' style='margin-left:auto'><input type='checkbox' id='amOverride'/> Allow override <span class='pmMuted'>(over-capacity / over-baseline / over-budget)</span></label></div>" +
                     "<div id='amErr' class='pmErr' style='display:none'></div>" +
-                    "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button><button class='pmBtn primary' id='pmSave'>Allocate</button></div></div>";
+                    "</div><div class='pmDialogFoot'><button class='pmBtn ghost' id='pmCancel'>Cancel</button>" +
+                    "<button class='pmBtn primary' id='pmSave'>Allocate Selected</button></div></div>";
                 document.body.appendChild(ov);
                 var close = function () { ov.remove(); };
                 var $ = function (s) { return ov.querySelector(s); };
-                var showWin = function () { var o = $("#amMs").selectedOptions[0]; $("#amWin").textContent = o ? ("Window: " + o.getAttribute("data-win")) : ""; };
-                $("#amMs").addEventListener("change", showWin); showWin();
-                var applyBasis = function () {
-                    var b = (ov.querySelector("input[name='amBasis']:checked") || {}).value || "pct";
-                    $("#amPctBox").style.display = b === "pct" ? "block" : "none";
-                    $("#amHrsBox").style.display = b === "hours" ? "block" : "none";
-                };
-                ov.querySelectorAll("input[name='amBasis']").forEach(function (r) { r.addEventListener("change", applyBasis); }); applyBasis();
                 ov.querySelector("#pmCancel").addEventListener("click", close);
-                var save = function (force, reason) {
-                    var employeeId = $("#amEmp").value, milestoneId = $("#amMs").value;
-                    var basis = (ov.querySelector("input[name='amBasis']:checked") || {}).value || "pct";
-                    var type = (ov.querySelector("input[name='amType']:checked") || {}).value || "Hard";
-                    var err = $("#amErr");
-                    var payload = { projectId: pid, employeeId: employeeId, milestoneId: milestoneId, allocationType: type, billingRate: parseFloat($("#amBill").value) || 0, force: !!force, overrideReason: reason || "" };
-                    if (basis === "pct") {
-                        var pctV = parseFloat($("#amPct").value) || 0;
-                        if (pctV <= 0 || pctV > 100) { err.style.display = "block"; err.textContent = "Enter an allocation % between 1 and 100."; return; }
-                        payload.allocationPct = pctV;
-                    } else {
-                        var hrs = parseFloat($("#amHrs").value) || 0;
-                        if (hrs <= 0) { err.style.display = "block"; err.textContent = "Enter estimated hours greater than 0."; return; }
-                        payload.estimatedHours = hrs;
-                    }
-                    var btn = ov.querySelector("#pmSave"); btn.disabled = true; btn.textContent = "Allocating…";
-                    ppost("allocateResourceToMilestone", payload)
-                        .then(function (res) {
-                            btn.disabled = false; btn.textContent = "Allocate";
-                            // Capacity or budget over-allocation → confirm with an override reason.
-                            if (res && (res.overallocation || res.budgetOverrun)) {
-                                var r = window.prompt(res.error + "\n\nEnter an override reason to proceed (or Cancel):", "");
-                                if (r) save(true, r);
-                                return;
-                            }
-                            if (res && res.error) { err.style.display = "block"; err.textContent = res.error; return; }
-                            close();
-                            var inr = function (n) { return "₹" + Number(n || 0).toLocaleString("en-IN"); };
-                            var impact = (res && res.budgetImpact != null) ? (res.budgetImpact >= 0 ? " · +" + inr(res.budgetImpact) + " forecast" : " · " + inr(res.budgetImpact) + " released") : "";
-                            var msg = (res && res.changeType ? res.changeType : "Allocated") + " " + (res.allocationPct != null ? res.allocationPct + "%" : "") +
-                                " · Spent " + inr(res.spent) + " + Forecast " + inr(res.forecast) + " = " + inr(res.estimated) + impact;
-                            MessageToast.show(msg);
-                            that._open(pid);
-                        }).catch(function () { btn.disabled = false; btn.textContent = "Allocate"; err.style.display = "block"; err.textContent = "Could not allocate — please try again."; });
+
+                // Collapsible department sections.
+                ov.querySelectorAll(".amGroupHead").forEach(function (h) {
+                    h.addEventListener("click", function () {
+                        var gi = this.getAttribute("data-gi");
+                        var body = ov.querySelector(".amGroupBody[data-gi='" + gi + "']");
+                        var open = body.style.display !== "none";
+                        body.style.display = open ? "none" : "block";
+                        this.querySelector(".amCaret").textContent = open ? "▸" : "▾";
+                    });
+                });
+
+                // Allocated Hours = per-employee baseline × allocation % ÷ 100 (Part 5).
+                var pctOf = function (eid) { return parseFloat(ov.querySelector(".amPct[data-emp='" + eid + "']").value); };
+                var hoursFor = function (e, pct) { return Math.round(baselineFor(e) * (pct / 100) * 100) / 100; };
+                var estHoursFor = function (eid) {
+                    var chk = ov.querySelector(".amChk[data-emp='" + eid + "']");
+                    if (!chk || !chk.checked) return 0;
+                    var pct = pctOf(eid); if (!(pct > 0)) return 0;
+                    return hoursFor(empById[eid], pct);
                 };
-                ov.querySelector("#pmSave").addEventListener("click", function () { save(false, ""); });
+                // Recompute all read-only hours/cost + the live summary (Parts 6, 7).
+                var recompute = function () {
+                    var type = (ov.querySelector("input[name='amType']:checked") || {}).value || "Hard";
+                    var totalHrs = 0, totalCost = 0;
+                    allEmps.forEach(function (e) {
+                        var eid = e.employeeId;
+                        var chk = ov.querySelector(".amChk[data-emp='" + eid + "']");
+                        var hrsOut = ov.querySelector(".amHrsOut[data-emp='" + eid + "']");
+                        var costOut = ov.querySelector(".amCostOut[data-emp='" + eid + "']");
+                        var errEl = ov.querySelector(".amEmpErr[data-emp='" + eid + "']");
+                        if (!chk || !chk.checked) { if (hrsOut) hrsOut.textContent = "0 h"; if (costOut) costOut.textContent = "₹0"; if (errEl) errEl.textContent = ""; return; }
+                        var pct = pctOf(eid);
+                        var rate = Number(empById[eid].costRatePerHour) || 0;
+                        // Validation: % must be 1–100 (Part 9). Hours can never exceed the
+                        // per-employee baseline because % is capped at 100.
+                        if (errEl) errEl.textContent = (!(pct >= 1) || pct > 100)
+                            ? "Allocation percentage cannot exceed 100% of the required effort for this resource (enter 1–100%)." : "";
+                        var validPct = (pct >= 1 && pct <= 100) ? pct : 0;
+                        var hrs = hoursFor(e, validPct);
+                        var cost = type === "Soft" ? 0 : Math.round(hrs * rate);
+                        if (hrsOut) hrsOut.textContent = Math.round(hrs) + " h";
+                        if (costOut) costOut.textContent = inr(cost) + (type === "Soft" ? " (Soft)" : "");
+                        totalHrs += hrs; totalCost += cost;
+                    });
+                    $("#amAllocTotal").textContent = Math.round(totalHrs) + " h";
+                    $("#amRemain").textContent = Math.round(projectBaselineHours - totalHrs) + " h";
+                    $("#amEstCost").textContent = inr(totalCost);
+                    var pctFill = projectBaselineHours > 0 ? Math.min(100, Math.round(totalHrs / projectBaselineHours * 100)) : (totalHrs > 0 ? 100 : 0);
+                    var fill = $("#amBaseFill"), over = projectBaselineHours > 0 && totalHrs > projectBaselineHours;
+                    fill.style.width = pctFill + "%"; fill.style.background = over ? "#dc2626" : "#16a34a";
+                    var warn = $("#amBaseWarn");
+                    if (over) warn.innerHTML = "<span style='color:#dc2626'>Allocated hours exceed the project baseline by " + Math.round(totalHrs - projectBaselineHours) + " h. Enable <b>Allow override</b> to proceed.</span>";
+                    else warn.textContent = projectBaselineHours > 0 ? ("Remaining baseline: " + Math.max(0, Math.round(projectBaselineHours - totalHrs)) + " h") : "";
+                };
+
+                // Wire checkboxes (reveal inputs) + % inputs (live recompute).
+                ov.querySelectorAll(".amChk").forEach(function (chk) {
+                    chk.addEventListener("change", function () {
+                        var eid = this.getAttribute("data-emp");
+                        ov.querySelector(".amEmpInputs[data-emp='" + eid + "']").style.display = this.checked ? "block" : "none";
+                        recompute();
+                    });
+                });
+                ov.querySelectorAll(".amPct").forEach(function (i) { i.addEventListener("input", recompute); });
+                ov.querySelectorAll("input[name='amType']").forEach(function (r) { r.addEventListener("change", recompute); });
+                recompute();
+
+                // ── Allocate: one call per selected employee (reuses the engine) ─────
+                ov.querySelector("#pmSave").addEventListener("click", function () {
+                    var err = $("#amErr"); err.style.display = "none";
+                    var milestoneId = preMs ? preMs.milestoneId : (msList[0] && msList[0].milestoneId);
+                    var type = (ov.querySelector("input[name='amType']:checked") || {}).value || "Hard";
+                    var override = $("#amOverride").checked;
+                    var selected = [];
+                    var bad = null, total = 0;
+                    allEmps.forEach(function (e) {
+                        var eid = e.employeeId;
+                        var chk = ov.querySelector(".amChk[data-emp='" + eid + "']");
+                        if (!chk || !chk.checked) return;
+                        var pct = parseFloat(ov.querySelector(".amPct[data-emp='" + eid + "']").value) || 0;
+                        // Only mandatory input is a valid allocation % (1–100). Hours & cost
+                        // are derived automatically; dates inherit the milestone window.
+                        if (!(pct >= 1 && pct <= 100)) { bad = bad || (e.employeeName + ": allocation % must be between 1 and 100."); return; }
+                        var hrs = hoursFor(e, pct);
+                        // estimatedHours (hours-basis) → the engine stores these exact hours.
+                        // Also pass the project-hours baseline + milestone % so Manage
+                        // Resources shows the % of PROJECT hours (not monthly capacity).
+                        var payload = { projectId: pid, employeeId: eid, milestoneId: milestoneId, allocationType: type, estimatedHours: hrs, projectAllocationHours: baselineFor(e), milestoneAllocationPercent: pct, force: override, overrideReason: override ? "Bulk milestone allocation override" : "" };
+                        total += hrs;
+                        selected.push(payload);
+                    });
+                    if (bad) { err.style.display = "block"; err.textContent = bad; return; }
+                    if (!selected.length) { err.style.display = "block"; err.textContent = "Select at least one employee and enter an allocation %."; return; }
+                    if (projectBaselineHours > 0 && total > projectBaselineHours && !override) {
+                        err.style.display = "block"; err.textContent = "Allocated hours (" + Math.round(total) + "h) exceed the project baseline (" + projectBaselineHours + "h). Enable “Allow override” to proceed."; return;
+                    }
+                    var btn = this; btn.disabled = true; btn.textContent = "Allocating…";
+                    // Sequential to respect capacity/budget validation per employee.
+                    var results = [];
+                    var step = function (i) {
+                        if (i >= selected.length) {
+                            btn.disabled = false; btn.textContent = "Allocate Selected";
+                            var okN = results.filter(function (r) { return r.ok; }).length;
+                            var failed = results.filter(function (r) { return !r.ok; });
+                            if (failed.length) {
+                                err.style.display = "block";
+                                err.textContent = okN + " allocated · " + failed.length + " failed: " + failed.map(function (f) { return f.name + " — " + f.error; }).join("; ");
+                            }
+                            if (okN) MessageToast.show(okN + " employee(s) allocated to the milestone.");
+                            that._open(pid); that._loadMilestones();
+                            if (!failed.length) close();
+                            return;
+                        }
+                        var p = selected[i], nm = (empById[p.employeeId] || {}).employeeName || p.employeeId;
+                        ppost("allocateResourceToMilestone", p).then(function (res) {
+                            if (res && (res.overallocation || res.budgetOverrun) && !p.force) {
+                                results.push({ ok: false, name: nm, error: (res.error || "over limit") + " (enable Allow override)" });
+                            } else if (res && res.error) {
+                                results.push({ ok: false, name: nm, error: res.error });
+                            } else { results.push({ ok: true, name: nm }); }
+                            step(i + 1);
+                        }).catch(function () { results.push({ ok: false, name: nm, error: "request failed" }); step(i + 1); });
+                    };
+                    step(0);
+                });
             }).catch(function () { MessageToast.show("Could not load employees."); });
         },
 

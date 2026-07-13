@@ -34,7 +34,11 @@ sap.ui.define([
             this._filters = { skill: "", department: "", minUtil: "", maxUtil: "", availabilityDate: "", nameSearch: "", status: "" };
             this._mode = "pool";   // "pool" | "recommend"
             this._reco = { requiredSkills: "", neededBandwidth: 0 };
-            this.getOwnerComponent().getRouter().getRoute("resource-planning").attachPatternMatched(this._onMatched, this);
+            // Route removed — Resource Planning now lives inside Project → Resources →
+            // Available Resources. Guarded so this (now standalone) controller never
+            // throws if the view is ever instantiated directly; its logic is preserved.
+            var _r = this.getOwnerComponent().getRouter().getRoute("resource-planning");
+            if (_r) _r.attachPatternMatched(this._onMatched, this);
         },
         onExit: function () { if (window._rpCtrl === this) window._rpCtrl = null; },
         _host: function () { return this.byId("rpHost"); },

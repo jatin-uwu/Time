@@ -72,7 +72,19 @@ sap.ui.define([
             var h = this._host(); if (!h) return;
             h.setContent(html);
             var that = this;
-            setTimeout(function () { that._initCharts(); }, 60);
+            // Wait for the async core:HTML DOM to flush (canvas present) before drawing.
+            this._afterHostRender(function () { that._initCharts(); });
+        },
+
+        _afterHostRender: function (cb) {
+            var that = this, n = 0;
+            var tick = function () {
+                var dom = that._host() && that._host().getDomRef();
+                if (dom && dom.querySelector("canvas")) return cb();
+                if (++n > 60) return;
+                window.requestAnimationFrame(tick);
+            };
+            window.requestAnimationFrame(tick);
         },
 
         _header: function (d) {
